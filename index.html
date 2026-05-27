@@ -1,4 +1,4 @@
-<!DOCTYPE html> 
+<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -994,6 +994,31 @@ tr:hover td { background:var(--claro); }
 // STATE & STORAGE
 // ═══════════════════════════════════════════════════════════════════════════
 const SERVER = "http://localhost:7432";
+
+// ── Firebase Egresos ──────────────────────────────────────────────────────
+const FB_KEY  = 'AIzaSyC5Scjnnabx4bJAdkUShlm53i38OXj8xgQ';
+const FB_BASE = 'https://firestore.googleapis.com/v1/projects/cicsa-egresos/databases/(default)/documents';
+
+async function fbGet(path) {
+  const r = await fetch(`${FB_BASE}/${path}?key=${FB_KEY}`);
+  if(!r.ok) return null;
+  const d = await r.json();
+  if(d.fields?.json?.stringValue) return JSON.parse(d.fields.json.stringValue);
+  return null;
+}
+
+async function fbSet(path, data) {
+  await fetch(`${FB_BASE}/${path}?key=${FB_KEY}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      fields: {
+        json: { stringValue: JSON.stringify(data) },
+        ts:   { stringValue: new Date().toISOString() }
+      }
+    })
+  });
+}
 const CATS = [
   "Cárnicos","Lácteos / Cremería","Frutas y Verduras","Tortilla",
   "Abarrotes / Secos","Refrescos / Pepsi","Hielo","Gas",
@@ -1014,7 +1039,10 @@ let state = { weeks:[], activeWeek:null, budget:{...DEFAULT_BUDGET} };
 function save() {
   const json = JSON.stringify(state);
   localStorage.setItem("cicsa_egresos", json);
+  // Save to Flask local (if running)
   fetch(SERVER+"/save-state",{method:"POST",headers:{"Content-Type":"application/json"},body:json}).catch(()=>{});
+  // Save to Firebase
+  fbSet('estado/cicsa', state).catch(e=>console.warn("Firebase save error:", e));
 }
 setInterval(()=>{ if(state.weeks&&state.weeks.length>0) save(); }, 60000);
 window.addEventListener("beforeunload",()=>{
@@ -1024,6 +1052,7 @@ window.addEventListener("beforeunload",()=>{
 });
 
 async function loadFromServer() {
+  // Try Flask local first
   try {
     const r=await fetch(SERVER+"/load-state",{signal:AbortSignal.timeout(2500)});
     const d=await r.json();
@@ -1035,6 +1064,19 @@ async function loadFromServer() {
       if(sv>=lc){ state=d.state; localStorage.setItem("cicsa_egresos",JSON.stringify(state)); return true; }
     }
   } catch(e){ console.warn("loadFromServer:",e); }
+
+  // Try Firebase
+  try {
+    const fbState = await fbGet('estado/cicsa');
+    if(fbState && fbState.weeks) {
+      const raw=localStorage.getItem("cicsa_egresos");
+      const local=raw?JSON.parse(raw):null;
+      const sv=(fbState.weeks||[]).reduce((s,w)=>s+(w.gastos||[]).length,0);
+      const lc=local?(local.weeks||[]).reduce((s,w)=>s+(w.gastos||[]).length,0):0;
+      if(sv>=lc){ state=fbState; localStorage.setItem("cicsa_egresos",JSON.stringify(state)); return true; }
+    }
+  } catch(e){ console.warn("loadFromFirebase:",e); }
+
   return false;
 }
 
