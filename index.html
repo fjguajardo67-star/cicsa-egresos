@@ -1040,8 +1040,10 @@ function save() {
   const json = JSON.stringify(state);
   localStorage.setItem("cicsa_egresos", json);
   // Save to Flask local (if running)
-  fetch(SERVER+"/save-state",{method:"POST",headers:{"Content-Type":"application/json"},body:json}).catch(()=>{});
-  // Save to Firebase
+  if(SERVER_AVAILABLE){
+    fetch(SERVER+"/save-state",{method:"POST",headers:{"Content-Type":"application/json"},body:json}).catch(()=>{});
+  }
+  // Always save to Firebase
   fbSet('estado/cicsa', state).catch(e=>console.warn("Firebase save error:", e));
 }
 setInterval(()=>{ if(state.weeks&&state.weeks.length>0) save(); }, 60000);
@@ -1161,20 +1163,34 @@ function todayStr(){ return new Date().toISOString().slice(0,10); }
 // ═══════════════════════════════════════════════════════════════════════════
 // SERVER CHECK
 // ═══════════════════════════════════════════════════════════════════════════
+let SERVER_AVAILABLE = false;
+
 async function checkServer(){
   try {
     const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),4000);
+    const timer=setTimeout(()=>controller.abort(),3000);
     const r=await fetch(SERVER+"/status",{signal:controller.signal});
     clearTimeout(timer);
     const d=await r.json();
     const bar=document.getElementById("apiBar"),dot=document.getElementById("apiDot"),msg=document.getElementById("apiMsg");
-    if(d.ok&&d.api_key_set){ bar.className="api-bar ok"; dot.className="dot g"; msg.textContent="✅ Servidor activo — lectura de documentos con IA disponible"; }
-    else { bar.className="api-bar bad"; dot.className="dot r"; msg.textContent="⚠ Servidor activo pero falta la API key. Revisa CICSA_APIKEY.txt"; }
+    if(d.ok&&d.api_key_set){
+      SERVER_AVAILABLE=true;
+      bar.className="api-bar ok"; dot.className="dot g";
+      msg.textContent="✅ Servidor activo — lectura de documentos con IA disponible";
+    } else {
+      bar.className="api-bar bad"; dot.className="dot r";
+      msg.textContent="⚠ Servidor activo pero falta la API key. Revisa CICSA_APIKEY.txt";
+    }
   } catch {
+    SERVER_AVAILABLE=false;
     const bar=document.getElementById("apiBar");
-    if(bar){ bar.className="api-bar bad"; document.getElementById("apiDot").className="dot r"; document.getElementById("apiMsg").innerHTML="🔄 Conectando… asegúrate de que INICIAR_CICSA.bat esté corriendo."; }
-    setTimeout(checkServer,4000);
+    if(bar){
+      bar.className="api-bar bad";
+      document.getElementById("apiDot").className="dot r";
+      document.getElementById("apiMsg").innerHTML=
+        "⚠ Modo online — captura manual disponible. Para usar IA ejecuta INICIAR_CICSA.bat";
+    }
+    // Don't retry — just run in standalone mode
   }
 }
 
@@ -2455,8 +2471,13 @@ document.getElementById("fFecha").value=todayStr();
 document.getElementById("mFecha").value=todayStr();
 load();
 renderAll();
+// Check server without blocking
 checkServer();
-(async()=>{ const loaded=await loadFromServer(); if(loaded) renderAll(); })();
+// Load from server/Firebase in background
+(async()=>{
+  const loaded=await loadFromServer();
+  if(loaded) renderAll();
+})();
 </script>
 </body>
 </html>
