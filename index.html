@@ -993,7 +993,10 @@ tr:hover td { background:var(--claro); }
 // ═══════════════════════════════════════════════════════════════════════════
 // STATE & STORAGE
 // ═══════════════════════════════════════════════════════════════════════════
-const SERVER = "http://localhost:7432";
+// Auto-detect server: Railway en producción, localhost en desarrollo
+const SERVER = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+  ? "http://localhost:7432"
+  : "https://web-production-56bfc3.up.railway.app";
 
 // ── Firebase Egresos ──────────────────────────────────────────────────────
 const FB_KEY  = 'AIzaSyC5Scjnnabx4bJAdkUShlm53i38OXj8xgQ';
