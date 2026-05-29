@@ -1,4 +1,4 @@
-"""
+""" 
 CICSA — Módulo Gmail
 Revisa el inbox de Gmail y extrae adjuntos de facturas automáticamente.
 
