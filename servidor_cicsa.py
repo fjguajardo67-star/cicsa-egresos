@@ -219,12 +219,30 @@ def gmail_reset_seen():
 # ── /gmail-renovar  (force re-authorization) ─────────────────────────────────
 @app.route("/gmail-renovar", methods=["POST"])
 def gmail_renovar():
+    import traceback
     try:
         from gmail_cicsa import revoke_and_reauthorize
         revoke_and_reauthorize()
         return jsonify({"ok": True, "msg": "Token renovado. Gmail listo."})
+    except FileNotFoundError as e:
+        msg = str(e)
+        print(f"[gmail-renovar] FileNotFoundError: {msg}")
+        return jsonify({
+            "error": msg,
+            "hint": "Descarga gmail_credentials.json desde Google Cloud Console "
+                    "y colócalo en el mismo directorio que servidor_cicsa.py."
+        }), 500
+    except ImportError as e:
+        msg = str(e)
+        print(f"[gmail-renovar] ImportError: {msg}")
+        return jsonify({
+            "error": f"Dependencias de Google no instaladas: {msg}",
+            "hint": "Ejecuta: pip install google-auth google-auth-oauthlib google-api-python-client"
+        }), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        tb = traceback.format_exc()
+        print(f"[gmail-renovar] Error inesperado:\n{tb}")
+        return jsonify({"error": str(e), "detalle": tb}), 500
 
 # ── /gmail-fetch ──────────────────────────────────────────────────────────────
 @app.route("/gmail-fetch", methods=["POST"])
