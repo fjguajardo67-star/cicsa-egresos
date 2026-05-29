@@ -76,9 +76,30 @@ def get_gmail_service():
     return build("gmail", "v1", credentials=creds)
 
 def revoke_and_reauthorize():
-    """Delete token and force re-authorization — call when user clicks Renovar."""
+    """Delete token and force re-authorization — call when user clicks Renovar.
+
+    Raises:
+        FileNotFoundError: if gmail_credentials.json is missing.
+        ImportError: if Google auth libraries are not installed.
+        RuntimeError: if the OAuth flow fails for any other reason.
+    """
     TOKEN_FILE.unlink(missing_ok=True)
-    return get_gmail_service()
+    print("  [gmail] Token eliminado. Iniciando re-autorización…")
+    try:
+        return get_gmail_service()
+    except FileNotFoundError:
+        raise  # already has a clear message from get_gmail_service()
+    except Exception as e:
+        err = str(e)
+        # Surface missing-library errors with an actionable message
+        if "No module named" in err or isinstance(e, ImportError):
+            raise ImportError(
+                f"Librería de Google no encontrada: {err}. "
+                "Instala con: pip install google-auth google-auth-oauthlib google-api-python-client"
+            ) from e
+        raise RuntimeError(
+            f"Falló la re-autorización de Gmail: {err}"
+        ) from e
 
 # ── Seen message IDs (avoid re-processing) ───────────────────────────────────
 def load_seen():
