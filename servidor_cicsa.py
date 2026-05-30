@@ -241,9 +241,9 @@ def gmail_fetch():
 
 @app.route("/gmail-status", methods=["GET"])
 def gmail_status():
-    from pathlib import Path
-    creds_ok = (Path(__file__).parent / "gmail_credentials.json").exists()
-    token_ok = (Path(__file__).parent / "gmail_token.json").exists()
+    
+    creds_ok = bool(os.environ.get("GMAIL_CREDENTIALS", "").strip())
+    token_ok = bool(os.environ.get("GMAIL_TOKEN", "").strip())
     return jsonify({"credentials": creds_ok, "authorized": token_ok, "available": GMAIL_AVAILABLE})
 
 
