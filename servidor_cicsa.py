@@ -219,30 +219,12 @@ def gmail_reset_seen():
 # ── /gmail-renovar  (force re-authorization) ─────────────────────────────────
 @app.route("/gmail-renovar", methods=["POST"])
 def gmail_renovar():
-    import traceback
     try:
         from gmail_cicsa import revoke_and_reauthorize
         revoke_and_reauthorize()
         return jsonify({"ok": True, "msg": "Token renovado. Gmail listo."})
-    except FileNotFoundError as e:
-        msg = str(e)
-        print(f"[gmail-renovar] FileNotFoundError: {msg}")
-        return jsonify({
-            "error": msg,
-            "hint": "Descarga gmail_credentials.json desde Google Cloud Console "
-                    "y colócalo en el mismo directorio que servidor_cicsa.py."
-        }), 500
-    except ImportError as e:
-        msg = str(e)
-        print(f"[gmail-renovar] ImportError: {msg}")
-        return jsonify({
-            "error": f"Dependencias de Google no instaladas: {msg}",
-            "hint": "Ejecuta: pip install google-auth google-auth-oauthlib google-api-python-client"
-        }), 500
     except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[gmail-renovar] Error inesperado:\n{tb}")
-        return jsonify({"error": str(e), "detalle": tb}), 500
+        return jsonify({"error": str(e)}), 500
 
 # ── /gmail-fetch ──────────────────────────────────────────────────────────────
 @app.route("/gmail-fetch", methods=["POST"])
@@ -600,14 +582,14 @@ if __name__ == "__main__":
         print("   Crea CICSA_APIKEY.txt con tu clave de Anthropic.")
         input("Presiona Enter para salir..."); sys.exit(1)
     print(f"\n[OK] API key cargada")
-    print(f"[WEB] Abriendo navegador en http://localhost:{PORT}")
-    print(f"\n   No cierres esta ventana. Para salir: Ctrl+C\n")
-    threading.Thread(target=lambda: (__import__('time').sleep(1.2),
-        webbrowser.open(f"http://localhost:{PORT}")), daemon=True).start()
-    import os as _os
-    _railway_port = int(_os.environ.get("PORT", PORT))
-    _is_railway = _os.environ.get("RAILWAY_ENVIRONMENT") is not None
+    _railway_port = int(os.environ.get("PORT", PORT))
+    _is_railway = os.environ.get("RAILWAY_ENVIRONMENT") is not None
     if _is_railway:
+        print(f"[RAILWAY] Servidor corriendo en puerto {_railway_port}")
         app.run(host="0.0.0.0", port=_railway_port, debug=False)
     else:
+        print(f"[WEB] Abriendo navegador en http://localhost:{PORT}")
+        print(f"\n   No cierres esta ventana. Para salir: Ctrl+C\n")
+        threading.Thread(target=lambda: (__import__('time').sleep(1.2),
+            webbrowser.open(f"http://localhost:{PORT}")), daemon=True).start()
         app.run(host="127.0.0.1", port=PORT, debug=False)
