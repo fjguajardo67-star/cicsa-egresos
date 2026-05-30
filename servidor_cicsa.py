@@ -221,8 +221,8 @@ def gmail_reset_seen():
 def gmail_renovar():
     try:
     
-        revoke_and_reauthorize()
-        return jsonify({"ok": True, "msg": "Token renovado. Gmail listo."})
+        
+        return jsonify({"ok": False, "msg": "Re-autorizacion no disponible en Railway."})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
