@@ -220,7 +220,7 @@ def gmail_reset_seen():
 @app.route("/gmail-renovar", methods=["POST"])
 def gmail_renovar():
     try:
-        from gmail_cicsa import revoke_and_reauthorize
+    
         revoke_and_reauthorize()
         return jsonify({"ok": True, "msg": "Token renovado. Gmail listo."})
     except Exception as e:
