@@ -1549,7 +1549,9 @@ async function confirmarExportMenu() {
     // Agregar/actualizar cada ingrediente seleccionado
     const fechaHoy = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
     seleccionados.forEach(r => {
-      preciosActuales[r.nombre.trim()] = {
+      // Normalizar nombre: primera letra mayuscula, resto minusculas para consistencia
+      const nombreNorm = r.nombre.trim().toLowerCase().replace(/\w/g, c => c.toUpperCase());
+      preciosActuales[nombreNorm] = {
         precio:  parseFloat(r.precio) || 0,
         unidad:  r.unidad,
         fecha:   fechaHoy
