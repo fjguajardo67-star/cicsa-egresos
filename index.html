@@ -1534,10 +1534,14 @@ async function confirmarExportMenu() {
   document.getElementById("menuSyncStatus").innerHTML=`<span class="spin"></span> Sincronizando con CICSA Menú…`;
 
   try {
-    // Leer precios actuales de Firebase
+    // Firebase de CICSA Menú (proyecto diferente a cicsa-egresos)
+    const MENU_FB_KEY  = 'AIzaSyC1QeFfDIgZPhqTs4zh7VpkB8cua93gCo0';
+    const MENU_FB_BASE = 'https://firestore.googleapis.com/v1/projects/sistema-menu-cicsa/databases/(default)/documents';
+
+    // Leer precios actuales de Firebase Menú
     let preciosActuales = {};
     try {
-      const r = await fetch(FB_BASE + '/datos/precios?key=' + FB_KEY);
+      const r = await fetch(MENU_FB_BASE + '/datos/precios?key=' + MENU_FB_KEY);
       const d = await r.json();
       if(d.fields?.json?.stringValue) preciosActuales = JSON.parse(d.fields.json.stringValue);
     } catch(e) { /* primera vez — Firebase vacío */ }
@@ -1552,8 +1556,8 @@ async function confirmarExportMenu() {
       };
     });
 
-    // Guardar en Firebase
-    await fetch(FB_BASE + '/datos/precios?key=' + FB_KEY, {
+    // Guardar en Firebase Menú
+    await fetch(MENU_FB_BASE + '/datos/precios?key=' + MENU_FB_KEY, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
