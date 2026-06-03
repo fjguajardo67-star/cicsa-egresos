@@ -48,7 +48,7 @@ def shutdown_handler(signum, frame):
 # Register graceful shutdown
 signal.signal(signal.SIGINT,  shutdown_handler)
 signal.signal(signal.SIGTERM, shutdown_handler)
-CORS(app, origins=["https://fjguajardo67-star.github.io", "http://localhost:7432", "http://127.0.0.1:7432"])
+CORS(app, origins=["https://fjguajardo67-star.github.io", "https://cicsa-egresos.cicsacomedores.com.mx", "http://cicsa-egresos.cicsacomedores.com.mx", "http://localhost:7432", "http://127.0.0.1:7432"])
 
 CATEGORIAS = [
     "Cárnicos", "Lácteos / Cremería", "Frutas y Verduras", "Tortilla",
@@ -220,9 +220,9 @@ def gmail_reset_seen():
 @app.route("/gmail-renovar", methods=["POST"])
 def gmail_renovar():
     try:
-    
-        
-        return jsonify({"ok": False, "msg": "Re-autorizacion no disponible en Railway."})
+        from gmail_cicsa import revoke_and_reauthorize
+        revoke_and_reauthorize()
+        return jsonify({"ok": True, "msg": "Token renovado. Gmail listo."})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -241,9 +241,9 @@ def gmail_fetch():
 
 @app.route("/gmail-status", methods=["GET"])
 def gmail_status():
-    
-    creds_ok = bool(os.environ.get("GMAIL_CREDENTIALS", "").strip())
-    token_ok = bool(os.environ.get("GMAIL_TOKEN", "").strip())
+    from pathlib import Path
+    creds_ok = (Path(__file__).parent / "gmail_credentials.json").exists()
+    token_ok = (Path(__file__).parent / "gmail_token.json").exists()
     return jsonify({"credentials": creds_ok, "authorized": token_ok, "available": GMAIL_AVAILABLE})
 
 
@@ -578,18 +578,18 @@ if __name__ == "__main__":
     print("  CICSA — Control de Egresos / Nómina  v3.0")
     print("="*55)
     if not load_api_key():
-        print("\n[WARN]  API KEY NO ENCONTRADA")
+        print("\n[WARN]  API KEY NO ENCONTRADA — continuando sin IA")
         print("   Crea CICSA_APIKEY.txt con tu clave de Anthropic.")
-        input("Presiona Enter para salir..."); sys.exit(1)
-    print(f"\n[OK] API key cargada")
-    _railway_port = int(os.environ.get("PORT", PORT))
-    _is_railway = os.environ.get("RAILWAY_ENVIRONMENT") is not None
+    else:
+        print(f"\n[OK] API key cargada")
+    print(f"[WEB] Abriendo navegador en http://localhost:{PORT}")
+    print(f"\n   No cierres esta ventana. Para salir: Ctrl+C\n")
+    threading.Thread(target=lambda: (__import__('time').sleep(1.2),
+        webbrowser.open(f"http://localhost:{PORT}")), daemon=True).start()
+    import os as _os
+    _railway_port = int(_os.environ.get("PORT", PORT))
+    _is_railway = _os.environ.get("RAILWAY_ENVIRONMENT") is not None
     if _is_railway:
-        print(f"[RAILWAY] Servidor corriendo en puerto {_railway_port}")
         app.run(host="0.0.0.0", port=_railway_port, debug=False)
     else:
-        print(f"[WEB] Abriendo navegador en http://localhost:{PORT}")
-        print(f"\n   No cierres esta ventana. Para salir: Ctrl+C\n")
-        threading.Thread(target=lambda: (__import__('time').sleep(1.2),
-            webbrowser.open(f"http://localhost:{PORT}")), daemon=True).start()
         app.run(host="127.0.0.1", port=PORT, debug=False)
