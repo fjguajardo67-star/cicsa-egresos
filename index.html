@@ -8,6 +8,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
 <style>
 :root {
   --vd: #2D5E1E; --vm: #4A8C2A; --do: #D4A017; --naranja: #E8651A;
@@ -306,9 +309,124 @@ tr:hover td { background:var(--claro); }
 .menu-sync-status.ok  { background:var(--claro); color:var(--vd); border-left:4px solid var(--vm); }
 .menu-sync-status.err { background:var(--red-bg); color:var(--red); border-left:4px solid var(--red); }
 .menu-sync-status.loading { background:#EEF2FF; color:#3730A3; border-left:4px solid #6366F1; }
+
+/* ── Login Screen ─────────────────────────────────────────────────── */
+#loginScreen {
+  position:fixed; inset:0; background: linear-gradient(135deg, #1B4D0F 0%, #2D5E1E 50%, #1B4D0F 100%);
+  display:flex; align-items:center; justify-content:center; z-index:9999;
+  font-family:'DM Sans',sans-serif;
+}
+#loginScreen.hidden { display:none; }
+.login-card {
+  background:white; border-radius:20px; padding:40px;
+  width:360px; max-width:90vw; box-shadow:0 20px 60px rgba(0,0,0,0.3);
+  text-align:center;
+}
+.login-logo {
+  width:80px; height:80px; background:#FAFDF7; border-radius:16px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:40px; margin:0 auto 16px;
+}
+.login-title { font-size:24px; font-weight:700; color:#1A2E14; margin-bottom:4px; }
+.login-sub { font-size:13px; color:#6B8F6B; margin-bottom:28px; }
+.login-field { margin-bottom:16px; text-align:left; }
+.login-field label { display:block; font-size:12px; font-weight:600; color:#4A5E42; margin-bottom:6px; }
+.login-field input {
+  width:100%; padding:12px 16px; border:1.5px solid #D4E8CC; border-radius:10px;
+  font-size:15px; font-family:'DM Sans',sans-serif; outline:none; box-sizing:border-box;
+  transition:border-color 0.2s;
+}
+.login-field input:focus { border-color:#4A8C2A; }
+.login-btn {
+  width:100%; padding:14px; background:#2D5E1E; color:white; border:none;
+  border-radius:10px; font-size:16px; font-weight:600; cursor:pointer;
+  font-family:'DM Sans',sans-serif; margin-top:8px; transition:background 0.2s;
+}
+.login-btn:hover { background:#4A8C2A; }
+.login-btn:disabled { background:#9DB89D; cursor:not-allowed; }
+.login-error { color:#C0392B; font-size:13px; margin-top:12px; min-height:20px; }
+.login-version { font-size:11px; color:#B0C8B0; margin-top:20px; }
+
+/* ── User menu ───────────────────────────────────────────────────── */
+.user-chip {
+  display:flex; align-items:center; gap:8px; padding:6px 12px;
+  background:rgba(255,255,255,0.15); border-radius:20px; cursor:pointer;
+  color:white; font-size:13px; border:none; margin-left:auto;
+  font-family:'DM Sans',sans-serif;
+}
+.user-chip:hover { background:rgba(255,255,255,0.25); }
+.user-avatar {
+  width:28px; height:28px; background:#D4A017; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:13px; font-weight:700; color:white;
+}
+
+/* ── Admin Panel ─────────────────────────────────────────────────── */
+#adminModal .modal-box { max-width:600px; }
+.user-list-item {
+  display:flex; align-items:center; gap:12px; padding:12px;
+  border:1px solid #D4E8CC; border-radius:10px; margin-bottom:8px;
+  background:#FAFDF7;
+}
+.user-list-item .user-email { flex:1; font-size:14px; color:#1A2E14; }
+.user-list-item .user-role {
+  padding:4px 10px; border-radius:20px; font-size:12px; font-weight:600;
+}
+.role-admin { background:#FFF3CD; color:#856404; }
+.role-operativo { background:#D4EDDA; color:#155724; }
+
 </style>
 </head>
 <body>
+<!-- ── Login Screen ─────────────────────────────────────────────── -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">🍽️</div>
+    <div class="login-title">CICSA Egresos</div>
+    <div class="login-sub">Comedores Industriales de Cuauhtémoc</div>
+    <div class="login-field">
+      <label>Correo electrónico</label>
+      <input type="email" id="loginEmail" placeholder="correo@ejemplo.com" autocomplete="email">
+    </div>
+    <div class="login-field">
+      <label>Contraseña</label>
+      <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password"
+        onkeydown="if(event.key==='Enter') doLogin()">
+    </div>
+    <button class="login-btn" id="loginBtn" onclick="doLogin()">Ingresar</button>
+    <div class="login-error" id="loginError"></div>
+    <div class="login-version">v3.0 — 2026</div>
+  </div>
+</div>
+
+<!-- ── Admin Modal ───────────────────────────────────────────────── -->
+<div class="modal-overlay" id="adminModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>👥 Administración de Usuarios</span>
+      <button class="modal-close" onclick="closeAdminModal()">✕</button>
+    </div>
+    <div style="margin-bottom:16px">
+      <h4 style="margin:0 0 12px;color:var(--vd)">Agregar usuario nuevo</h4>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input type="email" id="newUserEmail" placeholder="correo@ejemplo.com"
+          style="flex:1;padding:10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;min-width:200px">
+        <input type="password" id="newUserPass" placeholder="Contraseña (min 6 chars)"
+          style="flex:1;padding:10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;min-width:160px">
+        <select id="newUserRole" style="padding:10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px">
+          <option value="operativo">Operativo</option>
+          <option value="admin">Administrador</option>
+        </select>
+        <button class="btn btn-primary" onclick="crearUsuario()">➕ Agregar</button>
+      </div>
+      <div class="status" id="adminStatus"></div>
+    </div>
+    <h4 style="margin:0 0 12px;color:var(--vd)">Usuarios registrados</h4>
+    <div id="adminUserList"><div style="color:#9DB89D;font-size:14px">Cargando...</div></div>
+  </div>
+</div>
+
+
 
 <!-- TOPBAR -->
 <div class="topbar">
@@ -328,6 +446,10 @@ tr:hover td { background:var(--claro); }
     <button class="nav-btn" id="navPagos" onclick="showPage('pagos',this)">💳 Pagos</button>
     <button class="nav-btn" id="navReportes" onclick="showPage('reportes',this)">📈 Reportes</button>
     <button class="nav-btn" id="navCatalogo" onclick="showPage('catalogo',this)">🏪 Proveedores</button>
+    <button class="user-chip" id="userChip" onclick="toggleUserMenu()" style="display:none">
+      <div class="user-avatar" id="userAvatar">?</div>
+      <span id="userChipName">Usuario</span>
+    </button>
     <button class="nav-btn" id="navColab" onclick="showPage('colab',this)">🤝 Colaboración</button>
     <button class="nav-btn" id="navSat" onclick="showPage('sat',this)">🏛 SAT</button>
   </nav>
@@ -1431,9 +1553,9 @@ async function abrirExportMenu(gastoId) {
   _menuRows = [];
 
   // Try to extract individual products via AI
-  // Use capturedB64 if still in memory, otherwise use gasto respaldo
-  const b64ToUse = capturedB64 || (g.respaldo ? g.respaldo.split(',')[1] : null);
-  const mimeToUse = (capturedFile && capturedFile.type) || (g.respaldo && g.respaldo.startsWith('data:application/pdf') ? 'application/pdf' : 'image/jpeg');
+  // Siempre usar el respaldo del gasto — ignorar capturedB64 para evitar mezclar facturas
+  const b64ToUse = (g.respaldo ? g.respaldo.split(',')[1] : null) || capturedB64;
+  const mimeToUse = (g.respaldo && g.respaldo.startsWith('data:application/pdf') ? 'application/pdf' : g.respaldo ? 'image/jpeg' : (capturedFile && capturedFile.type) || 'image/jpeg');
   if(b64ToUse) {
     try {
       const resp = await fetch(SERVER+"/leer-productos", {
@@ -2477,15 +2599,260 @@ function exportarPagosPDF(){
 // ═══════════════════════════════════════════════════════════════════════════
 document.getElementById("fFecha").value=todayStr();
 document.getElementById("mFecha").value=todayStr();
-load();
-renderAll();
-// Check server without blocking
-checkServer();
-// Load from server/Firebase in background
-(async()=>{
-  const loaded=await loadFromServer();
-  if(loaded) renderAll();
-})();
+// App init handled by auth.onAuthStateChanged
+// (login screen shows by default)
+
+
+// ── Firebase Auth ─────────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyC5Scjnnabx4bJAdkUShlm53i38OXj8xgQ",
+  authDomain: "cicsa-egresos.firebaseapp.com",
+  projectId: "cicsa-egresos",
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db   = firebase.firestore();
+
+const ADMIN_UID = "NVapfgY8pshXwYbMq7Wz28ry3pC3";
+let currentUser = null;
+let currentRole = null;
+
+// ── Login ──────────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const email = document.getElementById("loginEmail").value.trim();
+  const pass  = document.getElementById("loginPassword").value;
+  const btn   = document.getElementById("loginBtn");
+  const err   = document.getElementById("loginError");
+
+  if(!email || !pass) { err.textContent = "Por favor llena todos los campos."; return; }
+
+  btn.disabled = true;
+  btn.textContent = "Ingresando...";
+  err.textContent = "";
+
+  try {
+    await auth.signInWithEmailAndPassword(email, pass);
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = "Ingresar";
+    const msgs = {
+      "auth/user-not-found": "Usuario no encontrado.",
+      "auth/wrong-password": "Contraseña incorrecta.",
+      "auth/invalid-email": "Correo inválido.",
+      "auth/too-many-requests": "Demasiados intentos. Intenta más tarde.",
+    };
+    err.textContent = msgs[e.code] || "Error al ingresar. Verifica tus datos.";
+  }
+}
+
+// ── Auth State Observer ────────────────────────────────────────────────────────
+auth.onAuthStateChanged(async user => {
+  if(user) {
+    currentUser = user;
+    // Get role from Firestore
+    try {
+      const snap = await db.collection("usuarios").doc(user.uid).get();
+      currentRole = snap.exists ? (snap.data().rol || "operativo") : "operativo";
+      // If admin UID, ensure role is admin
+      if(user.uid === ADMIN_UID) currentRole = "admin";
+    } catch(e) {
+      currentRole = user.uid === ADMIN_UID ? "admin" : "operativo";
+    }
+
+    // Hide login, show app
+    document.getElementById("loginScreen").classList.add("hidden");
+
+    // Update user chip
+    const chip = document.getElementById("userChip");
+    const avatar = document.getElementById("userAvatar");
+    const name = document.getElementById("userChipName");
+    chip.style.display = "flex";
+    avatar.textContent = user.email.charAt(0).toUpperCase();
+    name.textContent = currentRole === "admin" ? "Admin" : "Operativo";
+
+    // Show admin button if admin
+    if(currentRole === "admin") {
+      // Add admin button to nav if not exists
+      if(!document.getElementById("btnAdmin")) {
+        const btn = document.createElement("button");
+        btn.id = "btnAdmin";
+        btn.className = "nav-btn";
+        btn.innerHTML = "👥 Usuarios";
+        btn.onclick = () => abrirAdminModal();
+        document.querySelector(".topbar-nav").appendChild(btn);
+      }
+    }
+
+    // Init app
+    load();
+    renderAll();
+    checkServer();
+    (async()=>{ const loaded=await loadFromServer(); if(loaded) renderAll(); })();
+
+  } else {
+    currentUser = null;
+    currentRole = null;
+    document.getElementById("loginScreen").classList.remove("hidden");
+    document.getElementById("userChip").style.display = "none";
+  }
+});
+
+// ── User Menu ─────────────────────────────────────────────────────────────────
+function toggleUserMenu() {
+  const menu = [
+    { label: "👤 " + (currentUser?.email || ""), action: null },
+    { label: "🔑 Cambiar contraseña", action: cambiarPassword },
+    currentRole === "admin" ? { label: "👥 Gestión de usuarios", action: abrirAdminModal } : null,
+    { label: "🚪 Cerrar sesión", action: () => auth.signOut() },
+  ].filter(Boolean);
+
+  // Simple dropdown
+  let existing = document.getElementById("userDropdown");
+  if(existing) { existing.remove(); return; }
+
+  const chip = document.getElementById("userChip");
+  const rect = chip.getBoundingClientRect();
+  const div = document.createElement("div");
+  div.id = "userDropdown";
+  div.style.cssText = `position:fixed;top:${rect.bottom+4}px;right:12px;background:white;
+    border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.15);z-index:9998;min-width:220px;overflow:hidden;`;
+
+  menu.forEach(item => {
+    const btn = document.createElement("button");
+    btn.textContent = item.label;
+    btn.style.cssText = `display:block;width:100%;padding:12px 16px;border:none;background:none;
+      text-align:left;font-size:14px;cursor:${item.action?'pointer':'default'};
+      color:${item.action?'#1A2E14':'#9DB89D'};font-family:'DM Sans',sans-serif;`;
+    btn.onmouseover = () => { if(item.action) btn.style.background="#F0F7EC"; };
+    btn.onmouseout  = () => btn.style.background="none";
+    if(item.action) btn.onclick = () => { div.remove(); item.action(); };
+    div.appendChild(btn);
+  });
+
+  document.body.appendChild(div);
+  setTimeout(() => document.addEventListener("click", function h(e) {
+    if(!div.contains(e.target) && e.target !== chip) { div.remove(); document.removeEventListener("click", h); }
+  }), 100);
+}
+
+function cambiarPassword() {
+  const newPass = prompt("Nueva contraseña (mínimo 6 caracteres):");
+  if(!newPass || newPass.length < 6) { alert("Contraseña muy corta."); return; }
+  currentUser.updatePassword(newPass)
+    .then(() => alert("✅ Contraseña actualizada."))
+    .catch(e => alert("Error: " + e.message));
+}
+
+// ── Admin Modal ───────────────────────────────────────────────────────────────
+async function abrirAdminModal() {
+  if(currentRole !== "admin") return;
+  document.getElementById("adminModal").classList.add("open");
+  cargarUsuarios();
+}
+
+function closeAdminModal() {
+  document.getElementById("adminModal").classList.remove("open");
+}
+
+async function cargarUsuarios() {
+  const lista = document.getElementById("adminUserList");
+  lista.innerHTML = "<div style='color:#9DB89D;font-size:14px'>Cargando...</div>";
+  try {
+    const snap = await db.collection("usuarios").get();
+    if(snap.empty) { lista.innerHTML = "<div style='color:#9DB89D;font-size:14px'>No hay usuarios registrados.</div>"; return; }
+    lista.innerHTML = "";
+    snap.forEach(doc => {
+      const u = doc.data();
+      const div = document.createElement("div");
+      div.className = "user-list-item";
+      div.innerHTML = `
+        <div class="user-avatar" style="width:36px;height:36px;font-size:14px">${(u.email||"?").charAt(0).toUpperCase()}</div>
+        <div class="user-email">${u.email || doc.id}</div>
+        <span class="user-role ${u.rol === 'admin' ? 'role-admin' : 'role-operativo'}">${u.rol === 'admin' ? 'Admin' : 'Operativo'}</span>
+        ${doc.id !== ADMIN_UID ? `
+        <select onchange="cambiarRol('${doc.id}', this.value)" style="padding:6px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+          <option value="operativo" ${u.rol !== 'admin' ? 'selected' : ''}>Operativo</option>
+          <option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>Admin</option>
+        </select>
+        <button onclick="eliminarUsuario('${doc.id}', '${u.email}')"
+          style="padding:6px 10px;background:#FFEBEE;color:#C0392B;border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button>
+        ` : '<span style="font-size:12px;color:#9DB89D">Principal</span>'}
+      `;
+      lista.appendChild(div);
+    });
+  } catch(e) {
+    lista.innerHTML = "<div style='color:#C0392B;font-size:14px'>Error cargando usuarios.</div>";
+  }
+}
+
+async function crearUsuario() {
+  const email = document.getElementById("newUserEmail").value.trim();
+  const pass  = document.getElementById("newUserPass").value;
+  const rol   = document.getElementById("newUserRole").value;
+  const status = document.getElementById("adminStatus");
+
+  if(!email || !pass) { setStatus("adminStatus", "⚠ Completa todos los campos.", "warn"); return; }
+  if(pass.length < 6) { setStatus("adminStatus", "⚠ La contraseña debe tener mínimo 6 caracteres.", "warn"); return; }
+
+  setStatus("adminStatus", "Creando usuario...", "");
+  try {
+    // Create user via Firebase REST API (secondary app trick)
+    const resp = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FB_KEY}`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ email, password: pass, returnSecureToken: true })
+    });
+    const data = await resp.json();
+    if(data.error) throw new Error(data.error.message);
+
+    // Save role in Firestore
+    await db.collection("usuarios").doc(data.localId).set({ email, rol, creadoPor: currentUser.uid, fechaCreacion: new Date().toISOString() });
+
+    setStatus("adminStatus", `✅ Usuario ${email} creado como ${rol}.`, "ok");
+    document.getElementById("newUserEmail").value = "";
+    document.getElementById("newUserPass").value = "";
+    cargarUsuarios();
+  } catch(e) {
+    setStatus("adminStatus", `❌ Error: ${e.message}`, "error");
+  }
+}
+
+async function cambiarRol(uid, nuevoRol) {
+  try {
+    await db.collection("usuarios").doc(uid).update({ rol: nuevoRol });
+    setStatus("adminStatus", "✅ Rol actualizado.", "ok");
+    cargarUsuarios();
+  } catch(e) {
+    setStatus("adminStatus", "❌ Error al cambiar rol.", "error");
+  }
+}
+
+async function eliminarUsuario(uid, email) {
+  if(!confirm(`¿Eliminar acceso de ${email}?`)) return;
+  try {
+    await db.collection("usuarios").doc(uid).delete();
+    setStatus("adminStatus", `✅ ${email} eliminado.`, "ok");
+    cargarUsuarios();
+  } catch(e) {
+    setStatus("adminStatus", "❌ Error al eliminar.", "error");
+  }
+}
+
+// ── Guard admin UID in Firestore on first load ─────────────────────────────────
+async function ensureAdminRecord() {
+  try {
+    const snap = await db.collection("usuarios").doc(ADMIN_UID).get();
+    if(!snap.exists) {
+      await db.collection("usuarios").doc(ADMIN_UID).set({
+        email: "fjguajardo67@gmail.com",
+        rol: "admin",
+        fechaCreacion: new Date().toISOString()
+      });
+    }
+  } catch(e) { console.warn("ensureAdminRecord:", e); }
+}
+ensureAdminRecord();
+
 </script>
 </body>
 </html>
