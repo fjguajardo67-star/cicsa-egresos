@@ -48,7 +48,7 @@ def shutdown_handler(signum, frame):
 # Register graceful shutdown
 signal.signal(signal.SIGINT,  shutdown_handler)
 signal.signal(signal.SIGTERM, shutdown_handler)
-CORS(app, origins=["https://fjguajardo67-star.github.io", "https://cicsa-egresos.cicsacomedores.com.mx", "http://cicsa-egresos.cicsacomedores.com.mx", "http://localhost:7432", "http://127.0.0.1:7432"])
+CORS(app, origins=["https://fjguajardo67-star.github.io", "http://localhost:7432", "http://127.0.0.1:7432"])
 
 CATEGORIAS = [
     "Cárnicos", "Lácteos / Cremería", "Frutas y Verduras", "Tortilla",
@@ -578,18 +578,18 @@ if __name__ == "__main__":
     print("  CICSA — Control de Egresos / Nómina  v3.0")
     print("="*55)
     if not load_api_key():
-        print("\n[WARN]  API KEY NO ENCONTRADA — continuando sin IA")
+        print("\n[WARN]  API KEY NO ENCONTRADA")
         print("   Crea CICSA_APIKEY.txt con tu clave de Anthropic.")
-    else:
-        print(f"\n[OK] API key cargada")
-    print(f"[WEB] Abriendo navegador en http://localhost:{PORT}")
-    print(f"\n   No cierres esta ventana. Para salir: Ctrl+C\n")
-    threading.Thread(target=lambda: (__import__('time').sleep(1.2),
-        webbrowser.open(f"http://localhost:{PORT}")), daemon=True).start()
-    import os as _os
-    _railway_port = int(_os.environ.get("PORT", PORT))
-    _is_railway = _os.environ.get("RAILWAY_ENVIRONMENT") is not None
+        input("Presiona Enter para salir..."); sys.exit(1)
+    print(f"\n[OK] API key cargada")
+    _railway_port = int(os.environ.get("PORT", PORT))
+    _is_railway = os.environ.get("RAILWAY_ENVIRONMENT") is not None
     if _is_railway:
+        print(f"[RAILWAY] Servidor corriendo en puerto {_railway_port}")
         app.run(host="0.0.0.0", port=_railway_port, debug=False)
     else:
+        print(f"[WEB] Abriendo navegador en http://localhost:{PORT}")
+        print(f"\n   No cierres esta ventana. Para salir: Ctrl+C\n")
+        threading.Thread(target=lambda: (__import__('time').sleep(1.2),
+            webbrowser.open(f"http://localhost:{PORT}")), daemon=True).start()
         app.run(host="127.0.0.1", port=PORT, debug=False)
