@@ -96,7 +96,7 @@ def call_claude(client, b64, mime, prompt, max_tokens=2000):
         }
 
     resp = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=max_tokens,
         messages=[{"role":"user","content":[
             content_block,
@@ -397,7 +397,7 @@ IMPORTANTE: Devuelve SOLO JSON valido. Sin texto adicional. Cierra TODOS los cor
 {{"cfdis":[{{"folio":"","rfc":"","proveedor":"","fecha":"YYYY-MM-DD","total":0.00}}]}}"""
 
             resp = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-6",
                 max_tokens=6000,
                 messages=[{"role":"user","content":[
                     {"type":"document","source":{"type":"base64","media_type":"application/pdf","data":b64}},
