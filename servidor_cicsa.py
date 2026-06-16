@@ -104,7 +104,25 @@ def call_claude(client, b64, mime, prompt, max_tokens=2000):
         ]}]
     )
     raw = resp.content[0].text.strip().replace("```json","").replace("```","").strip()
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Claude pudo haber añadido texto antes/después del JSON.
+        # Extraer el primer objeto JSON balanceado de la respuesta.
+        import re
+        start = raw.find("{")
+        if start != -1:
+            depth = 0
+            for i in range(start, len(raw)):
+                if raw[i] == "{":
+                    depth += 1
+                elif raw[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = raw[start:i+1]
+                        return json.loads(candidate)
+        # Si no se pudo extraer, relanzar para que el endpoint responda 422
+        raise
 
 # ── Serve HTML files ───────────────────────────────────────────────────────────
 @app.route("/")
