@@ -48,7 +48,7 @@ def shutdown_handler(signum, frame):
 # Register graceful shutdown
 signal.signal(signal.SIGINT,  shutdown_handler)
 signal.signal(signal.SIGTERM, shutdown_handler)
-CORS(app, origins=["https://fjguajardo67-star.github.io", "http://localhost:7432", "http://127.0.0.1:7432"])
+CORS(app, origins=["https://fjguajardo67-star.github.io", "https://cicsa-egresos.cicsacomedores.com.mx", "http://cicsa-egresos.cicsacomedores.com.mx", "http://localhost:7432", "http://127.0.0.1:7432"])
 
 CATEGORIAS = [
     "Cárnicos", "Lácteos / Cremería", "Frutas y Verduras", "Tortilla",
