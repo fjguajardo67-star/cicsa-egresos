@@ -69,6 +69,36 @@ def get_gmail_service():
     return build("gmail", "v1", credentials=creds)
 
 
+def revoke_and_reauthorize():
+    """Fuerza un refresh del access token de Gmail usando el refresh_token vigente.
+
+    En Railway el filesystem es de solo lectura y no hay flujo interactivo de OAuth,
+    así que "renovar autorización" significa descartar el access token en memoria y
+    pedirle a Google uno nuevo con el refresh_token de GMAIL_TOKEN.
+    """
+    token_env = os.environ.get("GMAIL_TOKEN", "").strip()
+    if not token_env:
+        raise EnvironmentError(
+            "Variable de entorno GMAIL_TOKEN no definida. "
+            "Configúrala en Railway con el contenido de gmail_token.json."
+        )
+
+    try:
+        token_data = json.loads(token_env)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"GMAIL_TOKEN no es JSON válido: {e}")
+
+    creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+    if not creds.refresh_token:
+        raise RuntimeError(
+            "El token de Gmail no tiene refresh_token. "
+            "Regenera el token localmente y actualiza GMAIL_TOKEN en Railway."
+        )
+
+    creds.refresh(Request())
+    return build("gmail", "v1", credentials=creds)
+
+
 # ── Persistencia de mensajes ya procesados ────────────────────────────────
 
 def load_seen() -> set:
