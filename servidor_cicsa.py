@@ -260,8 +260,11 @@ def gmail_fetch():
 @app.route("/gmail-status", methods=["GET"])
 def gmail_status():
     from pathlib import Path
-    creds_ok = (Path(__file__).parent / "gmail_credentials.json").exists()
-    token_ok = (Path(__file__).parent / "gmail_token.json").exists()
+    # En Railway no hay archivos locales — Gmail se autoriza vía la variable de entorno
+    # GMAIL_TOKEN. Los archivos solo aplican para uso local/desarrollo.
+    token_env_ok = bool(os.environ.get("GMAIL_TOKEN", "").strip())
+    creds_ok = token_env_ok or (Path(__file__).parent / "gmail_credentials.json").exists()
+    token_ok = token_env_ok or (Path(__file__).parent / "gmail_token.json").exists()
     return jsonify({"credentials": creds_ok, "authorized": token_ok, "available": GMAIL_AVAILABLE})
 
 
