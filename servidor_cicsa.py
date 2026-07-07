@@ -607,10 +607,10 @@ if __name__ == "__main__":
     _is_railway = os.environ.get("RAILWAY_ENVIRONMENT") is not None
     if _is_railway:
         print(f"[RAILWAY] Servidor corriendo en puerto {_railway_port}")
-        app.run(host="0.0.0.0", port=_railway_port, debug=False)
+        app.run(host="0.0.0.0", port=_railway_port, debug=False, threaded=True)
     else:
         print(f"[WEB] Abriendo navegador en http://localhost:{PORT}")
         print(f"\n   No cierres esta ventana. Para salir: Ctrl+C\n")
         threading.Thread(target=lambda: (__import__('time').sleep(1.2),
             webbrowser.open(f"http://localhost:{PORT}")), daemon=True).start()
-        app.run(host="127.0.0.1", port=PORT, debug=False)
+        app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)
