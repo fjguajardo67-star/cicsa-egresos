@@ -523,8 +523,10 @@ REGLAS:
 - nombre debe ser el producto específico, no la marca ni el proveedor
 - Si no puedes extraer productos individuales (ticket simple sin detalle), devuelve "productos": []
 - precio_unitario es el precio por unidad (kg, lt, pz) — NO el importe total
+- Es MUY IMPORTANTE que incluyas TODOS los productos del documento, sin omitir ninguno,
+  incluso si son muchos (facturas grandes pueden tener 20-30+ productos distintos).
 ''',
-            max_tokens=3000
+            max_tokens=8000
         )
         return jsonify(data)
     except (json.JSONDecodeError, KeyError):
