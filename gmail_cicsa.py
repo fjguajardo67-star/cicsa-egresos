@@ -160,6 +160,26 @@ def extract_parts(parts: list) -> list:
     return result
 
 
+# Umbral mínimo de tamaño — los logos/íconos incrustados en firmas de correo casi siempre
+# pesan unos cuantos KB; una factura real (foto o PDF escaneado) casi nunca pesa menos de esto.
+MIN_ATTACHMENT_BYTES = 8 * 1024
+
+# Nombre típico que Outlook Web le da a las imágenes incrustadas en la firma/cuerpo del
+# correo (ej. "Outlook-542f5cee.png") — no son adjuntos reales, son logos repetidos en cada
+# respuesta del hilo.
+_INLINE_FILENAME_RE = re.compile(r"outlook-[0-9a-z]{6,}\.", re.IGNORECASE)
+
+
+def is_inline_part(part: dict, filename: str) -> bool:
+    """¿Esta parte es una imagen incrustada (firma/logo del cuerpo del correo) en vez de un
+    adjunto real? Gmail marca esto con Content-Disposition: inline en los headers de la parte."""
+    for h in part.get("headers", []):
+        if h.get("name", "").lower() == "content-disposition":
+            if "inline" in h.get("value", "").lower():
+                return True
+    return bool(_INLINE_FILENAME_RE.search(filename or ""))
+
+
 # ── Función principal ─────────────────────────────────────────────────────
 
 def fetch_invoice_attachments(days_back: int = 30) -> list:
@@ -212,8 +232,15 @@ def fetch_invoice_attachments(days_back: int = 30) -> list:
                             filename_orig.lower().endswith((".jpg", ".jpeg", ".png"))):
                         continue
 
+                # Logos/íconos incrustados en la firma del correo — no son facturas.
+                if is_inline_part(part, filename_orig):
+                    continue
+
                 data = get_attachment_data(service, msg_id, part)
                 if not data:
+                    continue
+
+                if len(data) < MIN_ATTACHMENT_BYTES:
                     continue
 
                 safe_name = safe_filename(filename_orig, msg_id, idx)
