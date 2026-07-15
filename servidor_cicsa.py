@@ -27,7 +27,11 @@ PORT     = 7432
 BASE_DIR   = Path(__file__).parent
 STATE_FILE = BASE_DIR / "cicsa_data.json"
 BACKUP_FILE= BASE_DIR / "cicsa_data_backup.json"
+IS_RAILWAY = os.environ.get("RAILWAY_ENVIRONMENT") is not None
 app        = Flask(__name__)
+# Límite de tamaño de request: los payloads legítimos son PDFs/imágenes en base64 (unos
+# cuantos MB). Sin límite, cualquiera podía postear gigabytes y llenar el disco.
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 
 def hacer_backup():
     """Create a backup of cicsa_data.json before overwriting."""
@@ -128,13 +132,20 @@ def call_claude(client, b64, mime, prompt, max_tokens=2000):
 @app.route("/")
 def index():
     # Serve Control de Egresos by default if present, else Lector Nomina
-    for fname in ["CICSA_Control_Egresos.html","CICSA Control Egresos.html","CICSA_Lector_Nomina.html"]:
+    for fname in ["index.html","CICSA_Control_Egresos.html","CICSA Control Egresos.html","CICSA_Lector_Nomina.html"]:
         if (BASE_DIR/fname).exists():
             return send_from_directory(str(BASE_DIR), fname)
     return "No se encontró el archivo HTML", 404
 
+# Solo assets del frontend. Antes servía CUALQUIER archivo del directorio — incluidos
+# cicsa_data.json (todo el estado financiero), gmail_seen.json y el propio código fuente —
+# a quien conociera la URL pública de Railway.
+ALLOWED_STATIC_EXT = {".html", ".css", ".js", ".png", ".jpg", ".jpeg", ".ico", ".svg", ".webp"}
+
 @app.route("/<path:filename>")
 def static_files(filename):
+    if Path(filename).suffix.lower() not in ALLOWED_STATIC_EXT:
+        return "No encontrado", 404
     return send_from_directory(str(BASE_DIR), filename)
 
 # ── /leer-nomina  (nómina no fiscal) ──────────────────────────────────────────
@@ -358,8 +369,16 @@ def sheets_delete():
 
 
 # ── /save-state  (persist state to local file) ────────────────────────────────
+# save/load-state existen para el uso LOCAL (respaldo en cicsa_data.json). En Railway el
+# disco es efímero (se pierde en cada redeploy) y estos endpoints no tienen autenticación:
+# cualquiera con la URL pública podía DESCARGAR todo el estado financiero (/load-state) o
+# SOBREESCRIBIRLO (/save-state) y envenenar el arranque de la app, que prefería el estado
+# del servidor si traía más gastos. En producción la fuente durable es Firestore (con auth),
+# así que aquí se apagan; el frontend ya tolera su ausencia (timeout + fallback a Firestore).
 @app.route("/save-state", methods=["POST"])
 def save_state():
+    if IS_RAILWAY:
+        return jsonify({"error": "deshabilitado en producción — el estado vive en Firestore"}), 404
     try:
         data = request.get_json()
         # Write to temp file first, then rename — atomic write
@@ -375,6 +394,8 @@ def save_state():
 # ── /load-state  (restore state from local file) ──────────────────────────────
 @app.route("/load-state", methods=["GET"])
 def load_state():
+    if IS_RAILWAY:
+        return jsonify({"error": "deshabilitado en producción — el estado vive en Firestore"}), 404
     try:
         # Try main file first
         for f in [STATE_FILE, BACKUP_FILE]:
@@ -606,7 +627,7 @@ if __name__ == "__main__":
         input("Presiona Enter para salir..."); sys.exit(1)
     print(f"\n[OK] API key cargada")
     _railway_port = int(os.environ.get("PORT", PORT))
-    _is_railway = os.environ.get("RAILWAY_ENVIRONMENT") is not None
+    _is_railway = IS_RAILWAY
     if _is_railway:
         print(f"[RAILWAY] Servidor corriendo en puerto {_railway_port}")
         app.run(host="0.0.0.0", port=_railway_port, debug=False, threaded=True)
