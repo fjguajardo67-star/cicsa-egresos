@@ -33,6 +33,40 @@ app        = Flask(__name__)
 # cuantos MB). Sin límite, cualquiera podía postear gigabytes y llenar el disco.
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 
+# ── Autenticación: ID token de Firebase ──────────────────────────────────────
+# En Railway la URL es pública: sin esto, cualquiera podía usar los endpoints de IA
+# (quemando tokens de Anthropic de la cuenta) y bajar las facturas de Gmail. El frontend
+# manda "Authorization: Bearer <idToken>" (usuario logueado en Firebase) y aquí se verifica
+# la firma contra los certificados públicos de Google — no requiere service account; usa
+# google-auth, que ya es dependencia del módulo de Gmail. En uso local no aplica.
+from functools import wraps
+FIREBASE_PROJECT_ID = "cicsa-egresos"
+_google_verifier_request = None
+
+def require_auth(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not IS_RAILWAY:
+            return fn(*args, **kwargs)
+        authz = request.headers.get("Authorization", "")
+        if not authz.startswith("Bearer "):
+            return jsonify({"error": "Sesión requerida — inicia sesión y vuelve a intentar."}), 401
+        try:
+            global _google_verifier_request
+            import google.auth.transport.requests as _gareq
+            from google.oauth2 import id_token as _gid
+            if _google_verifier_request is None:
+                _google_verifier_request = _gareq.Request()
+            claims = _gid.verify_firebase_token(
+                authz[len("Bearer "):], _google_verifier_request,
+                audience=FIREBASE_PROJECT_ID, clock_skew_in_seconds=10)
+            if not claims:
+                raise ValueError("token inválido")
+        except Exception:
+            return jsonify({"error": "Sesión inválida o expirada — vuelve a iniciar sesión."}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
 def hacer_backup():
     """Create a backup of cicsa_data.json before overwriting."""
     if STATE_FILE.exists():
@@ -150,6 +184,7 @@ def static_files(filename):
 
 # ── /leer-nomina  (nómina no fiscal) ──────────────────────────────────────────
 @app.route("/leer-nomina", methods=["POST"])
+@require_auth
 def leer_nomina():
     try:
         d = request.get_json()
@@ -167,6 +202,7 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
 
 # ── /leer-gasto  (gasto simple — un solo tipo) ────────────────────────────────
 @app.route("/leer-gasto", methods=["POST"])
+@require_auth
 def leer_gasto():
     try:
         d = request.get_json()
@@ -193,6 +229,7 @@ y en "categoria" pon la categoría principal (la de mayor importe).''',
 
 # ── /analizar-division  (desglose por categoría de doc mixto) ─────────────────
 @app.route("/analizar-division", methods=["POST"])
+@require_auth
 def analizar_division():
     try:
         d = request.get_json()
@@ -235,6 +272,7 @@ IMPORTANTE:
 
 # ── /gmail-reset-seen ─────────────────────────────────────────────────────────
 @app.route("/gmail-reset-seen", methods=["POST"])
+@require_auth
 def gmail_reset_seen():
     try:
         from pathlib import Path
@@ -247,6 +285,7 @@ def gmail_reset_seen():
 
 # ── /gmail-renovar  (force re-authorization) ─────────────────────────────────
 @app.route("/gmail-renovar", methods=["POST"])
+@require_auth
 def gmail_renovar():
     try:
         from gmail_cicsa import revoke_and_reauthorize
@@ -257,6 +296,7 @@ def gmail_renovar():
 
 # ── /gmail-fetch ──────────────────────────────────────────────────────────────
 @app.route("/gmail-fetch", methods=["POST"])
+@require_auth
 def gmail_fetch():
     try:
         d     = request.get_json() or {}
@@ -293,6 +333,7 @@ def sheets_status_route():
 
 # ── /sheets-config ────────────────────────────────────────────────────────────
 @app.route("/sheets-config", methods=["POST"])
+@require_auth
 def sheets_config():
     if not SHEETS_AVAILABLE:
         return jsonify({"error": "sheets_cicsa.py no encontrado"}), 400
@@ -313,6 +354,7 @@ def sheets_config():
 
 # ── /sheets-push ──────────────────────────────────────────────────────────────
 @app.route("/sheets-push", methods=["POST"])
+@require_auth
 def sheets_push():
     if not SHEETS_AVAILABLE:
         return jsonify({"error": "No disponible"}), 400
@@ -330,6 +372,7 @@ def sheets_push():
 
 # ── /sheets-pull ──────────────────────────────────────────────────────────────
 @app.route("/sheets-pull", methods=["GET"])
+@require_auth
 def sheets_pull():
     if not SHEETS_AVAILABLE:
         return jsonify({"error": "No disponible"}), 400
@@ -342,6 +385,7 @@ def sheets_pull():
 
 # ── /sheets-aprobar ───────────────────────────────────────────────────────────
 @app.route("/sheets-aprobar", methods=["POST"])
+@require_auth
 def sheets_aprobar():
     if not SHEETS_AVAILABLE:
         return jsonify({"error": "No disponible"}), 400
@@ -357,6 +401,7 @@ def sheets_aprobar():
 
 # ── /sheets-delete ────────────────────────────────────────────────────────────
 @app.route("/sheets-delete", methods=["POST"])
+@require_auth
 def sheets_delete():
     if not SHEETS_AVAILABLE:
         return jsonify({"error": "No disponible"}), 400
@@ -413,6 +458,7 @@ def load_state():
 
 # ── /sat-leer-cfdi  (read SAT CFDI PDF with AI — paginated) ──────────────────
 @app.route("/sat-leer-cfdi", methods=["POST"])
+@require_auth
 def sat_leer_cfdi():
     """
     Lee PDF del SAT procesando en 2 mitades para documentos grandes (70-100 CFDIs).
@@ -506,6 +552,7 @@ IMPORTANTE: Devuelve SOLO JSON valido. Sin texto adicional. Cierra TODOS los cor
 
 # ── /leer-productos  (extrae productos individuales con precio por kg para Menú) ─
 @app.route("/leer-productos", methods=["POST"])
+@require_auth
 def leer_productos():
     """
     Lee una factura y extrae productos individuales con precio unitario.
@@ -556,6 +603,7 @@ REGLAS:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/precios-ingredientes", methods=["GET"])
+@require_auth
 def precios_ingredientes():
     """
     Extrae precios de proveedores desde los gastos capturados.

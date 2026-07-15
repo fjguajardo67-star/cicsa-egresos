@@ -378,7 +378,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-15-b</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-15-c</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1415,6 +1415,21 @@ const SERVER = window.location.hostname === "localhost" || window.location.hostn
   ? "http://localhost:7432"
   : "https://web-production-56bfc3.up.railway.app";
 
+// Toda llamada al servidor Flask lleva el ID token de Firebase del usuario logueado — el
+// servidor (en Railway) lo verifica y rechaza llamadas anónimas, para que nadie ajeno pueda
+// usar los endpoints de IA (queman tokens de Anthropic) ni bajar facturas de Gmail. Se hace
+// en un solo punto envolviendo fetch, así cubre todos los call sites presentes y futuros.
+const _fetchSinAuth = window.fetch.bind(window);
+window.fetch = async function(url, opts){
+  try {
+    if(typeof url === "string" && url.startsWith(SERVER) && typeof auth !== "undefined" && auth.currentUser){
+      const token = await auth.currentUser.getIdToken();
+      opts = { ...(opts||{}), headers: { ...((opts||{}).headers||{}), "Authorization": "Bearer " + token } };
+    }
+  } catch(e){ /* sin sesión → la llamada sale sin token y el servidor decide */ }
+  return _fetchSinAuth(url, opts);
+};
+
 // ── Firebase Egresos ──────────────────────────────────────────────────────
 const FB_KEY  = 'AIzaSyC5Scjnnabx4bJAdkUShlm53i38OXj8xgQ';
 const FB_BASE = 'https://firestore.googleapis.com/v1/projects/cicsa-egresos/databases/(default)/documents';
@@ -2124,7 +2139,7 @@ function guardarGasto(){
     comprobantePago:null,fechaPago:null,referenciaPago:null,
     _gmailMsgId:capturedFile?._gmailMsgId||null, _gmailFile:capturedFile?.name||null
   };
-  if(!gasto.proveedor||!gasto.importe){ setStatus("statusGuardar","⚠ Proveedor e importe son obligatorios.","err"); return; }
+  if(!gasto.proveedor||!(gasto.importe>0)){ setStatus("statusGuardar","⚠ Proveedor e importe (mayor que cero) son obligatorios.","err"); return; }
   const _dup=findDuplicate(gasto.proveedor,gasto.importe,gasto.fecha,gasto.factura);
   if(_dup){
     // Si el gasto existente no tiene factura adjunta (ej. se capturó a mano desde la
@@ -2175,7 +2190,7 @@ function guardarManual(){
     estadoPago:fp==="credito"?"pendiente":"pagado",
     comprobantePago:null,fechaPago:null,referenciaPago:null
   };
-  if(!gasto.proveedor||!gasto.importe){ alert("Proveedor e importe son obligatorios."); return; }
+  if(!gasto.proveedor||!(gasto.importe>0)){ alert("Proveedor e importe (mayor que cero) son obligatorios."); return; }
   getActiveWeek().gastos.push(gasto);
   save();
   ["mProv","mFecha","mFactura","mImporte","mNotas","mOtro"].forEach(id=>document.getElementById(id).value="");
@@ -3716,6 +3731,8 @@ async function guardarProducto(nuevoEstado){
   // magia, y 100%+ divide entre cero o da precios negativos.
   const _merma = numOrNull(document.getElementById("pcMermaPct").value);
   if(_merma!=null && (_merma<0 || _merma>=100)){ alert("La merma debe estar entre 0 y 99.9%."); return; }
+  const _precio = numOrNull(document.getElementById("pcPrecioActual").value);
+  if(_precio!=null && _precio<=0){ alert("El precio debe ser mayor que cero (o déjalo vacío)."); return; }
 
   // Los campos técnicos de conversión se derivan de la pregunta "¿cómo se usa?" (pcCosteo).
   // Solo se guarda lo que aplica a esa opción — los demás quedan null, para que no queden
@@ -3838,6 +3855,7 @@ function filterGmailDuplicates(items){
 // EDICIÓN INLINE
 // ═══════════════════════════════════════════════════════════════════════════
 function editarGasto(id,campo,valor){
+  if(campo==="importe" && !(parseFloat(valor)>0)){ alert("El importe debe ser mayor que cero."); renderGastos(); return; }
   state.weeks.forEach(w=>{const g=(w.gastos||[]).find(x=>x.id===id);if(g){g[campo]=valor;if(campo==="categoria")g.esOtro=(valor==="Otro");}});
   save();
   const filtroVal=document.getElementById("filtrocat")?.value||"",gastos=gastosSemana(),filtrados=filtroVal?gastos.filter(g=>g.categoria===filtroVal):gastos;
