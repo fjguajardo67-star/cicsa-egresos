@@ -378,7 +378,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-15-c</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-a</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1441,13 +1441,38 @@ const STORAGE_BUCKET = 'cicsa-egresos.firebasestorage.app';
 const MENU_FB_KEY  = 'AIzaSyC1QeFfDIgZPhqTs4zh7VpkB8cua93gCo0';
 const MENU_FB_BASE = 'https://firestore.googleapis.com/v1/projects/sistema-menu-cicsa/databases/(default)/documents';
 
+// ── Migración de precios (hallazgo de seguridad P1, Opción A) ────────────────
+// `datos/precios` se mueve al proyecto de Egresos (cicsa-egresos), donde las reglas ya
+// exigen login, y Menú lo lee de aquí. Durante la transición se escribe en AMBOS lugares
+// (doble escritura) para que Menú no lea precios viejos mientras cambia su lectura; el
+// write al proyecto de Menú se retira cuando Menú confirme su read-switch.
+// Fuente de verdad = cicsa-egresos. Se lee de aquí, con auth (funciona antes y después de
+// que las reglas abran lectura pública de este documento).
 async function fetchMenuPrecios(){
   try {
-    const r = await fetch(MENU_FB_BASE + '/datos/precios?key=' + MENU_FB_KEY);
+    const r = await fetch(FB_BASE + '/datos/precios?key=' + FB_KEY, { headers: await fbAuthHeader() });
     const d = await r.json();
     if(d.fields?.json?.stringValue) return JSON.parse(d.fields.json.stringValue);
-  } catch(e) { /* primera vez — Firebase vacío */ }
+  } catch(e) { /* primera vez — documento aún no existe */ }
   return {};
+}
+
+// Escribe el mapa de precios en los DOS proyectos. El de Egresos va con auth (protegido);
+// el de Menú, anónimo como hoy (sus reglas siguen abiertas hasta el cierre coordinado).
+// Devuelve true si al menos el destino nuevo (la fuente de verdad) quedó escrito.
+async function escribirPreciosDual(preciosActuales){
+  const body = JSON.stringify({ fields: {
+    json: { stringValue: JSON.stringify(preciosActuales) },
+    ts:   { stringValue: new Date().toISOString() }
+  }});
+  const nuevo = fetch(FB_BASE + '/datos/precios?key=' + FB_KEY, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await fbAuthHeader()) }, body
+  });
+  const viejo = fetch(MENU_FB_BASE + '/datos/precios?key=' + MENU_FB_KEY, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body
+  });
+  const [rNuevo] = await Promise.allSettled([nuevo, viejo]);
+  return rNuevo.status === "fulfilled" && rNuevo.value.ok;
 }
 
 async function fbAuthHeader() {
@@ -2454,23 +2479,14 @@ async function confirmarExportMenu() {
       // Normalizar nombre: primera letra mayuscula, resto minusculas para consistencia
       const nombreNorm = r.nombre.trim().toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
       preciosActuales[nombreNorm] = {
-        precio:  parseFloat(r.precio) || 0,
-        unidad:  r.unidad,
-        fecha:   fechaHoy
+        precio:      parseFloat(r.precio) || 0,
+        unidad_base: r.unidad,   // Menú lee "unidad_base" (no "unidad")
+        fecha:       fechaHoy
       };
     });
 
-    // Guardar en Firebase Menú
-    await fetch(MENU_FB_BASE + '/datos/precios?key=' + MENU_FB_KEY, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fields: {
-          json: { stringValue: JSON.stringify(preciosActuales) },
-          ts:   { stringValue: new Date().toISOString() }
-        }
-      })
-    });
+    // Doble escritura: cicsa-egresos (nuevo hogar, protegido) + sistema-menu-cicsa (transición)
+    await escribirPreciosDual(preciosActuales);
 
     document.getElementById("menuSyncStatus").className="menu-sync-status ok";
     document.getElementById("menuSyncStatus").innerHTML=
@@ -3465,11 +3481,8 @@ async function confirmarSyncMenu(){
       const nombreNorm = r.nombreSync.trim().toLowerCase().replace(/\b\w/g, c=>c.toUpperCase());
       preciosActuales[nombreNorm] = { precio: Math.round(r.calc.precio*100)/100, unidad_base: r.calc.unidadBase, fecha: fechaHoy };
     });
-    await fetch(MENU_FB_BASE + '/datos/precios?key=' + MENU_FB_KEY, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields: { json:{stringValue: JSON.stringify(preciosActuales)}, ts:{stringValue: new Date().toISOString()} } })
-    });
+    // Doble escritura: cicsa-egresos (nuevo hogar, protegido) + sistema-menu-cicsa (transición)
+    await escribirPreciosDual(preciosActuales);
     document.getElementById("syncMenuStatus").className="menu-sync-status ok";
     document.getElementById("syncMenuStatus").innerHTML =
       `✅ ${seleccionados.length} precio(s) sincronizados a CICSA Menú. Los costos de receta se recalculan solos la próxima vez que se abra Menú.`;
