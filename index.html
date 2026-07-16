@@ -378,7 +378,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-f</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-g</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1371,11 +1371,11 @@ tr:hover td { background:var(--claro); }
       </div>
       <div id="cajaRangoIniWrap" style="display:none">
         <label class="form-label">Fecha inicio</label>
-        <input type="date" id="cajaRangoIni" class="form-input">
+        <input type="date" id="cajaRangoIni" class="form-input" onchange="onCajaRangoChange()">
       </div>
       <div id="cajaRangoFinWrap" style="display:none">
         <label class="form-label">Fecha fin</label>
-        <input type="date" id="cajaRangoFin" class="form-input">
+        <input type="date" id="cajaRangoFin" class="form-input" onchange="onCajaRangoChange()">
       </div>
       <div id="cajaSaldoIniManualWrap" style="display:none">
         <label class="form-label">Saldo inicial en caja ($)</label>
@@ -4214,10 +4214,15 @@ function restaurarPagosPeriodo(){
 function pagosEnPeriodo(gastos){
   const pDesde=document.getElementById("pagosDesde")?.value||"",pHasta=document.getElementById("pagosHasta")?.value||"";
   if(!pDesde&&!pHasta) return gastos;
-  return gastos.filter(g=>{ if(pDesde&&g.fecha<pDesde)return false; if(pHasta&&g.fecha>pHasta)return false; return true; });
+  // Un gasto sin fecha nunca se descarta por el periodo ("" compara menor que toda fecha).
+  return gastos.filter(g=>{ if(!g.fecha)return true; if(pDesde&&g.fecha<pDesde)return false; if(pHasta&&g.fecha>pHasta)return false; return true; });
 }
 function renderPagos(){
-  const todos=pagosEnPeriodo(allGastosAllWeeks()),creditos=todos.filter(g=>g.formaPago==="credito"),pendientes=creditos.filter(g=>g.estadoPago==="pendiente");
+  // Las tarjetas de alerta (Vencidas / Total pendiente) SIEMPRE cuentan todas las semanas,
+  // ignorando el filtro de periodo — un tablero de cuentas por pagar nunca debe esconder un
+  // vencido. El periodo solo acota la tabla y las exportaciones.
+  const sinFiltro=allGastosAllWeeks(),creditos=sinFiltro.filter(g=>g.formaPago==="credito"),pendientes=creditos.filter(g=>g.estadoPago==="pendiente");
+  const todos=pagosEnPeriodo(sinFiltro);
   const vencidas=pendientes.filter(g=>{const d=diasRestantes(g.vencimiento);return d!==null&&d<0;}),proximas=pendientes.filter(g=>{const d=diasRestantes(g.vencimiento);return d!==null&&d>=0&&d<=7;});
   // Efectivo de la SEMANA ACTIVA (no todas las semanas) para poder cuadrar 1:1 contra
   // "Total efectivo" de Gastos y "Pagado de caja" de Caja — las tres deben coincidir.
@@ -4245,12 +4250,14 @@ function renderPagos(){
     </select>`;
     const fpCell=`<div>${fpSelect}</div>`;
     // Estado: efectivo/transferencia se registran ya pagados; crédito arranca pendiente hasta
-    // que se registra el pago (con o sin comprobante).
-    const estadoCell=g.estadoPago==="pagado"
-      ?`<span class="pago-badge pago-credito-ok">✅ Pagada</span>`
-      :g.formaPago==="credito"&&dias!==null&&dias<0
-      ?`<span class="pago-badge pago-credito-venc">🔴 Vencida ${Math.abs(dias)}d</span>`
-      :`<span class="pago-badge pago-credito-pend">⏳ Pendiente${dias!==null?` · ${dias}d`:""}</span>`;
+    // que se registra el pago (con o sin comprobante). "Pendiente" SOLO con estadoPago
+    // explícito — datos viejos sin ese campo (gastos de contado previos al campo) se tratan
+    // como pagados, no como deuda fantasma.
+    const estadoCell=g.estadoPago==="pendiente"
+      ?(dias!==null&&dias<0
+        ?`<span class="pago-badge pago-credito-venc">🔴 Vencida ${Math.abs(dias)}d</span>`
+        :`<span class="pago-badge pago-credito-pend">⏳ Pendiente${dias!==null?` · ${dias}d`:""}</span>`)
+      :`<span class="pago-badge pago-credito-ok">✅ Pagada</span>`;
     const vencCell=g.vencimiento?`<span style="font-size:12px;font-family:'JetBrains Mono',monospace">${fmtDate(g.vencimiento)}</span>`:`<span style="color:#ccc">—</span>`;
     const esImg=g._respaldoUrl && esImagenRespaldo(g._respaldoUrl);
     const thumbId=`thumb-p-${g.id}`;
@@ -4628,17 +4635,29 @@ function toggleCajaModoVista(){
   renderCaja();
 }
 
+// El saldo inicial capturado queda AMARRADO al rango de fechas para el que se capturó —
+// se guarda junto con ini/fin y solo se restaura si el rango actual coincide. Si cambias
+// las fechas, el campo se limpia: un saldo de julio no debe colarse al periodo de agosto.
 const CAJA_SALDO_MANUAL_KEY="cicsa_caja_saldo_manual";
 function onCajaSaldoManual(){
-  try{ localStorage.setItem(CAJA_SALDO_MANUAL_KEY, document.getElementById("cajaSaldoInicialManual")?.value||""); }catch(e){}
+  try{ localStorage.setItem(CAJA_SALDO_MANUAL_KEY, JSON.stringify({
+    ini:document.getElementById("cajaRangoIni")?.value||"",
+    fin:document.getElementById("cajaRangoFin")?.value||"",
+    valor:document.getElementById("cajaSaldoInicialManual")?.value||""
+  })); }catch(e){}
   renderCaja();
 }
 function restaurarCajaSaldoManual(){
   try{
-    const v=localStorage.getItem(CAJA_SALDO_MANUAL_KEY);
-    if(v!==null && document.getElementById("cajaSaldoInicialManual")) document.getElementById("cajaSaldoInicialManual").value=v;
+    const raw=localStorage.getItem(CAJA_SALDO_MANUAL_KEY); if(!raw) return;
+    const f=JSON.parse(raw);
+    const ini=document.getElementById("cajaRangoIni")?.value||"", fin=document.getElementById("cajaRangoFin")?.value||"";
+    const campo=document.getElementById("cajaSaldoInicialManual");
+    if(campo) campo.value=(f && f.valor && f.ini===ini && f.fin===fin) ? f.valor : "";
   }catch(e){}
 }
+// Al cambiar el rango: si coincide con el rango del saldo guardado lo repone, si no limpia.
+function onCajaRangoChange(){ restaurarCajaSaldoManual(); }
 
 // Salta directo a "Rango de fechas" acotado exactamente a los movimientos que componen el
 // "Saldo inicial" mostrado — así se puede auditar/borrar cortes, gastos o retiros viejos
