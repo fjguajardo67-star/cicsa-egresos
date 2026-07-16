@@ -378,7 +378,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-b</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-c</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -771,7 +771,7 @@ tr:hover td { background:var(--claro); }
     <div class="btn-row">
       <button class="btn btn-green" id="btnGmailFetch" onclick="fetchGmail()">📥 Revisar Gmail ahora</button>
       <button class="btn btn-light" id="btnGmailRenovar" onclick="renovarGmail()">🔄 Renovar autorización Gmail</button>
-      <button class="btn btn-light" onclick="resetGmailSeen()" title="Volver a mostrar todos los correos del período">🗑 Resetear vistos</button>
+      <button class="btn btn-light" onclick="resetGmailSeen()" title="Vuelve a mostrar los correos ya revisados (no borra facturas ni gastos)">🔄 Volver a mostrar correos</button>
     </div>
     <div class="status" id="gmailStatus"></div>
   </div>
@@ -4047,7 +4047,21 @@ async function restaurarGmailItemsLocal(){
     return true;
   }catch(e){ console.warn("restaurarGmailItemsLocal:",e); return false; }
 }
-async function resetGmailSeen(){if(!confirm("¿Mostrar de nuevo todos los correos del período?\nEsto borra el historial de vistos."))return;try{const r=await fetch(SERVER+"/gmail-reset-seen",{method:"POST"}),d=await r.json();if(d.ok){setStatus("gmailStatus","✅ Historial borrado.","ok");document.getElementById("gmailInboxCard").style.display="none";gmailItems=[];idbDel(GMAIL_PENDING_KEY);}else setStatus("gmailStatus","❌ "+(d.error||"Error"),"err");}catch(err){setStatus("gmailStatus","❌ "+err.message,"err");}}
+// "Volver a mostrar correos": olvida cuáles correos ya se habían revisado, para que la
+// próxima revisión los vuelva a traer (los ya capturados salen marcados como tal). NO borra
+// facturas ni gastos — solo el registro de "ya escaneado". Tras resetear, re-revisa Gmail
+// solo, para que los correos reaparezcan de inmediato en vez de dejar la lista vacía.
+async function resetGmailSeen(){
+  if(!confirm("¿Volver a mostrar los correos ya revisados?\n\nEn la próxima revisión reaparecerán los correos que ya habías visto (los que ya capturaste saldrán marcados como \"ya capturados\").\n\nNo se borra ninguna factura ni gasto — solo se olvida cuáles correos ya se habían revisado."))return;
+  try{
+    const r=await fetch(SERVER+"/gmail-reset-seen",{method:"POST"}),d=await r.json();
+    if(d.ok){
+      gmailItems=[]; idbDel(GMAIL_PENDING_KEY);
+      setStatus("gmailStatus","🔄 Listo — volviendo a revisar Gmail…","loading");
+      await fetchGmail();   // re-muestra los correos de una vez
+    } else setStatus("gmailStatus","❌ "+(d.error||"Error"),"err");
+  }catch(err){ setStatus("gmailStatus","❌ "+err.message,"err"); }
+}
 async function renovarGmail(){const btn=document.getElementById("btnGmailRenovar");btn.disabled=true;setStatus("gmailStatus","🔄 Renovando autorización Gmail…","loading");try{const r=await fetch(SERVER+"/gmail-renovar",{method:"POST",signal:AbortSignal.timeout(60000)}),d=await r.json();if(!r.ok)throw new Error(d.error||"Error");setStatus("gmailStatus","✅ "+d.msg,"ok");checkGmailStatus();}catch(err){setStatus("gmailStatus","❌ "+err.message,"err");}btn.disabled=false;}
 async function checkGmailStatus(){
   if(gmailItems.length===0) await restaurarGmailItemsLocal();
