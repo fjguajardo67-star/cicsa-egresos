@@ -378,7 +378,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-c</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-d</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1170,7 +1170,7 @@ tr:hover td { background:var(--claro); }
     </div>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th>Forma Pago</th><th>Vencimiento</th><th style="text-align:right">Importe</th><th>Comprobante</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Proveedor</th><th>Método de Pago</th><th>Estado</th><th>Vencimiento</th><th style="text-align:right">Importe</th><th>Comprobante</th><th>Acciones</th></tr></thead>
         <tbody id="pagosBody"></tbody>
       </table>
     </div>
@@ -4199,15 +4199,19 @@ function renderPagos(){
   lista.forEach(g=>{
     const dias=diasRestantes(g.vencimiento),rowClass=dias!==null&&g.estadoPago==="pendiente"?(dias<0?"vence-hoy":(dias<=7?"vence-semana":"")):"";
     const esEfectivoSel=g.formaPago==="efectivo"||g.formaPago==="caja_cortes";
-    const fpSelect=`<select style="border:none;background:transparent;font-size:12px;font-weight:600;color:var(--vd);cursor:pointer" onchange="cambiarFormaPagoPagos('${g.id}', this.value)" title="Corregir forma de pago">
+    const fpSelect=`<select style="border:none;background:transparent;font-size:12px;font-weight:600;color:var(--vd);cursor:pointer" onchange="cambiarFormaPagoPagos('${g.id}', this.value)" title="Corregir método de pago">
       <option value="efectivo" ${esEfectivoSel?"selected":""}>💵 Efectivo Caja</option>
       <option value="transferencia" ${g.formaPago==="transferencia"?"selected":""}>🏦 Transferencia</option>
       <option value="credito" ${g.formaPago==="credito"?"selected":""}>📋 Crédito</option>
     </select>`;
-    const estadoBadge=g.formaPago==="credito"
-      ?(g.estadoPago==="pagado"?`<span class="pago-badge pago-credito-ok">✅ Pagado</span>`:dias<0?`<span class="pago-badge pago-credito-venc">🔴 Vencida ${Math.abs(dias)}d</span>`:`<span class="pago-badge pago-credito-pend">📋 ${dias}d</span>`)
-      :"";
-    const fpCell=`<div>${fpSelect}</div>${estadoBadge?`<div style="margin-top:4px">${estadoBadge}</div>`:""}`;
+    const fpCell=`<div>${fpSelect}</div>`;
+    // Estado: efectivo/transferencia se registran ya pagados; crédito arranca pendiente hasta
+    // que se registra el pago (con o sin comprobante).
+    const estadoCell=g.estadoPago==="pagado"
+      ?`<span class="pago-badge pago-credito-ok">✅ Pagada</span>`
+      :g.formaPago==="credito"&&dias!==null&&dias<0
+      ?`<span class="pago-badge pago-credito-venc">🔴 Vencida ${Math.abs(dias)}d</span>`
+      :`<span class="pago-badge pago-credito-pend">⏳ Pendiente${dias!==null?` · ${dias}d`:""}</span>`;
     const vencCell=g.vencimiento?`<span style="font-size:12px;font-family:'JetBrains Mono',monospace">${fmtDate(g.vencimiento)}</span>`:`<span style="color:#ccc">—</span>`;
     const esImg=g._respaldoUrl && esImagenRespaldo(g._respaldoUrl);
     const thumbId=`thumb-p-${g.id}`;
@@ -4220,11 +4224,8 @@ function renderPagos(){
       ?`<span style="cursor:pointer;font-size:18px" title="Ver factura (PDF)" onclick="verFactura('${g.id.replace(/'/g,"\\'")}')">📄</span>`
       :`<span style="color:#ccc;font-size:12px">—</span>`;
     const actions=g.estadoPago==="pendiente"&&g.formaPago==="credito"?`<button class="btn btn-gold" style="padding:5px 12px;font-size:11px" onclick="openPagoModal('${g.id}')">💳 Pagar</button>`:g.estadoPago==="pagado"&&g.formaPago==="credito"&&!g.comprobantePago?`<button class="btn btn-light" style="padding:5px 12px;font-size:11px" onclick="openPagoModal('${g.id}')">📎 Comprobante</button>`:`<span style="color:var(--vm);font-size:12px">✅</span>`;
-    const catCellPagos=g._dividida
-      ?`<span class="cat-badge" style="cursor:pointer" title="Ver desglose por categoría" onclick="verDesglosePartidas('${g.id.replace(/'/g,"\\'")}')">🔀 Dividida</span>`
-      :`<span class="cat-badge">${g.categoria}</span>`;
     const tr=document.createElement("tr");tr.className=rowClass;
-    tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td><strong>${g.proveedor}</strong><br><span style="font-size:11px;color:var(--txt2)">${g._weekLabel||""}</span></td><td>${catCellPagos}</td><td>${fpCell}</td><td>${vencCell}</td><td class="amount-cell">${fmt(g.importe)}</td><td>${compCell}</td><td>${actions}</td>`;
+    tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td><strong>${g.proveedor}</strong><br><span style="font-size:11px;color:var(--txt2)">${g._weekLabel||""}</span></td><td>${fpCell}</td><td>${estadoCell}</td><td>${vencCell}</td><td class="amount-cell">${fmt(g.importe)}</td><td>${compCell}</td><td>${actions}</td>`;
     tbody.appendChild(tr);
   });
   pendientesThumb.forEach(p=>cargarThumbReal(p.id, p.url, p.elId));
@@ -4267,8 +4268,9 @@ function openThumbModalDirect(gastoId){const g=allGastosAllWeeks().find(x=>x.id=
 
 function exportarPagosExcel(){
   const wb=XLSX.utils.book_new(),pend=allGastosAllWeeks().filter(g=>g.estadoPago==="pendiente");
-  const ws=XLSX.utils.aoa_to_sheet([["CICSA — Pagos Pendientes"],[`Generado: ${new Date().toLocaleDateString("es-MX")}`],[],["Fecha","Proveedor","Categoría","No. Factura","Importe","Vencimiento","Días Restantes","Semana"],...pend.sort((a,b)=>a.vencimiento<b.vencimiento?-1:1).map(g=>[g.fecha,g.proveedor,g.categoria,g.factura||"—",g.importe,g.vencimiento||"—",g.vencimiento?diasRestantes(g.vencimiento):"—",g._weekLabel||""]),[],[" ","","","TOTAL",pend.reduce((s,g)=>s+g.importe,0)]]);
-  ws["!cols"]=[{wch:12},{wch:34},{wch:22},{wch:14},{wch:12},{wch:12},{wch:14},{wch:16}];XLSX.utils.book_append_sheet(wb,ws,"Pagos Pendientes");
+  const metodoLbl=g=>g.formaPago==="credito"?"Crédito":g.formaPago==="transferencia"?"Transferencia":"Efectivo";
+  const ws=XLSX.utils.aoa_to_sheet([["CICSA — Pagos Pendientes"],[`Generado: ${new Date().toLocaleDateString("es-MX")}`],[],["Fecha","Proveedor","Método de Pago","No. Factura","Importe","Vencimiento","Días Restantes","Semana"],...pend.sort((a,b)=>a.vencimiento<b.vencimiento?-1:1).map(g=>[g.fecha,g.proveedor,metodoLbl(g),g.factura||"—",g.importe,g.vencimiento||"—",g.vencimiento?diasRestantes(g.vencimiento):"—",g._weekLabel||""]),[],[" ","","","TOTAL",pend.reduce((s,g)=>s+g.importe,0)]]);
+  ws["!cols"]=[{wch:12},{wch:34},{wch:16},{wch:14},{wch:12},{wch:12},{wch:14},{wch:16}];XLSX.utils.book_append_sheet(wb,ws,"Pagos Pendientes");
   XLSX.writeFile(wb,`Pagos_Pendientes_${todayStr()}.xlsx`);
 }
 
