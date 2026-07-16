@@ -1163,6 +1163,13 @@ tr:hover td { background:var(--claro); }
       <button class="filter-btn" id="filtVenc" onclick="setPagosFilter('vencido',this)">🔴 Vencidas</button>
       <button class="filter-btn" id="filtPagadas" onclick="setPagosFilter('pagado',this)">✅ Pagadas</button>
       <button class="filter-btn" id="filtTodas" onclick="setPagosFilter('todas',this)">📋 Todas</button>
+      <div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--txt2);border-left:1.5px solid var(--border);padding-left:10px;margin-left:2px">
+        <span>Periodo:</span>
+        <input type="date" id="pagosDesde" onchange="onPagosPeriodo()" style="padding:4px 6px;border:1.5px solid var(--border);border-radius:6px;font-size:12px" title="Desde">
+        <span>→</span>
+        <input type="date" id="pagosHasta" onchange="onPagosPeriodo()" style="padding:4px 6px;border:1.5px solid var(--border);border-radius:6px;font-size:12px" title="Hasta">
+        <button class="btn btn-light" style="padding:4px 8px;font-size:11px" onclick="limpiarPagosPeriodo()" title="Quitar filtro de periodo">✕</button>
+      </div>
       <div style="margin-left:auto;display:flex;gap:8px">
         <button class="btn btn-light" style="padding:6px 14px;font-size:12px" onclick="exportarPagosPDF()">🖨️ Relación PDF</button>
         <button class="btn btn-light" style="padding:6px 14px;font-size:12px" onclick="exportarPagosExcel()">📊 Excel</button>
@@ -1826,7 +1833,7 @@ function showPage(name,btn){
   if(name==="presupuesto") renderPresupuesto();
   if(name==="reporte"){    restaurarFiltrosReporte(); renderReporteActual(); }
   if(name==="gmail")       checkGmailStatus();
-  if(name==="pagos")       renderPagos();
+  if(name==="pagos")       { restaurarPagosPeriodo(); renderPagos(); }
   if(name==="reportes")    initReporteDates();
   if(name==="catalogo")    renderCatalogo();
   if(name==="catalogo-productos") renderCatalogoProductos();
@@ -4177,8 +4184,36 @@ function allGastosAllWeeks(){return state.weeks.flatMap(w=>(w.gastos||[]).map(g=
 function diasRestantes(venc){if(!venc)return null;const hoy=new Date();hoy.setHours(0,0,0,0);return Math.floor((new Date(venc+"T12:00:00")-hoy)/86400000);}
 function setPagosFilter(f,btn){pagosFilter=f;document.querySelectorAll(".filter-btn").forEach(b=>b.classList.remove("active"));if(btn)btn.classList.add("active");renderPagos();}
 
+const PAGOS_PERIODO_KEY="cicsa_pagos_periodo";
+function onPagosPeriodo(){
+  try{ localStorage.setItem(PAGOS_PERIODO_KEY, JSON.stringify({
+    desde:document.getElementById("pagosDesde")?.value||"",
+    hasta:document.getElementById("pagosHasta")?.value||""
+  })); }catch(e){}
+  renderPagos();
+}
+function limpiarPagosPeriodo(){
+  const d=document.getElementById("pagosDesde"),h=document.getElementById("pagosHasta");
+  if(d)d.value="";if(h)h.value="";
+  try{ localStorage.removeItem(PAGOS_PERIODO_KEY); }catch(e){}
+  renderPagos();
+}
+function restaurarPagosPeriodo(){
+  try{
+    const raw=localStorage.getItem(PAGOS_PERIODO_KEY); if(!raw) return;
+    const f=JSON.parse(raw);
+    if(f.desde&&document.getElementById("pagosDesde")) document.getElementById("pagosDesde").value=f.desde;
+    if(f.hasta&&document.getElementById("pagosHasta")) document.getElementById("pagosHasta").value=f.hasta;
+  }catch(e){}
+}
+
+function pagosEnPeriodo(gastos){
+  const pDesde=document.getElementById("pagosDesde")?.value||"",pHasta=document.getElementById("pagosHasta")?.value||"";
+  if(!pDesde&&!pHasta) return gastos;
+  return gastos.filter(g=>{ if(pDesde&&g.fecha<pDesde)return false; if(pHasta&&g.fecha>pHasta)return false; return true; });
+}
 function renderPagos(){
-  const todos=allGastosAllWeeks(),creditos=todos.filter(g=>g.formaPago==="credito"),pendientes=creditos.filter(g=>g.estadoPago==="pendiente");
+  const todos=pagosEnPeriodo(allGastosAllWeeks()),creditos=todos.filter(g=>g.formaPago==="credito"),pendientes=creditos.filter(g=>g.estadoPago==="pendiente");
   const vencidas=pendientes.filter(g=>{const d=diasRestantes(g.vencimiento);return d!==null&&d<0;}),proximas=pendientes.filter(g=>{const d=diasRestantes(g.vencimiento);return d!==null&&d>=0&&d<=7;});
   // Efectivo de la SEMANA ACTIVA (no todas las semanas) para poder cuadrar 1:1 contra
   // "Total efectivo" de Gastos y "Pagado de caja" de Caja — las tres deben coincidir.
@@ -4267,7 +4302,7 @@ function confirmarPago(){
 function openThumbModalDirect(gastoId){const g=allGastosAllWeeks().find(x=>x.id===gastoId);if(!g?.comprobantePago)return;document.getElementById("thumbModalImg").src=g.comprobantePago;document.getElementById("thumbModal").classList.add("open");}
 
 function exportarPagosExcel(){
-  const wb=XLSX.utils.book_new(),pend=allGastosAllWeeks().filter(g=>g.estadoPago==="pendiente");
+  const wb=XLSX.utils.book_new(),pend=pagosEnPeriodo(allGastosAllWeeks()).filter(g=>g.estadoPago==="pendiente");
   const metodoLbl=g=>g.formaPago==="credito"?"Crédito":g.formaPago==="transferencia"?"Transferencia":"Efectivo";
   const ws=XLSX.utils.aoa_to_sheet([["CICSA — Pagos Pendientes"],[`Generado: ${new Date().toLocaleDateString("es-MX")}`],[],["Fecha","Proveedor","Método de Pago","No. Factura","Importe","Vencimiento","Días Restantes","Semana"],...pend.sort((a,b)=>a.vencimiento<b.vencimiento?-1:1).map(g=>[g.fecha,g.proveedor,metodoLbl(g),g.factura||"—",g.importe,g.vencimiento||"—",g.vencimiento?diasRestantes(g.vencimiento):"—",g._weekLabel||""]),[],[" ","","","TOTAL",pend.reduce((s,g)=>s+g.importe,0)]]);
   ws["!cols"]=[{wch:12},{wch:34},{wch:16},{wch:14},{wch:12},{wch:12},{wch:14},{wch:16}];XLSX.utils.book_append_sheet(wb,ws,"Pagos Pendientes");
@@ -4280,7 +4315,7 @@ function exportarPagosPDF(){
   doc.setFillColor(...VD);doc.rect(0,0,PW,26,"F");doc.setFillColor(...GO);doc.rect(0,26,PW,3,"F");
   doc.setTextColor(...GO);doc.setFontSize(18);doc.setFont("helvetica","bold");doc.text("CICSA — Relación de Pagos Pendientes",MAR,15);
   doc.setTextColor(180,230,180);doc.setFontSize(9);doc.setFont("helvetica","normal");doc.text(`Generado: ${new Date().toLocaleDateString("es-MX")}`,MAR,22);Y=36;
-  const pend=allGastosAllWeeks().filter(g=>g.estadoPago==="pendiente").sort((a,b)=>a.vencimiento<b.vencimiento?-1:1);
+  const pend=pagosEnPeriodo(allGastosAllWeeks()).filter(g=>g.estadoPago==="pendiente").sort((a,b)=>a.vencimiento<b.vencimiento?-1:1);
   const total=pend.reduce((s,g)=>s+g.importe,0);
   doc.setFillColor(...VD);doc.rect(MAR,Y,W,7,"F");doc.setTextColor(...GO);doc.setFontSize(7);doc.setFont("helvetica","bold");
   doc.text("PROVEEDOR",MAR+2,Y+4.5);doc.text("FACTURA",MAR+65,Y+4.5);doc.text("VENCIMIENTO",MAR+90,Y+4.5);doc.text("DÍAS",MAR+120,Y+4.5);doc.text("SEMANA",MAR+135,Y+4.5);doc.text("IMPORTE",PW-MAR-2,Y+4.5,{align:"right"});Y+=7;
