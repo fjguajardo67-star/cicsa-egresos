@@ -378,7 +378,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-g</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-h</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1468,10 +1468,26 @@ async function fetchMenuPrecios(){
   return {};
 }
 
+// Compat: entradas viejas se guardaron con el campo "unidad"; Menú lee "unidad_base". Al
+// reescribir el documento se normaliza TODO a unidad_base — así una sola sincronización
+// corrige el histórico completo y nada queda en el campo viejo (que costearía mal en Menú).
+function normalizarPreciosUnidadBase(map){
+  const out = {};
+  for(const [k,v] of Object.entries(map||{})){
+    if(v && typeof v === "object"){
+      const ub = v.unidad_base || v.unidad || "kg";
+      const { unidad, unidad_base, ...resto } = v;
+      out[k] = { ...resto, unidad_base: ub };
+    } else out[k] = v;
+  }
+  return out;
+}
+
 // Escribe el mapa de precios en los DOS proyectos. El de Egresos va con auth (protegido);
 // el de Menú, anónimo como hoy (sus reglas siguen abiertas hasta el cierre coordinado).
 // Devuelve true si al menos el destino nuevo (la fuente de verdad) quedó escrito.
 async function escribirPreciosDual(preciosActuales){
+  preciosActuales = normalizarPreciosUnidadBase(preciosActuales);
   const body = JSON.stringify({ fields: {
     json: { stringValue: JSON.stringify(preciosActuales) },
     ts:   { stringValue: new Date().toISOString() }
