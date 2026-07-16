@@ -378,7 +378,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-a</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-b</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1592,11 +1592,15 @@ async function subirRespaldoAStorage(gastoIds, b64, mimeType, factura){
 // abrirla como blob.
 async function verFactura(gastoId){
   const g = allGastosAllWeeks().find(x=>x.id===gastoId);
-  if(!g || !g._respaldoUrl) return;
+  if(!g) return;
+  if(!g._respaldoUrl){
+    alert("Este gasto no tiene una factura guardada en Storage.\n\nO se capturó sin imagen/PDF (ej. desde conciliación SAT o captura manual), o la subida no se completó. Solo las facturas capturadas con foto o desde Gmail quedan con respaldo visible.");
+    return;
+  }
   try {
     const headers = await fbAuthHeader();
     const r = await fetch(g._respaldoUrl+"?alt=media", { headers });
-    if(!r.ok) throw new Error(`No se pudo cargar el archivo (${r.status})`);
+    if(!r.ok) throw new Error(`Storage respondió ${r.status} (probable regla de Storage que bloquea la lectura).`);
     const blob = await r.blob();
     window.open(URL.createObjectURL(blob), "_blank");
   } catch(e){ alert("❌ No se pudo abrir la factura: "+e.message); }
@@ -2292,8 +2296,6 @@ function renderGastos(){
       <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${g.factura||"—"}</td>
       <td class="amount-cell"><input style="border:none;background:transparent;font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--vm);text-align:right;width:90px" type="number" step="0.01" value="${g.importe}" onchange="editarGasto('${g.id}','importe',parseFloat(this.value)||0)" title="Editar importe"></td>
       <td style="display:flex;gap:4px;align-items:center;padding:6px 8px">
-        <button class="btn btn-light" style="padding:4px 8px;font-size:14px;min-width:32px;justify-content:center"
-          onclick="abrirExportMenu('${g.id}')" title="Exportar precios a CICSA Menú">🍽️</button>
         <button class="del-btn" onclick="eliminarGasto('${g.id}')">✕</button>
       </td>`;
     tbody.appendChild(tr);
