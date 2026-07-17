@@ -301,7 +301,8 @@ def gmail_fetch():
     try:
         d     = request.get_json() or {}
         days  = int(d.get("days_back", 30))
-        items = fetch_invoice_attachments(days_back=days)
+        inc   = bool(d.get("include_seen", False))
+        items = fetch_invoice_attachments(days_back=days, include_seen=inc)
         if items and "error" in items[0]:
             return jsonify({"error": items[0]["error"]}), 400
         return jsonify({"count": len(items), "items": items})

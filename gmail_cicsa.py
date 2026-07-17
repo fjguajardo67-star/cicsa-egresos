@@ -182,7 +182,11 @@ def is_inline_part(part: dict, filename: str) -> bool:
 
 # ── Función principal ─────────────────────────────────────────────────────
 
-def fetch_invoice_attachments(days_back: int = 30) -> list:
+def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -> list:
+    # include_seen=True ignora el registro de "vistos" y devuelve TODOS los adjuntos del rango
+    # (para re-procesar facturas ya capturadas con la IA). El cliente las marca "ya capturada"
+    # y ofrece "Leer igual". No depende de borrar gmail_seen.json, que es frágil en Railway
+    # (filesystem efímero/solo-lectura).
     INBOX_DIR.mkdir(exist_ok=True)
     seen    = load_seen()
     results = []
@@ -206,7 +210,7 @@ def fetch_invoice_attachments(days_back: int = 30) -> list:
 
     for msg_ref in messages:
         msg_id = msg_ref["id"]
-        if msg_id in seen:
+        if msg_id in seen and not include_seen:
             continue
 
         try:
