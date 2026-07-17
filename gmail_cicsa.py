@@ -277,3 +277,38 @@ def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -
 
     save_seen(seen)
     return [r for r in results if "error" not in r] or results
+
+
+def gmail_diagnostics(days_back: int = 90) -> dict:
+    """Diagnóstico: qué cuenta está conectada, cuántos correos matchea el query, y con qué
+    fecha. Sirve para saber por qué un fetch devuelve 0 (cuenta equivocada / asunto sin
+    palabra clave / ventana de fecha). No descarga adjuntos."""
+    try:
+        service = get_gmail_service()
+    except Exception as e:
+        return {"error": f"auth: {e}"}
+    try:
+        account = service.users().getProfile(userId="me").execute().get("emailAddress")
+    except Exception as e:
+        account = f"(profile err: {e})"
+
+    after_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y/%m/%d")
+    kw_query   = " OR ".join(f"subject:{kw}" for kw in SUBJECT_KEYWORDS)
+    q_full     = f"has:attachment ({kw_query}) after:{after_date}"
+
+    def _count(q):
+        try:
+            return len(service.users().messages().list(userId="me", q=q, maxResults=100).execute().get("messages", []))
+        except Exception as e:
+            return f"err: {e}"
+
+    return {
+        "account":              account,
+        "server_now":           datetime.now().isoformat(),
+        "after_date":           after_date,
+        "query_completo":       q_full,
+        "match_query_completo": _count(q_full),
+        "match_solo_adjuntos":  _count(f"has:attachment after:{after_date}"),
+        "match_solo_factura":   _count(f"subject:factura after:{after_date}"),
+        "match_sin_fecha":      _count("has:attachment (" + kw_query + ")"),
+    }

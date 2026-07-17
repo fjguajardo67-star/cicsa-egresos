@@ -309,6 +309,16 @@ def gmail_fetch():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/gmail-debug", methods=["POST"])
+@require_auth
+def gmail_debug():
+    try:
+        from gmail_cicsa import gmail_diagnostics
+        d = request.get_json() or {}
+        return jsonify(gmail_diagnostics(days_back=int(d.get("days_back", 90))))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/gmail-status", methods=["GET"])
 def gmail_status():
     from pathlib import Path
