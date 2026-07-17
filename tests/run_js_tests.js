@@ -45,7 +45,7 @@ const FUNCS = [
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "todosLosCortes", "todosLosRetiros",
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe",
-  "conciliarSAT", "dedupeProductos",
+  "conciliarSAT", "dedupeProductos", "rangoSemanaLabel",
 ];
 
 const sandbox = { state: { weeks: [], activeWeek: null, budget: {} }, console };
@@ -205,6 +205,16 @@ t("diasRestantes: hoy → 0", () => {
   const hoy = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   assert.equal(S.diasRestantes(hoy), 0);
   assert.equal(S.diasRestantes(""), null);
+});
+t("rangoSemanaLabel: auto-nombre de semana nueva usa el rango real lunes–domingo", () => {
+  // Jueves 16 jul 2026 -> semana lunes 13 al domingo 19 jul 2026
+  assert.equal(S.rangoSemanaLabel(new Date(2026, 6, 16, 12)), "13 al 19 jul 2026");
+  // Domingo cuenta como el ÚLTIMO día de SU semana (no el primero de la siguiente)
+  assert.equal(S.rangoSemanaLabel(new Date(2026, 6, 19, 12)), "13 al 19 jul 2026");
+  // Lunes es el primer día de una semana nueva
+  assert.equal(S.rangoSemanaLabel(new Date(2026, 6, 20, 12)), "20 al 26 jul 2026");
+  // Cruce de mes: se muestra el mes en ambos extremos
+  assert.equal(S.rangoSemanaLabel(new Date(2026, 6, 30, 12)), "27 jul al 02 ago 2026");
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);

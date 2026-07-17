@@ -389,7 +389,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-b</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-c</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -478,7 +478,7 @@ tr:hover td { background:var(--claro); }
   <div class="modal">
     <h3>📅 Seleccionar semana</h3>
     <div style="margin-bottom:14px">
-      <input id="newWeekInput" type="text" placeholder="ej: 20 al 26 Mar 2026"
+      <input id="newWeekInput" type="text" placeholder="Vacío = rango de esta semana (lun–dom)"
         style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;
         font-size:14px;margin-bottom:8px;box-sizing:border-box;font-family:'DM Sans',sans-serif">
       <button class="btn btn-green" onclick="createNewWeek()" style="width:100%;justify-content:center">➕ Nueva semana</button>
@@ -1804,15 +1804,33 @@ function gastosSemana(){ return (getActiveWeek()?.gastos)||[]; }
 // ═══════════════════════════════════════════════════════════════════════════
 // WEEK MANAGEMENT  —  CAMBIO: usa input HTML en lugar de prompt()
 // ═══════════════════════════════════════════════════════════════════════════
+// Rango de la semana calendario (lunes a domingo) que contiene `fecha` — usado para
+// auto-nombrar semanas nuevas con un rango REAL, no texto arbitrario. Antes el nombre por
+// default era "Semana DD/MM/AAAA" (la fecha de creación) o lo que el usuario tecleara, y podía
+// terminar sin relación con las fechas de los gastos capturados dentro — confuso al auditar.
+// El nombre sigue siendo solo una etiqueta (la semana es una bolsa de captura, no un filtro
+// estricto), pero ahora arranca representando algo real.
+function rangoSemanaLabel(fecha){
+  const dow=fecha.getDay();                          // 0=domingo … 6=sábado
+  const offsetLunes=(dow===0)?6:dow-1;
+  const lunes=new Date(fecha); lunes.setDate(fecha.getDate()-offsetLunes);
+  const domingo=new Date(lunes); domingo.setDate(lunes.getDate()+6);
+  const dd=x=>String(x.getDate()).padStart(2,"0");
+  const mesCorto=x=>x.toLocaleDateString("es-MX",{month:"short"}).replace(".","");
+  const mismoMes=lunes.getMonth()===domingo.getMonth() && lunes.getFullYear()===domingo.getFullYear();
+  return mismoMes
+    ? `${dd(lunes)} al ${dd(domingo)} ${mesCorto(domingo)} ${domingo.getFullYear()}`
+    : `${dd(lunes)} ${mesCorto(lunes)} al ${dd(domingo)} ${mesCorto(domingo)} ${domingo.getFullYear()}`;
+}
 function createNewWeek(silent=false) {
   const today=new Date();
-  const y=today.getFullYear(), m=String(today.getMonth()+1).padStart(2,"0"), d=String(today.getDate()).padStart(2,"0");
+  const defaultLabel=rangoSemanaLabel(today);
   let label;
   if(silent){
-    label=`Semana ${d}/${m}/${y}`;
+    label=defaultLabel;
   } else {
     const inp=document.getElementById("newWeekInput");
-    label=(inp&&inp.value.trim()) ? inp.value.trim() : `Semana ${d}/${m}/${y}`;
+    label=(inp&&inp.value.trim()) ? inp.value.trim() : defaultLabel;
     if(inp) inp.value="";
   }
   const id=Date.now().toString();
