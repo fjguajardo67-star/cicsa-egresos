@@ -111,8 +111,17 @@ body { background: var(--bg); color: var(--txt); min-height: 100vh; }
   border:1.5px solid var(--border); margin-top:14px;
 }
 .extracted-row { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
-.tbl-wrap { overflow-x:auto; }
+/* Scroll horizontal SIEMPRE visible: en macOS/Safari la barra se oculta y las tablas anchas
+   (Productos, Pagos) parecían cortadas a la derecha sin pista de que se puede deslizar. */
+.tbl-wrap { overflow-x:auto; scrollbar-width:thin; scrollbar-color:var(--vm) transparent; }
+.tbl-wrap::-webkit-scrollbar { height:10px; -webkit-appearance:none; }
+.tbl-wrap::-webkit-scrollbar-thumb { background:var(--vm); border-radius:5px; }
+.tbl-wrap::-webkit-scrollbar-track { background:#EDEDE7; border-radius:5px; }
 table { width:100%; border-collapse:collapse; font-size:13px; }
+/* La tabla de Productos tiene 8 columnas; sin un ancho mínimo se aplastan y el texto se parte
+   en varias líneas. Con esto mantiene columnas legibles y deja el scroll horizontal hacer su
+   trabajo en pantallas angostas. */
+#page-catalogo-productos table { min-width:960px; }
 th { background:var(--vd); color:var(--do); padding:9px 12px;
      text-align:left; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.4px; }
 td { padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:middle; }
@@ -378,7 +387,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-h</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-i</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
