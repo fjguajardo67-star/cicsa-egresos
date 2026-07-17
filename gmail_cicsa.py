@@ -200,11 +200,18 @@ def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -
 
     after_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y/%m/%d")
     kw_query   = " OR ".join(f'subject:{kw}' for kw in SUBJECT_KEYWORDS)
-    query      = f"has:attachment ({kw_query}) after:{after_date}"
+
+    def _list(q):
+        return service.users().messages().list(userId="me", q=q, maxResults=100).execute().get("messages", [])
 
     try:
-        resp     = service.users().messages().list(userId="me", q=query, maxResults=100).execute()
-        messages = resp.get("messages", [])
+        messages = _list(f"has:attachment ({kw_query}) after:{after_date}")
+        # Muchos proveedores NO ponen "factura/cfdi/etc." en el ASUNTO (la palabra vive en el
+        # cuerpo o solo dentro del PDF). Si el filtro por asunto no matchea nada, se cae a traer
+        # TODOS los adjuntos del rango — el usuario elige cuáles leer con IA (ya revisa uno por
+        # uno). Sin este fallback, un buzón real puede devolver 0 aunque tenga facturas.
+        if not messages:
+            messages = _list(f"has:attachment after:{after_date}")
     except Exception as e:
         return [{"error": f"Error consultando Gmail: {e}"}]
 
