@@ -84,5 +84,71 @@ class TestExtractParts(unittest.TestCase):
         self.assertEqual([p["mimeType"] for p in flat], ["text/plain", "application/pdf", "image/png"])
 
 
+class TestIncludeSeen(unittest.TestCase):
+    """El correo M1 ya está en 'vistos': con include_seen=False se salta; con True se devuelve.
+    Es el fix para re-cargar facturas ya capturadas y re-leerlas con IA ('Leer igual')."""
+
+    _PATCHED = ["get_gmail_service", "load_seen", "save_seen", "get_attachment_data",
+                "is_whitelisted_sender", "is_inline_part"]
+
+    def setUp(self):
+        self._orig = {n: getattr(gc, n, None) for n in self._PATCHED}
+
+    def tearDown(self):
+        for n, fn in self._orig.items():
+            setattr(gc, n, fn)
+
+    def _fake_service(self):
+        part = {"mimeType": "application/pdf", "filename": "factura.pdf",
+                "body": {"attachmentId": "A1"}}
+        msg = {"payload": {"headers": [{"name": "Subject", "value": "Factura X"},
+                                       {"name": "From", "value": "prov@dominio.com"}],
+                           "parts": [part]}}
+        class Msgs:
+            def list(self, **k): return self
+            def get(self, **k): return self
+            def execute(self):  return {"messages": [{"id": "M1"}]} if not hasattr(self, "_g") else msg
+        class Users:
+            def messages(self):
+                m = Msgs()
+                return m
+        class Svc:
+            def users(self): return Users()
+        # list() y get() comparten clase; distinguimos por el flag que pone get()
+        real_msgs = Msgs()
+        def users():
+            u = Users()
+            def messages():
+                mm = Msgs()
+                _orig_get = mm.get
+                def get(**k):
+                    mm._g = True
+                    return mm
+                mm.get = get
+                return mm
+            u.messages = messages
+            return u
+        svc = Svc()
+        svc.users = users
+        return svc
+
+    def _run(self, include_seen):
+        gc.get_gmail_service   = lambda: self._fake_service()
+        gc.load_seen           = lambda: {"M1"}
+        gc.save_seen           = lambda s: None
+        gc.get_attachment_data = lambda service, msg_id, part: b"x" * 10000
+        gc.is_whitelisted_sender = lambda s: True
+        gc.is_inline_part        = lambda part, name: False
+        return gc.fetch_invoice_attachments(days_back=30, include_seen=include_seen)
+
+    def test_sin_include_seen_se_salta(self):
+        self.assertEqual(self._run(False), [])
+
+    def test_con_include_seen_se_devuelve(self):
+        res = self._run(True)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["msg_id"], "M1")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
