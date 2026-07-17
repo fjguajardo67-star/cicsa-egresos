@@ -199,19 +199,16 @@ def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -
         return [{"error": f"Error de autenticación Gmail: {e}"}]
 
     after_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y/%m/%d")
-    kw_query   = " OR ".join(f'subject:{kw}' for kw in SUBJECT_KEYWORDS)
 
-    def _list(q):
-        return service.users().messages().list(userId="me", q=q, maxResults=100).execute().get("messages", [])
-
+    # Se trae TODO adjunto del rango (sin filtrar por palabra en el ASUNTO). Muchos proveedores
+    # no ponen "factura/cfdi" en el asunto — la palabra vive en el cuerpo o solo en el PDF — así
+    # que el filtro por asunto se comía facturas recientes cuando el asunto no traía la palabra.
+    # En un buzón de facturación casi todo es factura, y el usuario revisa cada adjunto de todos
+    # modos. maxResults en el máximo de Gmail (500) para no cortar los más recientes.
     try:
-        messages = _list(f"has:attachment ({kw_query}) after:{after_date}")
-        # Muchos proveedores NO ponen "factura/cfdi/etc." en el ASUNTO (la palabra vive en el
-        # cuerpo o solo dentro del PDF). Si el filtro por asunto no matchea nada, se cae a traer
-        # TODOS los adjuntos del rango — el usuario elige cuáles leer con IA (ya revisa uno por
-        # uno). Sin este fallback, un buzón real puede devolver 0 aunque tenga facturas.
-        if not messages:
-            messages = _list(f"has:attachment after:{after_date}")
+        messages = service.users().messages().list(
+            userId="me", q=f"has:attachment after:{after_date}", maxResults=500
+        ).execute().get("messages", [])
     except Exception as e:
         return [{"error": f"Error consultando Gmail: {e}"}]
 
