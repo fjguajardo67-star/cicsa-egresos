@@ -387,7 +387,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-i</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-16-j</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1386,9 +1386,9 @@ tr:hover td { background:var(--claro); }
         <label class="form-label">Fecha fin</label>
         <input type="date" id="cajaRangoFin" class="form-input" onchange="onCajaRangoChange()">
       </div>
-      <div id="cajaSaldoIniManualWrap" style="display:none">
+      <div id="cajaSaldoIniManualWrap">
         <label class="form-label">Saldo inicial en caja ($)</label>
-        <input type="number" step="0.01" id="cajaSaldoInicialManual" class="form-input" placeholder="Opcional" oninput="onCajaSaldoManual()" title="Efectivo real en caja al iniciar el periodo. Si lo llenas, el saldo del periodo parte de aquí.">
+        <input type="number" step="0.01" id="cajaSaldoInicialManual" class="form-input" placeholder="Opcional" oninput="onCajaSaldoManual()" title="Efectivo real en caja al iniciar. Si lo llenas, el saldo parte de aquí y se ignora el arrastre histórico.">
       </div>
       <button class="btn btn-light" id="cajaBtnConsultar" style="display:none;height:42px" onclick="renderCaja()">🔍 Consultar</button>
     </div>
@@ -4655,34 +4655,51 @@ function toggleCajaModoVista(){
   const rango = document.getElementById("cajaModoVista").value === "rango";
   document.getElementById("cajaRangoIniWrap").style.display = rango ? "block" : "none";
   document.getElementById("cajaRangoFinWrap").style.display = rango ? "block" : "none";
-  document.getElementById("cajaSaldoIniManualWrap").style.display = rango ? "block" : "none";
   document.getElementById("cajaBtnConsultar").style.display = rango ? "inline-flex" : "none";
+  // El saldo inicial manual aplica en AMBOS modos (semana activa y rango).
+  document.getElementById("cajaSaldoIniManualWrap").style.display = "block";
+  restaurarCajaSaldoManual();   // el scope cambió (semana↔rango): repón el valor de ESE scope
   renderCaja();
 }
 
-// El saldo inicial capturado queda AMARRADO al rango de fechas para el que se capturó —
-// se guarda junto con ini/fin y solo se restaura si el rango actual coincide. Si cambias
-// las fechas, el campo se limpia: un saldo de julio no debe colarse al periodo de agosto.
+// El saldo inicial capturado queda AMARRADO a su "scope": la semana activa (modo Semana) o el
+// rango exacto (modo Rango). Solo se aplica/restaura si el scope actual coincide — así un saldo
+// de una semana o periodo no se cuela a otro. El cálculo usa cajaSaldoManualActual() (validado
+// contra el scope), no el valor crudo del campo, para ser inmune a un campo desincronizado.
 const CAJA_SALDO_MANUAL_KEY="cicsa_caja_saldo_manual";
+function cajaSaldoScope(){
+  const modo = document.getElementById("cajaModoVista")?.value || "semana";
+  if(modo==="rango") return "rango:"+(document.getElementById("cajaRangoIni")?.value||"")+":"+(document.getElementById("cajaRangoFin")?.value||"");
+  return "semana:"+(state.activeWeek||"");
+}
+// Mapa { scope → valor } para que cada semana/rango recuerde SU propio saldo capturado sin
+// pisar el de otro scope. (Formatos viejos de esta clave degradan a "sin valor", sin romper.)
+function cajaSaldosManualMap(){
+  try{ const o=JSON.parse(localStorage.getItem(CAJA_SALDO_MANUAL_KEY)||"{}"); return (o && typeof o==="object" && !Array.isArray(o))?o:{}; }
+  catch(e){ return {}; }
+}
+function cajaSaldoManualActual(){
+  const v=cajaSaldosManualMap()[cajaSaldoScope()];
+  if(v==null || v==="") return null;
+  const n=parseFloat(v);
+  return isNaN(n) ? null : n;
+}
 function onCajaSaldoManual(){
-  try{ localStorage.setItem(CAJA_SALDO_MANUAL_KEY, JSON.stringify({
-    ini:document.getElementById("cajaRangoIni")?.value||"",
-    fin:document.getElementById("cajaRangoFin")?.value||"",
-    valor:document.getElementById("cajaSaldoInicialManual")?.value||""
-  })); }catch(e){}
+  try{
+    const all=cajaSaldosManualMap();
+    const val=document.getElementById("cajaSaldoInicialManual")?.value||"";
+    if(val==="") delete all[cajaSaldoScope()]; else all[cajaSaldoScope()]=val;
+    localStorage.setItem(CAJA_SALDO_MANUAL_KEY, JSON.stringify(all));
+  }catch(e){}
   renderCaja();
 }
 function restaurarCajaSaldoManual(){
-  try{
-    const raw=localStorage.getItem(CAJA_SALDO_MANUAL_KEY); if(!raw) return;
-    const f=JSON.parse(raw);
-    const ini=document.getElementById("cajaRangoIni")?.value||"", fin=document.getElementById("cajaRangoFin")?.value||"";
-    const campo=document.getElementById("cajaSaldoInicialManual");
-    if(campo) campo.value=(f && f.valor && f.ini===ini && f.fin===fin) ? f.valor : "";
-  }catch(e){}
+  const campo=document.getElementById("cajaSaldoInicialManual"); if(!campo) return;
+  const v=cajaSaldosManualMap()[cajaSaldoScope()];
+  campo.value=(v!=null) ? v : "";
 }
-// Al cambiar el rango: si coincide con el rango del saldo guardado lo repone, si no limpia.
-function onCajaRangoChange(){ restaurarCajaSaldoManual(); }
+// Al cambiar el rango: el scope cambió, repón el valor de ese scope (o limpia).
+function onCajaRangoChange(){ restaurarCajaSaldoManual(); renderCaja(); }
 
 // Salta directo a "Rango de fechas" acotado exactamente a los movimientos que componen el
 // "Saldo inicial" mostrado — así se puede auditar/borrar cortes, gastos o retiros viejos
@@ -4754,8 +4771,6 @@ function obtenerDatosCaja(){
       return { modo, cortes:[], gastosCaja:[], retiros:[], saldoInicial:0, saldoInicialDetalle:null, periodoLabel:"Selecciona un rango de fechas", vacio:true };
     }
     const detalleIni = calcularSaldoAntesDe(ini);
-    const manualRaw = document.getElementById("cajaSaldoInicialManual")?.value;
-    const saldoInicialManual = (manualRaw!==undefined && manualRaw!=="" && !isNaN(parseFloat(manualRaw))) ? parseFloat(manualRaw) : null;
     return {
       modo,
       cortes: todosLosCortes().filter(c=>c.fecha>=ini && c.fecha<=fin),
@@ -4763,7 +4778,7 @@ function obtenerDatosCaja(){
       retiros: todosLosRetiros().filter(r=>r.fecha>=ini && r.fecha<=fin),
       saldoInicial: detalleIni.saldo,
       saldoInicialDetalle: detalleIni,
-      saldoInicialManual,
+      saldoInicialManual: cajaSaldoManualActual(),
       periodoLabel: `${fmtDate(ini)} al ${fmtDate(fin)}`,
       vacio:false
     };
@@ -4776,7 +4791,7 @@ function obtenerDatosCaja(){
     retiros: getRetirosSemana(),
     saldoInicial: detalleSemana.saldo,
     saldoInicialDetalle: detalleSemana,
-    saldoInicialManual: null,
+    saldoInicialManual: cajaSaldoManualActual(),
     periodoLabel: getActiveWeek()?.label || "",
     vacio:false
   };
@@ -4932,13 +4947,14 @@ function renderCaja() {
   if(lbl) lbl.textContent = periodoLabel ? `— ${periodoLabel}` : "";
 
   const esRango = modo === "rango";
-  const usaManual = esRango && saldoInicialManual !== null && saldoInicialManual !== undefined;
+  const usaManual = saldoInicialManual !== null && saldoInicialManual !== undefined;
   const totalCortes = cortes.reduce((s, c) => s + (parseFloat(c.monto) || 0), 0);
   const totalGastos = gastosCaja.reduce((s, g) => s + (parseFloat(g.importe) || 0), 0);
   const totalRetiros = retiros.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
   // Base del saldo del periodo:
-  //  · "Semana activa" → arrastra el saldo acumulado de semanas anteriores (contable normal).
-  //  · "Rango" con saldo inicial capturado → parte de ESE número real que tú das.
+  //  · Con saldo inicial capturado (cualquier modo) → parte de ESE número real que tú das,
+  //    ignorando el arrastre/déficit histórico.
+  //  · "Semana activa" sin capturar → arrastra el saldo acumulado de semanas anteriores.
   //  · "Rango" sin capturar → parte de 0 (solo movimientos del rango); el déficit histórico
   //    se muestra aparte como advertencia y NO se suma.
   const baseInicial = usaManual ? saldoInicialManual : (esRango ? 0 : saldoInicial);
@@ -5105,12 +5121,12 @@ function exportarCajaPDF(){
   if(datos.vacio){ alert("Selecciona un rango de fechas antes de exportar."); return; }
   const { cortes, gastosCaja, retiros, saldoInicial, periodoLabel } = datos;
   const esRango = datos.modo === "rango";
-  const usaManual = esRango && datos.saldoInicialManual !== null && datos.saldoInicialManual !== undefined;
+  const usaManual = datos.saldoInicialManual !== null && datos.saldoInicialManual !== undefined;
   const totalCortes=cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
   const totalGastos=gastosCaja.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
   const totalRetiros=retiros.reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
-  // Consistente con renderCaja: Rango con saldo capturado parte de ese número; sin capturar
-  // parte de 0; Semana arrastra el saldo anterior.
+  // Consistente con renderCaja: saldo capturado (cualquier modo) parte de ese número; Rango
+  // sin capturar parte de 0; Semana sin capturar arrastra el saldo anterior.
   const baseInicial = usaManual ? datos.saldoInicialManual : (esRango ? 0 : saldoInicial);
   const saldoFinal = baseInicial + totalCortes - totalGastos - totalRetiros;
 
