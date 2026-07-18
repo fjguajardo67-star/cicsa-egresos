@@ -389,7 +389,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-c</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-d</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -2558,9 +2558,9 @@ async function confirmarExportMenu() {
     // Agregar/actualizar cada ingrediente seleccionado
     const fechaHoy = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
     seleccionados.forEach(r => {
-      // Normalizar nombre: primera letra mayuscula, resto minusculas para consistencia
-      const nombreNorm = r.nombre.trim().toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-      preciosActuales[nombreNorm] = {
+      // Llave tal cual (solo trim) — el Title Case rompía acentos y desalineaba la llave
+      // exacta que Menú matchea contra las recetas.
+      preciosActuales[r.nombre.trim()] = {
         precio:      parseFloat(r.precio) || 0,
         unidad_base: r.unidad,   // Menú lee "unidad_base" (no "unidad")
         fecha:       fechaHoy
@@ -3560,8 +3560,10 @@ async function confirmarSyncMenu(){
     // al final para que su valor sea el que quede en el mapa (última escritura gana).
     seleccionados = seleccionados.slice().sort((a,b)=>(a.producto.fecha_precio||"") < (b.producto.fecha_precio||"") ? -1 : 1);
     seleccionados.forEach(r=>{
-      const nombreNorm = r.nombreSync.trim().toLowerCase().replace(/\b\w/g, c=>c.toUpperCase());
-      preciosActuales[nombreNorm] = { precio: Math.round(r.calc.precio*100)/100, unidad_base: r.calc.unidadBase, fecha: fechaHoy };
+      // La llave se escribe TAL CUAL la tecleó el usuario (solo trim). Antes se aplicaba un
+      // "Title Case" que rompía acentos ("Atún"→"AtúN", "norteño"→"NorteñO") y modificaba la
+      // palabra clave — y Menú matchea la llave EXACTA contra el ingrediente de la receta.
+      preciosActuales[r.nombreSync.trim()] = { precio: Math.round(r.calc.precio*100)/100, unidad_base: r.calc.unidadBase, fecha: fechaHoy };
     });
     // Doble escritura: cicsa-egresos (nuevo hogar, protegido) + sistema-menu-cicsa (transición)
     await escribirPreciosDual(preciosActuales);
