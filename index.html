@@ -118,10 +118,16 @@ body { background: var(--bg); color: var(--txt); min-height: 100vh; }
 .tbl-wrap::-webkit-scrollbar-thumb { background:var(--vm); border-radius:5px; }
 .tbl-wrap::-webkit-scrollbar-track { background:#EDEDE7; border-radius:5px; }
 table { width:100%; border-collapse:collapse; font-size:13px; }
-/* La tabla de Productos tiene 8 columnas; sin un ancho mínimo se aplastan y el texto se parte
-   en varias líneas. Con esto mantiene columnas legibles y deja el scroll horizontal hacer su
-   trabajo en pantallas angostas. */
-#page-catalogo-productos table { min-width:960px; }
+/* Tabla de Productos (8 columnas): layout FIJO con anchos por colgroup, para que el texto largo
+   (nombres, proveedor) haga wrap DENTRO de su columna en vez de estirar la tabla y empujar los
+   iconos de acción fuera de pantalla. min-width moderado para que sea legible sin desbordar. */
+#page-catalogo-productos table { table-layout:fixed; min-width:820px; }
+#page-catalogo-productos th, #page-catalogo-productos td { overflow-wrap:anywhere; }
+/* Columnas cortas centradas: Unidad base (5), Estado (6), Última factura (7), Acciones (8). */
+#page-catalogo-productos th:nth-child(5), #page-catalogo-productos td:nth-child(5),
+#page-catalogo-productos th:nth-child(6), #page-catalogo-productos td:nth-child(6),
+#page-catalogo-productos th:nth-child(7), #page-catalogo-productos td:nth-child(7),
+#page-catalogo-productos th:nth-child(8), #page-catalogo-productos td:nth-child(8) { text-align:center; }
 th { background:var(--vd); color:var(--do); padding:9px 12px;
      text-align:left; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.4px; }
 td { padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:middle; }
@@ -389,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-e</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-f</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -972,9 +978,13 @@ tr:hover td { background:var(--claro); }
     <div id="catProdDupBanner" style="display:none;padding:10px 14px;background:#FFF3E0;border-radius:8px;font-size:12px;color:#E65100;margin-bottom:14px;border-left:4px solid #E65100;cursor:pointer" onclick="setCatProdFiltro('duplicados')" title="Ver solo los posibles duplicados"></div>
     <div class="tbl-wrap">
       <table>
+        <colgroup>
+          <col style="width:23%"><col style="width:13%"><col style="width:11%"><col style="width:11%">
+          <col style="width:8%"><col style="width:10%"><col style="width:12%"><col style="width:12%">
+        </colgroup>
         <thead><tr>
           <th>Producto</th><th>Proveedor</th><th>Presentación</th><th style="text-align:right">Precio / unidad</th>
-          <th>Unidad base</th><th>Estado</th><th>Última factura</th><th></th>
+          <th>Unidad base</th><th>Estado</th><th>Última factura</th><th>Acciones</th>
         </tr></thead>
         <tbody id="catProdBody"></tbody>
       </table>
@@ -3383,11 +3393,11 @@ async function renderCatalogoProductos(forzar){
       <td style="font-size:12px">${p.unidad_base||"—"}</td>
       <td>${badgeEstado[p.estado]||p.estado||""}</td>
       <td style="font-size:11px;color:var(--txt2)">${p.fecha_precio||"—"}${p.factura_origen?` · ${p.factura_origen}`:""}</td>
-      <td style="display:flex;gap:4px">
-        <button class="btn btn-light" style="padding:4px 8px;font-size:12px" onclick="abrirEditorProducto('${safeId}')" title="Editar">✏️</button>
-        ${p.estado!=="validado"?`<button class="btn btn-light" style="padding:4px 8px;font-size:12px" onclick="cambiarEstadoRapido('${safeId}','validado')" title="Validar">✅</button>`:""}
-        ${p.estado!=="ignorado"?`<button class="btn btn-light" style="padding:4px 8px;font-size:12px" onclick="cambiarEstadoRapido('${safeId}','ignorado')" title="Ignorar">🚫</button>`:""}
-        <button class="btn btn-light" style="padding:4px 8px;font-size:12px" onclick="eliminarProducto('${safeId}')" title="Eliminar">🗑️</button>
+      <td style="display:flex;gap:3px;justify-content:center;flex-wrap:wrap">
+        <button class="btn btn-light" style="padding:3px 6px;font-size:13px;min-width:0" onclick="abrirEditorProducto('${safeId}')" title="Editar">✏️</button>
+        ${p.estado!=="validado"?`<button class="btn btn-light" style="padding:3px 6px;font-size:13px;min-width:0" onclick="cambiarEstadoRapido('${safeId}','validado')" title="Validar">✅</button>`:""}
+        ${p.estado!=="ignorado"?`<button class="btn btn-light" style="padding:3px 6px;font-size:13px;min-width:0" onclick="cambiarEstadoRapido('${safeId}','ignorado')" title="Ignorar">🚫</button>`:""}
+        <button class="btn btn-light" style="padding:3px 6px;font-size:13px;min-width:0" onclick="eliminarProducto('${safeId}')" title="Eliminar">🗑️</button>
       </td>`;
     tbody.appendChild(tr);
   });
