@@ -389,7 +389,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-d</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-e</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -973,7 +973,7 @@ tr:hover td { background:var(--claro); }
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>Producto</th><th>Proveedor</th><th>Presentación</th><th style="text-align:right">Precio actual</th>
+          <th>Producto</th><th>Proveedor</th><th>Presentación</th><th style="text-align:right">Precio / unidad</th>
           <th>Unidad base</th><th>Estado</th><th>Última factura</th><th></th>
         </tr></thead>
         <tbody id="catProdBody"></tbody>
@@ -3368,11 +3368,18 @@ async function renderCatalogoProductos(forzar){
   lista.forEach(p=>{
     const tr = document.createElement("tr");
     const safeId = (p.id||"").replace(/'/g,"\\'");
+    // Precio POR UNIDAD BASE (lo que ve Menú), no el del paquete. El del paquete se muestra
+    // chico como referencia. Si no se puede calcular (producto sin validar / falta contenido
+    // o piezas), se cae al del paquete etiquetado como tal.
+    const _calc = precioPorUnidadBase(p);
+    const precioCell = _calc.ok
+      ? `${fmt(_calc.precio)}<div style="font-size:10px;color:var(--txt2);font-weight:400">por ${_calc.unidadBase} · paq ${fmt(parseFloat(p.precio_actual)||0)}</div>`
+      : (p.precio_actual!=null ? `${fmt(p.precio_actual)}<div style="font-size:10px;color:var(--txt2);font-weight:400">paquete (falta dato)</div>` : "—");
     tr.innerHTML = `
       <td><strong>${p.nombre_comercial||""}</strong>${p.ingrediente_generico?`<span class="cat-badge" style="margin-left:6px;background:#EDE7F6;color:#5E35B1" title="Clave de sincronización a Menú">🔑 ${p.ingrediente_generico}</span>`:""}<div style="font-size:11px;color:var(--txt2)">${(p.alias_factura||[]).join(" · ")}</div>${duplicados.has(p.id)?`<div style="font-size:11px;color:var(--naranja)">⚠ ¿Es lo mismo que ${duplicados.get(p.id).map(d=>`<a href="#" onclick="event.preventDefault();abrirEditorProducto('${d.id.replace(/'/g,"\\'")}')" style="color:var(--naranja);text-decoration:underline">${d.nombre}</a>`).join(", ")}?</div>`:""}</td>
       <td style="font-size:12px">${p.proveedor_nombre||"—"}</td>
       <td style="font-size:12px">${p.presentacion||"—"}${p.contenido_cantidad&&p.contenido_unidad?` (${p.contenido_cantidad} ${p.contenido_unidad})`:""}</td>
-      <td class="amount-cell">${p.precio_actual!=null?fmt(p.precio_actual):"—"}</td>
+      <td class="amount-cell">${precioCell}</td>
       <td style="font-size:12px">${p.unidad_base||"—"}</td>
       <td>${badgeEstado[p.estado]||p.estado||""}</td>
       <td style="font-size:11px;color:var(--txt2)">${p.fecha_precio||"—"}${p.factura_origen?` · ${p.factura_origen}`:""}</td>
