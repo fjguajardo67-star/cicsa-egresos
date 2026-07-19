@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-i</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-j</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -2157,13 +2157,15 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
     for(const p of productos){
       const nombre = (p.nombre||"").trim();
       if(!nombre) continue;
+      // SOLO coincidencia EXACTA (nombre normalizado o alias). Antes había además un match
+      // DIFUSO (posibleMismoIngrediente) que fusionaba productos distintos por compartir una
+      // palabra — ej. "Queso americano" se tragaba dentro de "Queso crema procesado" y nunca
+      // aparecía como producto propio. Los parecidos NO se fusionan solos: se crean como
+      // producto nuevo y la vista de Catálogo los marca "⚠ ¿es lo mismo?" para que TÚ decidas
+      // fusionarlos a mano si de verdad lo son.
       let match = _catalogoProductos.find(c =>
         normalizarParaComparar(c.nombre_normalizado||c.nombre_comercial)===normalizarParaComparar(nombre) ||
         (c.alias_factura||[]).some(a=>normalizarParaComparar(a)===normalizarParaComparar(nombre))
-      );
-      if(!match) match = _catalogoProductos.find(c =>
-        posibleMismoIngrediente(c.nombre_normalizado||c.nombre_comercial, nombre) ||
-        (c.alias_factura||[]).some(a=>posibleMismoIngrediente(a, nombre))
       );
       if(match){
         match.precio_actual = p.precio;
