@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-f</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-g</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -2143,7 +2143,8 @@ async function asegurarProveedor(nombre){
 // Si no hay match, crea uno nuevo con estado "pendiente" — nunca se usa para costeo ni
 // se sincroniza a Menú hasta que alguien lo valide manualmente en la vista de Catálogo.
 async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
-  if(!productos || !productos.length) return;
+  if(!productos || !productos.length) return { nuevos:0, actualizados:0 };
+  let nuevos = 0, actualizados = 0;
   try {
     await cargarCatalogo();
     if(proveedorNombre) await asegurarProveedor(proveedorNombre);
@@ -2168,6 +2169,7 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
         if(!yaEsAlias) match.alias_factura = [...(match.alias_factura||[]), nombre];
         const { id, ...datos } = match;
         await fbUpdateDoc(CATALOGO_COL, id, datos);
+        actualizados++;
       } else {
         // Producto nuevo sin match: NUNCA asumimos unidad_base ni contenido — se queda
         // "pendiente" hasta que alguien lo valide a mano con los datos reales de presentación.
@@ -2198,10 +2200,11 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
           notas: ""
         };
         const id = await fbCreateDoc(CATALOGO_COL, nuevo);
-        if(id) _catalogoProductos.push({ id, ...nuevo });
+        if(id){ _catalogoProductos.push({ id, ...nuevo }); nuevos++; }
       }
     }
-  } catch(e){ console.warn("sincronizarConCatalogo error:", e); }
+  } catch(e){ console.warn("sincronizarConCatalogo error:", e); throw e; }
+  return { nuevos, actualizados };
 }
 
 function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
@@ -2213,9 +2216,12 @@ function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
       if(gg) gg._productosError = msg;
     });
     save();
+    // Antes esto era 100% silencioso: el gasto se guardaba pero los productos NO llegaban al
+    // catálogo y el usuario no tenía forma de saber por qué. Ahora se avisa en pantalla.
+    try{ setStatus("statusLectura", `⚠ El gasto se guardó, pero NO se pudieron desglosar los productos para el catálogo: ${esc(msg)}`, "err"); }catch(_){}
   };
   const promesa = pedirProductosConReintento(b64, mimeType)
-    .then(data=>{
+    .then(async data=>{
       if(!data.productos || data.productos.length===0){
         marcarError("La IA no encontró productos individuales en esta factura.");
         return null;
@@ -2227,8 +2233,14 @@ function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
       });
       save();
       const primerGasto = encontrarGastoPorId(ids[0]);
-      sincronizarConCatalogo(productos, primerGasto?.proveedor, primerGasto?.factura)
-        .catch(e=>console.warn("sincronizarConCatalogo (fire-and-forget) error:", e));
+      try{
+        const r = await sincronizarConCatalogo(productos, primerGasto?.proveedor, primerGasto?.factura);
+        const n = r?.nuevos||0, a = r?.actualizados||0;
+        setStatus("statusLectura", `✅ Catálogo actualizado — ${n} producto(s) nuevo(s), ${a} actualizado(s) (revisa la pestaña Productos).`, "ok");
+      }catch(e){
+        console.warn("sincronizarConCatalogo error:", e);
+        marcarError("no se pudo escribir al catálogo (" + (e.message||"error") + ")");
+      }
       return productos;
     })
     .catch(e=>{
