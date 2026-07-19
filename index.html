@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-h</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-i</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1467,7 +1467,8 @@ tr:hover td { background:var(--claro); }
 // STATE & STORAGE
 // ═══════════════════════════════════════════════════════════════════════════
 // Auto-detect server: Railway en producción, localhost en desarrollo
-const SERVER = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+const IS_LOCAL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+const SERVER = IS_LOCAL
   ? "http://localhost:7432"
   : "https://web-production-56bfc3.up.railway.app";
 
@@ -1747,8 +1748,10 @@ let state = { weeks:[], activeWeek:null, budget:{...DEFAULT_BUDGET} };
 function save() {
   const json = JSON.stringify(state);
   localStorage.setItem("cicsa_egresos", json);
-  // Save to Flask local (if running)
-  if(SERVER_AVAILABLE){
+  // Persistencia local (Flask de desarrollo). En producción /save-state está deshabilitado a
+  // propósito (fix de seguridad) y devolvía 404 + "network lost" en cada guardado — puro ruido.
+  // Firebase es SIEMPRE la fuente durable; ahí se guarda de verdad.
+  if(IS_LOCAL && SERVER_AVAILABLE){
     fetch(SERVER+"/save-state",{method:"POST",headers:{"Content-Type":"application/json"},body:json}).catch(()=>{});
   }
   // Always save to Firebase
@@ -1758,7 +1761,7 @@ setInterval(()=>{ if(state.weeks&&state.weeks.length>0) save(); }, 60000);
 window.addEventListener("beforeunload",()=>{
   const json=JSON.stringify(state);
   localStorage.setItem("cicsa_egresos",json);
-  if(navigator.sendBeacon){ const blob=new Blob([json],{type:"application/json"}); navigator.sendBeacon(SERVER+"/save-state",blob); }
+  if(IS_LOCAL && navigator.sendBeacon){ const blob=new Blob([json],{type:"application/json"}); navigator.sendBeacon(SERVER+"/save-state",blob); }
 });
 
 function load() {
@@ -1778,15 +1781,17 @@ async function initState() {
   load();
   let gotRemote = false;
 
-  try {
-    const r=await fetch(SERVER+"/load-state",{signal:AbortSignal.timeout(2500)});
-    const d=await r.json();
-    if(d.ok && d.state && Array.isArray(d.state.weeks)){
-      const sv=(d.state.weeks||[]).reduce((s,w)=>s+(w.gastos||[]).length,0);
-      const lc=(state.weeks||[]).reduce((s,w)=>s+(w.gastos||[]).length,0);
-      if(sv>=lc){ state=d.state; gotRemote=true; }
-    }
-  } catch(e){ /* Flask local no disponible — normal en producción */ }
+  if(IS_LOCAL){
+    try {
+      const r=await fetch(SERVER+"/load-state",{signal:AbortSignal.timeout(2500)});
+      const d=await r.json();
+      if(d.ok && d.state && Array.isArray(d.state.weeks)){
+        const sv=(d.state.weeks||[]).reduce((s,w)=>s+(w.gastos||[]).length,0);
+        const lc=(state.weeks||[]).reduce((s,w)=>s+(w.gastos||[]).length,0);
+        if(sv>=lc){ state=d.state; gotRemote=true; }
+      }
+    } catch(e){ /* Flask local no disponible */ }
+  }
 
   if(!gotRemote){
     try {
