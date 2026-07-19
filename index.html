@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-g</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-h</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -2208,7 +2208,10 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
 }
 
 function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
-  if(!b64) return;
+  if(!b64){
+    try{ setStatus("statusLectura", "⚠ El gasto se guardó, pero no hay imagen de la factura en memoria para desglosar los productos (vuelve a leerla con IA para poblar el catálogo).", "err"); }catch(_){}
+    return;
+  }
   const ids = Array.isArray(gastoIds) ? gastoIds : [gastoIds];
   const marcarError = (msg)=>{
     ids.forEach(id=>{
