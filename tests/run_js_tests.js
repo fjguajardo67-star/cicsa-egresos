@@ -45,7 +45,7 @@ const FUNCS = [
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "todosLosCortes", "todosLosRetiros",
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe",
-  "conciliarSAT", "dedupeProductos", "rangoSemanaLabel",
+  "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
 ];
 
 const sandbox = { state: { weeks: [], activeWeek: null, budget: {} }, console };
@@ -215,6 +215,22 @@ t("rangoSemanaLabel: auto-nombre de semana nueva usa el rango real lunes–domin
   assert.equal(S.rangoSemanaLabel(new Date(2026, 6, 20, 12)), "20 al 26 jul 2026");
   // Cruce de mes: se muestra el mes en ambos extremos
   assert.equal(S.rangoSemanaLabel(new Date(2026, 6, 30, 12)), "27 jul al 02 ago 2026");
+});
+
+console.log("\n== alias sospechosos ==");
+t("marca aliases de otro producto (Queso americano bajo Queso crema), respeta legítimos y sinónimos", () => {
+  S._catalogoProductos = [
+    { id: "1", nombre_comercial: "Queso crema procesado 1.36kg",
+      alias_factura: ["Queso crema procesado 1.36kg", "Queso crema BC 1.36kg", "Queso americano", "Queso crema 1.36kg"] },
+    { id: "2", nombre_comercial: "Queso panela 3kg", alias_factura: ["Queso panela 3kg", "Queso 3kg"] },
+    { id: "3", nombre_comercial: "Alas Naturales", alias_factura: ["Alas Naturales", "Alitas", "Alitas de Pollo"] },
+  ];
+  const r = S.aliasSospechosos();
+  const q = r.find(x => x.id === "1");
+  assert.ok(q && q.sospechosos.includes("Queso americano"), "debe marcar 'Queso americano'");
+  assert.ok(!q.sospechosos.includes("Queso crema BC 1.36kg"), "no debe marcar alias legítimo con palabras compartidas");
+  assert.ok(!r.find(x => x.id === "2"), "queso panela sin sospechosos");
+  assert.ok(!r.find(x => x.id === "3"), "sinónimo sin palabra en común (Alitas/Alas) no se marca");
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
