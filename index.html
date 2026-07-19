@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-j</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-17-k</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -960,6 +960,7 @@ tr:hover td { background:var(--claro); }
       <button class="btn btn-light" onclick="renderCatalogoProductos(true)">🔄 Actualizar</button>
       <button class="btn btn-green" onclick="abrirEditorProducto(null)">➕ Agregar manualmente</button>
       <button class="btn btn-gold" onclick="abrirSyncMenuModal()">🍽️ Sincronizar validados a Menú</button>
+      <button class="btn btn-light" onclick="abrirRevisionAlias()" title="Encuentra aliases que parecen de otro producto (fusiones erróneas del match difuso viejo) y los quita con un clic">🧹 Revisar alias</button>
     </div>
     <div class="status" id="catProdStatus"></div>
     <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
@@ -990,6 +991,18 @@ tr:hover td { background:var(--claro); }
       </table>
     </div>
     <div class="empty-state" id="catProdEmpty" style="display:none"><div class="ei">📦</div><p>No hay productos con este filtro.</p></div>
+  </div>
+</div>
+
+<!-- MODAL: REVISAR ALIAS SOSPECHOSOS -->
+<div class="modal-overlay" id="aliasReviewModal">
+  <div class="modal" style="max-width:680px">
+    <h3>🧹 Revisar alias sospechosos</h3>
+    <p style="font-size:13px;color:var(--txt2);margin:4px 0 16px">Estos aliases parecen ser de <strong>otro producto</strong> (fusiones erróneas del emparejado difuso viejo). Quitar un alias hace que, la próxima vez que leas esa factura, ese producto se registre por sí solo. <strong>Revisa cada uno</strong> — quita solo los que de verdad no correspondan.</p>
+    <div id="aliasReviewList"></div>
+    <div class="btn-row" style="margin-top:16px">
+      <button class="btn btn-light" onclick="cerrarRevisionAlias()">Cerrar</button>
+    </div>
   </div>
 </div>
 
@@ -3423,6 +3436,68 @@ async function renderCatalogoProductos(forzar){
       </td>`;
     tbody.appendChild(tr);
   });
+}
+
+// ── Revisión de alias sospechosos ────────────────────────────────────────────
+// Un alias es "sospechoso" si NO es lo suficientemente parecido al nombre del propio producto
+// (posibleMismoIngrediente da false) — señal de que se pegó por una fusión difusa errónea
+// (ej. "Queso americano" quedó como alias de "Queso crema procesado"). No borra nada solo:
+// lista los casos para que el usuario los quite uno por uno con un clic.
+function aliasSospechosos(){
+  const out = [];
+  _catalogoProductos.forEach(p=>{
+    const nombre = p.nombre_comercial || p.nombre_normalizado || "";
+    const nombreNorm = normalizarParaComparar(nombre);
+    const palabrasNombre = new Set(nombreNorm.split(/\s+/).filter(Boolean));
+    const sosp = (p.alias_factura||[]).filter(a=>{
+      if(!a) return false;
+      const na = normalizarParaComparar(a);
+      if(na === nombreNorm) return false;                    // el propio nombre
+      if(posibleMismoIngrediente(nombre, a)) return false;   // suficientemente parecido → ok
+      // Solo sospechoso si comparte ≥1 palabra con el nombre: misma familia, palabra clave
+      // distinta (ej. "Queso americano" bajo "Queso crema"). Un sinónimo sin palabras en común
+      // (ej. "Alitas" bajo "Alas Naturales") NO se marca — casi seguro es un alias legítimo.
+      return na.split(/\s+/).filter(Boolean).some(w=>palabrasNombre.has(w));
+    });
+    if(sosp.length) out.push({ id:p.id, nombre, sospechosos:sosp });
+  });
+  return out;
+}
+function abrirRevisionAlias(){
+  renderRevisionAlias();
+  document.getElementById("aliasReviewModal").classList.add("open");
+}
+function cerrarRevisionAlias(){ document.getElementById("aliasReviewModal").classList.remove("open"); }
+function renderRevisionAlias(){
+  const cont = document.getElementById("aliasReviewList");
+  const casos = aliasSospechosos();
+  if(!casos.length){ cont.innerHTML = `<div style="padding:16px;text-align:center;color:var(--vm)">✅ No hay alias sospechosos. Todo limpio.</div>`; return; }
+  cont.innerHTML = casos.map(c=>{
+    const p = _catalogoProductos.find(x=>x.id===c.id);
+    const aliases = (p?.alias_factura||[]);
+    const nombreNorm = normalizarParaComparar(c.nombre);
+    const chips = aliases.map(a=>{
+      const esSosp = c.sospechosos.includes(a);
+      const bg = esSosp?"#FFF3E0":"#F2F2EE", bd = esSosp?"var(--naranja)":"var(--border)", col = esSosp?"#BF360C":"var(--txt2)";
+      return `<button onclick="quitarAliasProducto('${c.id.replace(/'/g,"\\'")}', ${JSON.stringify(a).replace(/"/g,'&quot;')})" style="padding:5px 10px;background:${bg};border:1px solid ${bd};color:${col};border-radius:20px;font-size:12px;cursor:pointer" title="Quitar este alias">✕ ${esc(a)}${esSosp?" ⚠":""}</button>`;
+    }).join("");
+    return `<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="font-weight:600;color:var(--vd);font-size:14px;margin-bottom:2px">${esc(c.nombre)}</div>
+      <div style="font-size:11px;color:var(--txt2);margin-bottom:8px">⚠ = parece de otro producto. Revisa TODOS los aliases y quita los que no correspondan a este producto.</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div>
+    </div>`;
+  }).join("");
+}
+async function quitarAliasProducto(id, alias){
+  const p = _catalogoProductos.find(x=>x.id===id);
+  if(!p) return;
+  p.alias_factura = (p.alias_factura||[]).filter(a=>a!==alias);
+  try{
+    const { id:_id, ...datos } = p;
+    await fbUpdateDoc(CATALOGO_COL, id, datos);
+  }catch(e){ alert("No se pudo guardar: "+(e.message||e)); return; }
+  renderRevisionAlias();
+  renderCatalogoProductos();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
