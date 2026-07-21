@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-21-b</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-21-c</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -718,9 +718,25 @@ tr:hover td { background:var(--claro); }
   </div>
   <div class="card">
     <div class="card-title">🎯 Presupuesto semanal por categoría <span id="presupPeriodoLabel" style="font-family:'DM Serif Display',serif;font-weight:400;color:var(--txt2);font-size:16px"></span></div>
-    <p style="font-size:13px;color:var(--txt2);margin-bottom:18px">
+    <p style="font-size:13px;color:var(--txt2);margin-bottom:14px">
       Edita el presupuesto asignado para cada categoría. Se compara contra el gasto real (por fecha de factura) del periodo seleccionado arriba.
     </p>
+    <!-- Referencia visual: objetivo semanal vs suma de categorías, actualizada en vivo al teclear -->
+    <div id="presupTotalBar" style="position:sticky;top:0;z-index:5;display:grid;grid-template-columns:repeat(3,1fr);gap:12px;background:white;border:1.5px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
+      <div>
+        <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">🎯 Presupuesto objetivo ($)</div>
+        <input type="number" id="presupObjetivo" class="bcard-input" min="0" step="1000" style="width:100%;font-weight:700"
+          onchange="guardarObjetivoPresupuesto()" oninput="actualizarTotalPresupuesto()">
+      </div>
+      <div style="text-align:center">
+        <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">Suma de categorías</div>
+        <div id="presupSuma" style="font-size:22px;font-weight:700;color:var(--vd);font-family:'JetBrains Mono',monospace">$0.00</div>
+      </div>
+      <div style="text-align:center">
+        <div style="font-size:11px;color:var(--txt2);margin-bottom:4px" id="presupDifLbl">Por asignar</div>
+        <div id="presupDif" style="font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace">$0.00</div>
+      </div>
+    </div>
     <div class="budget-grid" id="budgetGrid"></div>
     <div class="btn-row" style="margin-top:16px">
       <button class="btn btn-gold" onclick="guardarPresupuesto()">💾 Guardar presupuesto</button>
@@ -2934,11 +2950,41 @@ function renderPresupuesto(){
             style="flex-shrink:0;padding:5px 10px;background:var(--vd);color:white;border:none;
             border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;line-height:1">✓</button>
           <input class="bcard-input" id="bp_${cat.replace(/\W/g,'_')}" type="number" value="${presup}" placeholder="0"
-            style="flex:1;min-width:0;width:100%">
+            style="flex:1;min-width:0;width:100%" oninput="actualizarTotalPresupuesto()">
         </div>
       </div>`;
     grid.appendChild(div);
   });
+  const obj=document.getElementById("presupObjetivo");
+  if(obj) obj.value = (typeof state.budgetObjetivo === "number" && state.budgetObjetivo > 0)
+    ? state.budgetObjetivo
+    : Object.values(state.budget).reduce((s,v)=>s+(parseFloat(v)||0),0);
+  actualizarTotalPresupuesto();
+}
+// Barra de referencia: suma EN VIVO los inputs de las tarjetas (sin guardar) y la compara
+// contra el objetivo, para repartir el presupuesto hasta cuadrar sin andar sumando a mano.
+function actualizarTotalPresupuesto(){
+  const sumaEl=document.getElementById("presupSuma"), difEl=document.getElementById("presupDif"), lblEl=document.getElementById("presupDifLbl");
+  if(!sumaEl || !difEl) return;
+  let suma=0;
+  document.querySelectorAll("[id^='bp_']").forEach(el=>{ suma += parseFloat(el.value)||0; });
+  const objetivo=parseFloat(document.getElementById("presupObjetivo")?.value)||0;
+  const dif=objetivo-suma;
+  sumaEl.textContent=fmt(suma);
+  if(Math.abs(dif) < 0.005){
+    lblEl.textContent="✓ Cuadrado"; difEl.textContent=fmt(0);
+    difEl.style.color="var(--vm)"; lblEl.style.color="var(--vm)";
+  } else if(dif > 0){
+    lblEl.textContent="Por asignar"; difEl.textContent=fmt(dif);
+    difEl.style.color="#B8860B"; lblEl.style.color="#B8860B";
+  } else {
+    lblEl.textContent="⚠ Excedido del objetivo"; difEl.textContent="−"+fmt(-dif);
+    difEl.style.color="var(--red)"; lblEl.style.color="var(--red)";
+  }
+}
+function guardarObjetivoPresupuesto(){
+  state.budgetObjetivo=parseFloat(document.getElementById("presupObjetivo")?.value)||0;
+  save(); actualizarTotalPresupuesto();
 }
 function saveSingleBudget(cat){ const val=parseFloat(document.getElementById("bp_"+cat.replace(/\W/g,'_'))?.value)||0; state.budget[cat]=val; save(); renderPresupuesto(); }
 function guardarPresupuesto(){ [...new Set([...CATS,...Object.keys(totalesPorCatPeriodo())])].forEach(cat=>{const el=document.getElementById("bp_"+cat.replace(/\W/g,'_'));if(el) state.budget[cat]=parseFloat(el.value)||0;}); save(); renderPresupuesto(); alert("✅ Presupuesto guardado."); }
