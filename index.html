@@ -713,10 +713,13 @@ tr:hover td { background:var(--claro); }
 
 <!-- ═══════════════ PAGE: PRESUPUESTO ═══════════════ -->
 <div class="container page" id="page-presupuesto">
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap" id="presupPeriodoSel"></div>
+  </div>
   <div class="card">
-    <div class="card-title">🎯 Presupuesto semanal por categoría</div>
+    <div class="card-title">🎯 Presupuesto semanal por categoría <span id="presupPeriodoLabel" style="font-family:'DM Serif Display',serif;font-weight:400;color:var(--txt2);font-size:16px"></span></div>
     <p style="font-size:13px;color:var(--txt2);margin-bottom:18px">
-      Edita el presupuesto asignado para cada categoría. Se compara contra el gasto real de la semana activa.
+      Edita el presupuesto asignado para cada categoría. Se compara contra el gasto real (por fecha de factura) del periodo seleccionado arriba.
     </p>
     <div class="budget-grid" id="budgetGrid"></div>
     <div class="btn-row" style="margin-top:16px">
@@ -730,24 +733,7 @@ tr:hover td { background:var(--claro); }
 <div class="container page" id="page-reporte">
   <div class="card" style="margin-bottom:16px">
     <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-      <div class="field" style="flex:0 0 auto">
-        <label>Modo de vista</label>
-        <select id="reporteModo" onchange="cambiarModoReporte()"
-          style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
-          <option value="semana">Semana activa</option>
-          <option value="rango">Rango de fechas</option>
-        </select>
-      </div>
-      <div id="reporteRangoFechas" style="display:none;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-        <div class="field">
-          <label>Fecha inicio</label>
-          <input type="date" id="reporteFechaIni" onchange="renderReporteActual()">
-        </div>
-        <div class="field">
-          <label>Fecha fin</label>
-          <input type="date" id="reporteFechaFin" onchange="renderReporteActual()">
-        </div>
-      </div>
+      <div id="reportePeriodoSel" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap"></div>
       <div style="margin-left:auto;display:flex;gap:8px">
         <button class="btn btn-green" onclick="exportarExcel()">📊 Excel</button>
         <button class="btn btn-gold"  onclick="exportarPDF()">🖨️ PDF</button>
@@ -1352,8 +1338,16 @@ tr:hover td { background:var(--claro); }
 <div class="modal-overlay" id="ajusteSaldoModal">
   <div class="modal" style="max-width:640px">
     <h3>🔒 Ajustar saldo inicial de caja</h3>
-    <p style="font-size:13px;color:var(--txt2);margin:4px 0 16px">Cuenta el efectivo real en caja por denominación. El total se fija como saldo inicial de la <strong>semana activa</strong> y reemplaza el arrastre calculado. Se sincroniza a todos los dispositivos.</p>
-    <div id="conteoDenoms" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px"></div>
+    <p style="font-size:13px;color:var(--txt2);margin:4px 0 14px">El monto se fija como saldo inicial de la <strong>semana activa</strong> y reemplaza el arrastre calculado. Se sincroniza a todos los dispositivos.</p>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <button type="button" id="ajModoDirectoBtn" onclick="setAjusteModo('directo')" class="btn btn-gold" style="flex:1;padding:8px">💵 Monto directo</button>
+      <button type="button" id="ajModoConteoBtn" onclick="setAjusteModo('conteo')" class="btn btn-light" style="flex:1;padding:8px">🧮 Contar por denominación</button>
+    </div>
+    <div id="ajusteDirectoBox" style="margin-bottom:14px">
+      <label class="form-label">Saldo inicial en caja ($)</label>
+      <input type="number" min="0" step="0.01" id="ajusteMontoDirecto" class="form-input" placeholder="Ej: 34900.00" oninput="actualizarConteoCaja()">
+    </div>
+    <div id="conteoDenoms" style="display:none;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px"></div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
       <div style="background:var(--claro);border-radius:10px;padding:12px;text-align:center">
         <div style="font-size:11px;color:var(--txt2)">Total conteo</div>
@@ -1851,6 +1845,82 @@ function rangoSemanaLabel(fecha){
     ? `${dd(lunes)} al ${dd(domingo)} ${mesCorto(domingo)} ${domingo.getFullYear()}`
     : `${dd(lunes)} ${mesCorto(lunes)} al ${dd(domingo)} ${mesCorto(domingo)} ${domingo.getFullYear()}`;
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// PERIODO COMPARTIDO — Seguimiento + Presupuesto
+// ══════════════════════════════════════════════════════════════════════════
+// Las dos páginas leen el MISMO periodo, SIEMPRE por la fecha real de cada factura (no por la
+// "caja de captura", que puede tener facturas de varias semanas revueltas). Modo "semana" = la
+// semana natural lunes–domingo que contiene hoy, calculada sola (se auto-corrige cada semana);
+// modo "rango" = fechas que el usuario elige. Se guarda en localStorage y sobrevive recargas y
+// cambios de pestaña, así las dos vistas nunca se desincronizan.
+const PERIODO_SP_KEY = "cicsa_periodo_seg_pres";
+function semanaCalendario(fecha){
+  const dow=fecha.getDay(), offsetLunes=(dow===0)?6:dow-1;
+  const lunes=new Date(fecha); lunes.setDate(fecha.getDate()-offsetLunes);
+  const domingo=new Date(lunes); domingo.setDate(lunes.getDate()+6);
+  return { ini:fechaLocalStr(lunes), fin:fechaLocalStr(domingo), label:rangoSemanaLabel(fecha) };
+}
+function getPeriodoSPRaw(){ try{ return JSON.parse(localStorage.getItem(PERIODO_SP_KEY)||"{}"); }catch(e){ return {}; } }
+function getPeriodoSP(){
+  const raw=getPeriodoSPRaw();
+  if(raw.modo==="rango" && raw.ini && raw.fin){
+    return { modo:"rango", ini:raw.ini, fin:raw.fin, label:`${fmtDate(raw.ini)} al ${fmtDate(raw.fin)}` };
+  }
+  const s=semanaCalendario(new Date());              // default: esta semana, siempre al día
+  return { modo:"semana", ini:s.ini, fin:s.fin, label:s.label };
+}
+function setPeriodoSP(patch){
+  try{ localStorage.setItem(PERIODO_SP_KEY, JSON.stringify({...getPeriodoSPRaw(), ...patch})); }catch(e){}
+}
+function gastosDelPeriodoSP(){
+  const p=getPeriodoSP();
+  return allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=p.ini && g.fecha<=p.fin);
+}
+function totalesPorCatPeriodo(){
+  const t={};
+  partidasExpandidas(gastosDelPeriodoSP()).forEach(g=>{ t[g.categoria]=(t[g.categoria]||0)+g.importe; });
+  return t;
+}
+// Pinta el selector (modo + fechas) dentro de un contenedor. `onChange` = nombre de la función
+// que re-renderiza el contenido de esa página. Se pinta una vez al entrar; los cambios solo
+// alternan la visibilidad del rango y re-renderizan (sin repintar, para no perder el foco).
+function pintarSelectorPeriodoSP(containerId, onChange){
+  const cont=document.getElementById(containerId); if(!cont) return;
+  const p=getPeriodoSP();
+  cont.innerHTML=`
+    <div class="field" style="flex:0 0 auto">
+      <label>Modo de vista</label>
+      <select id="${containerId}_modo" onchange="onCambioPeriodoSP('${containerId}','${onChange}')"
+        style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
+        <option value="semana" ${p.modo==="semana"?"selected":""}>Esta semana</option>
+        <option value="rango" ${p.modo==="rango"?"selected":""}>Rango de fechas</option>
+      </select>
+    </div>
+    <div id="${containerId}_rango" style="display:${p.modo==="rango"?"flex":"none"};gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div class="field"><label>Fecha inicio</label><input type="date" id="${containerId}_ini" value="${p.ini}" onchange="onCambioPeriodoSP('${containerId}','${onChange}')"></div>
+      <div class="field"><label>Fecha fin</label><input type="date" id="${containerId}_fin" value="${p.fin}" onchange="onCambioPeriodoSP('${containerId}','${onChange}')"></div>
+    </div>`;
+}
+function onCambioPeriodoSP(containerId, onChange){
+  const modo=document.getElementById(containerId+"_modo")?.value||"semana";
+  const rangoBox=document.getElementById(containerId+"_rango");
+  if(modo==="rango"){
+    if(rangoBox) rangoBox.style.display="flex";
+    let ini=document.getElementById(containerId+"_ini")?.value||"";
+    let fin=document.getElementById(containerId+"_fin")?.value||"";
+    if(!ini || !fin){                                // primera vez en rango → arranca en esta semana
+      const s=semanaCalendario(new Date()); ini=ini||s.ini; fin=fin||s.fin;
+      const iEl=document.getElementById(containerId+"_ini"), fEl=document.getElementById(containerId+"_fin");
+      if(iEl) iEl.value=ini; if(fEl) fEl.value=fin;
+    }
+    setPeriodoSP({modo:"rango", ini, fin});
+  } else {
+    if(rangoBox) rangoBox.style.display="none";
+    setPeriodoSP({modo:"semana"});
+  }
+  if(typeof window[onChange]==="function") window[onChange]();
+}
 function createNewWeek(silent=false) {
   const today=new Date();
   const defaultLabel=rangoSemanaLabel(today);
@@ -1932,8 +2002,8 @@ function showPage(name,btn){
   if(btn) btn.classList.add("active");
   else document.querySelectorAll(".nav-btn").forEach(b=>{ if(b.getAttribute("onclick")&&b.getAttribute("onclick").includes("'"+name+"'")) b.classList.add("active"); });
   if(name==="gastos")      renderGastos();
-  if(name==="presupuesto") renderPresupuesto();
-  if(name==="reporte"){    restaurarFiltrosReporte(); renderReporteActual(); }
+  if(name==="presupuesto"){ pintarSelectorPeriodoSP("presupPeriodoSel","renderPresupuesto"); renderPresupuesto(); }
+  if(name==="reporte"){    pintarSelectorPeriodoSP("reportePeriodoSel","renderReporteActual"); renderReporteActual(); }
   if(name==="gmail")       checkGmailStatus();
   if(name==="pagos")       { restaurarPagosPeriodo(); renderPagos(); }
   if(name==="reportes")    initReporteDates();
@@ -2842,10 +2912,11 @@ function partidasExpandidas(gastos){
   return out;
 }
 
-function totalesPorCat(){ const t={}; partidasExpandidas(gastosSemana()).forEach(g=>{t[g.categoria]=(t[g.categoria]||0)+g.importe;}); return t; }
 function renderPresupuesto(){
   const grid=document.getElementById("budgetGrid"); grid.innerHTML="";
-  const totals=totalesPorCat(), allCats=[...new Set([...CATS,...Object.keys(totals)])];
+  const p=getPeriodoSP();
+  const lbl=document.getElementById("presupPeriodoLabel"); if(lbl) lbl.textContent=`— ${p.label}`;
+  const totals=totalesPorCatPeriodo(), allCats=[...new Set([...CATS,...Object.keys(totals)])];
   allCats.forEach(cat=>{
     const presup=state.budget[cat]||0, gastado=totals[cat]||0, pct=presup>0?Math.min((gastado/presup)*100,100):0, over=presup>0&&gastado>presup;
     const div=document.createElement("div"); div.className="bcard";
@@ -2867,57 +2938,33 @@ function renderPresupuesto(){
   });
 }
 function saveSingleBudget(cat){ const val=parseFloat(document.getElementById("bp_"+cat.replace(/\W/g,'_'))?.value)||0; state.budget[cat]=val; save(); renderPresupuesto(); }
-function guardarPresupuesto(){ [...new Set([...CATS,...Object.keys(totalesPorCat())])].forEach(cat=>{const el=document.getElementById("bp_"+cat.replace(/\W/g,'_'));if(el) state.budget[cat]=parseFloat(el.value)||0;}); save(); renderPresupuesto(); alert("✅ Presupuesto guardado."); }
+function guardarPresupuesto(){ [...new Set([...CATS,...Object.keys(totalesPorCatPeriodo())])].forEach(cat=>{const el=document.getElementById("bp_"+cat.replace(/\W/g,'_'));if(el) state.budget[cat]=parseFloat(el.value)||0;}); save(); renderPresupuesto(); alert("✅ Presupuesto guardado."); }
 function resetPresupuesto(){ if(!confirm("¿Restaurar valores predeterminados?")) return; state.budget={...DEFAULT_BUDGET}; save(); renderPresupuesto(); }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // REPORTE — CAMBIO 1: semáforo PDF + CAMBIO 2: sin col Notas
 // ═══════════════════════════════════════════════════════════════════════════
-// La vista de trabajo (modo + rango de fechas) se perdía en cada recarga de página, obligando
-// a reconfigurarla para volver a ubicar lo que se estaba revisando. Se guarda en localStorage
-// (solo texto, sin adjuntos) para sobrevivir una recarga.
-const REPORTE_FILTROS_KEY="cicsa_reporte_filtros";
-function guardarFiltrosReporte(){
-  try{
-    localStorage.setItem(REPORTE_FILTROS_KEY, JSON.stringify({
-      modo:document.getElementById("reporteModo")?.value||"semana",
-      ini:document.getElementById("reporteFechaIni")?.value||"",
-      fin:document.getElementById("reporteFechaFin")?.value||""
-    }));
-  }catch(e){ console.warn("guardarFiltrosReporte:",e); }
+// Seguimiento usa el periodo compartido (getPeriodoSP) y SIEMPRE renderiza por la fecha real de
+// cada factura — no por la caja de captura. El periodo se persiste solo (localStorage) y se
+// comparte con Presupuesto, así que no hay que guardar filtros aparte ni reconfigurar nada.
+function renderReporteActual(){
+  const p=getPeriodoSP();
+  renderReporteRango(p.ini, p.fin, p.label);
 }
-function restaurarFiltrosReporte(){
-  try{
-    const raw=localStorage.getItem(REPORTE_FILTROS_KEY); if(!raw) return;
-    const f=JSON.parse(raw);
-    if(f.modo) document.getElementById("reporteModo").value=f.modo;
-    if(f.ini) document.getElementById("reporteFechaIni").value=f.ini;
-    if(f.fin) document.getElementById("reporteFechaFin").value=f.fin;
-    document.getElementById("reporteRangoFechas").style.display=f.modo==="rango"?"flex":"none";
-  }catch(e){ console.warn("restaurarFiltrosReporte:",e); }
-}
-function cambiarModoReporte(){
-  const modo=document.getElementById("reporteModo")?.value||"semana", rangoEl=document.getElementById("reporteRangoFechas");
-  if(modo==="rango"){
-    rangoEl.style.display="flex";
-    const hoy=new Date(), ini=new Date(hoy.getFullYear(),hoy.getMonth(),1);
-    if(!document.getElementById("reporteFechaIni").value) document.getElementById("reporteFechaIni").value=fechaLocalStr(ini);
-    if(!document.getElementById("reporteFechaFin").value) document.getElementById("reporteFechaFin").value=fechaLocalStr(hoy);
-  } else { rangoEl.style.display="none"; }
-  renderReporteActual();
-}
-function renderReporteActual(){ guardarFiltrosReporte(); const modo=document.getElementById("reporteModo")?.value||"semana"; if(modo==="rango") renderReporteRango(); else renderReporte(); }
 
-function renderReporteRango(){
-  const ini=document.getElementById("reporteFechaIni")?.value||"", fin=document.getElementById("reporteFechaFin")?.value||"";
-  if(!ini||!fin){ renderReporte(); return; }
-  const gastos=allGastosAllWeeks().filter(g=>g.fecha>=ini&&g.fecha<=fin);
+function renderReporteRango(ini, fin, label){
+  if(!ini||!fin){ const p=getPeriodoSP(); ini=p.ini; fin=p.fin; label=label||p.label; }
+  const gastos=allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=ini&&g.fecha<=fin);
   const totalGlobal=gastos.reduce((s,g)=>s+g.importe,0), byCat={};
-  gastos.forEach(g=>{ if(!byCat[g.categoria]) byCat[g.categoria]=[]; byCat[g.categoria].push(g); });
+  // Desglosa las facturas divididas en sus partidas reales (igual que Auditoría y Presupuesto),
+  // para que su parte llegue a cada categoría en vez de amontonarse en una categoría "Dividida".
+  // El total no cambia: las partidas suman el importe de la factura.
+  partidasExpandidas(gastos).forEach(g=>{ if(!byCat[g.categoria]) byCat[g.categoria]=[]; byCat[g.categoria].push(g); });
   const budget=state.budget||{}, allCats=[...new Set([...Object.keys(byCat),...Object.keys(DEFAULT_BUDGET)])];
   const totalPres=allCats.reduce((s,c)=>s+(budget[c]||DEFAULT_BUDGET[c]||0),0);
   const sobre=allCats.filter(c=>(byCat[c]||[]).reduce((s,g)=>s+g.importe,0)>(budget[c]||DEFAULT_BUDGET[c]||0));
-  let html=`<div class="summary-grid" style="margin-bottom:20px">
+  let html=`<div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--vd);margin-bottom:18px">Seguimiento — ${label||`${fmtDate(ini)} al ${fmtDate(fin)}`}</div>
+  <div class="summary-grid" style="margin-bottom:20px">
     <div class="scard"><div class="scard-label">Total gastado</div><div class="scard-val">${fmt(totalGlobal)}</div><div class="scard-sub">${gastos.length} facturas · ${fmtDate(ini)} al ${fmtDate(fin)}</div></div>
     <div class="scard"><div class="scard-label">Presupuesto asignado</div><div class="scard-val">${fmt(totalPres)}</div></div>
     <div class="scard ${totalGlobal>totalPres?'alert':''}"><div class="scard-label">Diferencia</div><div class="scard-val" style="color:${totalGlobal>totalPres?'var(--red)':'var(--vm)'}">
@@ -2952,70 +2999,24 @@ function renderReporteRango(){
   document.getElementById("reporteContent").innerHTML=html;
 }
 
-function renderReporte(){
-  const wk=getActiveWeek(), gastos=gastosSemana(), totals=totalesPorCat();
-  const totalGlobal=gastos.reduce((s,g)=>s+g.importe,0), totalPresup=Object.values(state.budget).reduce((s,v)=>s+v,0);
-  const excedidos=Object.entries(totals).filter(([c,v])=>v>(state.budget[c]||0)).length;
-  let html=`<div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--vd);margin-bottom:18px">Seguimiento Semanal — ${wk?.label||""}</div>
-  <div class="summary-grid">
-    <div class="scard"><div class="scard-label">Total gastado</div><div class="scard-val">${fmt(totalGlobal)}</div><div class="scard-sub">${gastos.length} registros</div></div>
-    <div class="scard"><div class="scard-label">Presupuesto semana</div><div class="scard-val">${fmt(totalPresup)}</div></div>
-    <div class="scard ${totalGlobal>totalPresup?'alert':''}"><div class="scard-label">Diferencia</div><div class="scard-val">${fmt(totalPresup-totalGlobal)}</div><div class="scard-sub">${totalGlobal>totalPresup?"⚠ Excedido":"✅ Dentro del presupuesto"}</div></div>
-    <div class="scard ${excedidos>0?'alert':''}"><div class="scard-label">Categorías excedidas</div><div class="scard-val">${excedidos}</div></div>
-  </div>`;
-  html+=`<div class="card"><div class="card-title">📊 Gasto por categoría</div><div class="chart-wrap">`;
-  const maxVal=Math.max(...Object.values(totals),1);
-  Object.entries(totals).sort((a,b)=>b[1]-a[1]).forEach(([cat,val])=>{
-    const presup=state.budget[cat]||0, over=presup>0&&val>presup;
-    html+=`<div class="chart-row"><div class="chart-label" title="${cat}">${cat}</div>
-      <div class="chart-bar-bg"><div class="chart-bar-fill ${over?'over':''}" style="width:${(val/maxVal)*100}%">${fmt(val)}</div></div>
-      ${presup>0?`<div style="font-size:11px;color:var(--txt2);width:90px;text-align:right;flex-shrink:0">${over?'⚠ ':''}<span style="font-family:'JetBrains Mono',monospace">${fmt(presup)}</span></div>`:""}
-    </div>`;
-  });
-  html+=`</div></div>`;
-  // CAMBIO 2: sin columna Notas
-  const gastosExpandidos=partidasExpandidas(gastos);
-  html+=`<div class="card"><div class="card-title">📋 Detalle por categoría</div>`;
-  Object.entries(totals).sort((a,b)=>b[1]-a[1]).forEach(([cat,total])=>{
-    const items=gastosExpandidos.filter(g=>g.categoria===cat).sort((a,b)=>a.fecha<b.fecha?1:-1);
-    const presup=state.budget[cat]||0, over=presup>0&&total>presup;
-    html+=`<div style="margin-bottom:20px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <strong style="color:var(--vd)">${cat}</strong>
-        <span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:${over?'var(--red)':'var(--vm)'}">${fmt(total)}</span>
-      </div>
-      <table style="width:100%;table-layout:fixed">
-      <colgroup><col style="width:13%"><col style="width:29%"><col style="width:16%"><col style="width:22%"><col style="width:20%"></colgroup>
-      <thead><tr><th>Fecha</th><th>Proveedor</th><th>No. Factura</th><th>Forma de pago</th><th style="text-align:right">Importe</th></tr></thead><tbody>`;
-    items.forEach(g=>{
-      html+=`<tr><td>${fmtDate(g.fecha)}</td><td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${g.proveedor}">${g.proveedor}</td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.factura||"—"}</td>
-        <td>${formaPagoSelectHtml(g)}</td>
-        <td class="amount-cell">${fmt(g.importe)}</td></tr>`;
-    });
-    html+=`</tbody></table></div>`;
-  });
-  html+=`</div>`;
-  if(gastos.length===0) html=`<div class="empty-state"><div class="ei">📊</div><p>No hay gastos en esta semana.</p></div>`;
-  document.getElementById("reporteContent").innerHTML=html;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
-// EXPORTS
+// EXPORTS  — usan el MISMO periodo compartido que la pantalla de Seguimiento (por fecha real),
+// para que el Excel/PDF nunca muestre datos distintos a los que ves en la vista.
 // ═══════════════════════════════════════════════════════════════════════════
 function exportarExcel(){
-  const wk=getActiveWeek(), gastos=gastosSemana(), totals=totalesPorCat(), wb=XLSX.utils.book_new();
-  const det=[["CICSA — Control de Egresos"],[`Semana: ${wk?.label}`],[],["Fecha","Proveedor","Categoría","No. Factura","Importe","Notas"],...gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).map(g=>[g.fecha,g.proveedor,g.categoria,g.factura,g.importe,g.notas]),[],["","","","TOTAL",gastos.reduce((s,g)=>s+g.importe,0)]];
+  const p=getPeriodoSP(), gastos=gastosDelPeriodoSP(), totals=totalesPorCatPeriodo(), wb=XLSX.utils.book_new();
+  const det=[["CICSA — Control de Egresos"],[`Periodo: ${p.label}`],[],["Fecha","Proveedor","Categoría","No. Factura","Importe","Notas"],...gastos.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map(g=>[g.fecha,g.proveedor,g.categoria,g.factura,g.importe,g.notas]),[],["","","","TOTAL",gastos.reduce((s,g)=>s+g.importe,0)]];
   const ws1=XLSX.utils.aoa_to_sheet(det); ws1["!cols"]=[{wch:12},{wch:30},{wch:26},{wch:14},{wch:14},{wch:30}]; XLSX.utils.book_append_sheet(wb,ws1,"Detalle");
   const totalPresup=Object.values(state.budget).reduce((s,v)=>s+v,0), totalGast=gastos.reduce((s,g)=>s+g.importe,0);
-  const sum=[["CICSA — Resumen"],[`Semana: ${wk?.label}`],[],["Categoría","Presupuesto","Gasto Real","Diferencia","Estado"],...[...new Set([...Object.keys(totals),...CATS])].map(cat=>{const p=state.budget[cat]||0,g=totals[cat]||0;return[cat,p,g,p-g,p>0&&g>p?"EXCEDIDO":"OK"];}),[], ["","TOTAL",totalPresup,totalGast,totalPresup-totalGast]];
+  const sum=[["CICSA — Resumen"],[`Periodo: ${p.label}`],[],["Categoría","Presupuesto","Gasto Real","Diferencia","Estado"],...[...new Set([...Object.keys(totals),...CATS])].map(cat=>{const pr=state.budget[cat]||0,g=totals[cat]||0;return[cat,pr,g,pr-g,pr>0&&g>pr?"EXCEDIDO":"OK"];}),[], ["","TOTAL",totalPresup,totalGast,totalPresup-totalGast]];
   const ws2=XLSX.utils.aoa_to_sheet(sum); ws2["!cols"]=[{wch:28},{wch:14},{wch:14},{wch:14},{wch:12}]; XLSX.utils.book_append_sheet(wb,ws2,"Resumen");
-  XLSX.writeFile(wb,`Egresos_${(wk?.label||"semana").replace(/[^A-Za-z0-9]/g,"_")}.xlsx`);
+  XLSX.writeFile(wb,`Egresos_${(p.label||"periodo").replace(/[^A-Za-z0-9]/g,"_")}.xlsx`);
 }
 
 // CAMBIO 1: PDF con semáforo de colores
 function exportarPDF(){
-  const {jsPDF}=window.jspdf, wk=getActiveWeek(), gastos=gastosSemana(), totals=totalesPorCat();
+  const {jsPDF}=window.jspdf, p=getPeriodoSP(), gastos=gastosDelPeriodoSP(), totals=totalesPorCatPeriodo();
+  const wk={label:p.label};
   const totalGlobal=gastos.reduce((s,g)=>s+g.importe,0), totalPresup=Object.values(state.budget).reduce((s,v)=>s+v,0);
   const doc=new jsPDF({unit:"mm",format:"letter"});
   const PW=215.9,MAR=15,W=PW-MAR*2; let Y=MAR;
@@ -4880,11 +4881,33 @@ async function abrirAjusteSaldo(){
       <label class="form-label" style="font-size:11px">Monedas $</label>
       <input type="number" min="0" step="0.01" id="den_monedas" class="form-input" style="padding:6px 8px" value="${cont.monedas||""}" placeholder="0.00" oninput="actualizarConteoCaja()">
     </div>`;
-  actualizarConteoCaja();
+  // ¿El ajuste previo se hizo por denominación? Si sí, abre en modo conteo; si fue monto
+  // directo (o no hay previo), abre en modo directo con el valor precargado.
+  const tieneConteo = CAJA_DENOMS.some(d=>(parseInt(cont[d])||0)>0) || (parseFloat(cont.monedas)||0)>0;
+  document.getElementById("ajusteMontoDirecto").value =
+    (prev && typeof prev.valor === "number" && !tieneConteo) ? prev.valor : "";
+  setAjusteModo(tieneConteo ? "conteo" : "directo");
   document.getElementById("ajusteSaldoModal").classList.add("open");
+}
+let _ajusteModo = "directo";
+function setAjusteModo(m){
+  _ajusteModo = m;
+  const dirBox = document.getElementById("ajusteDirectoBox");
+  const conBox = document.getElementById("conteoDenoms");
+  const dirBtn = document.getElementById("ajModoDirectoBtn");
+  const conBtn = document.getElementById("ajModoConteoBtn");
+  const esDir = m === "directo";
+  dirBox.style.display = esDir ? "block" : "none";
+  conBox.style.display = esDir ? "none" : "grid";
+  dirBtn.className = "btn " + (esDir ? "btn-gold" : "btn-light"); dirBtn.style.flex = "1"; dirBtn.style.padding = "8px";
+  conBtn.className = "btn " + (esDir ? "btn-light" : "btn-gold"); conBtn.style.flex = "1"; conBtn.style.padding = "8px";
+  actualizarConteoCaja();
 }
 function cerrarAjusteSaldo(){ document.getElementById("ajusteSaldoModal").classList.remove("open"); }
 function totalConteoCaja(){
+  if(_ajusteModo === "directo"){
+    return parseFloat(document.getElementById("ajusteMontoDirecto")?.value)||0;
+  }
   let t = 0;
   CAJA_DENOMS.forEach(d=>{ t += d * (parseInt(document.getElementById("den_"+d)?.value)||0); });
   t += parseFloat(document.getElementById("den_monedas")?.value)||0;
@@ -4903,9 +4926,13 @@ function actualizarConteoCaja(){
 function fijarSaldoInicialCaja(){
   if(currentRole !== "admin"){ alert("🔒 Solo un administrador."); return; }
   const total = totalConteoCaja();
+  // En modo directo no guardamos desglose por billete — solo el monto tecleado.
   const conteo = {};
-  CAJA_DENOMS.forEach(d=>{ conteo[d] = parseInt(document.getElementById("den_"+d)?.value)||0; });
-  conteo.monedas = parseFloat(document.getElementById("den_monedas")?.value)||0;
+  if(_ajusteModo === "conteo"){
+    CAJA_DENOMS.forEach(d=>{ conteo[d] = parseInt(document.getElementById("den_"+d)?.value)||0; });
+    conteo.monedas = parseFloat(document.getElementById("den_monedas")?.value)||0;
+  }
+  if(total <= 0){ alert("El saldo inicial debe ser mayor a $0. Captura el monto o el conteo."); return; }
   if(!confirm(`¿Fijar el saldo inicial de caja en ${fmt(total)} para la semana activa?\n\nReemplaza el saldo calculado y se sincroniza a todos los dispositivos.`)) return;
   if(!state.cajaSaldoInicial) state.cajaSaldoInicial = {};
   state.cajaSaldoInicial[state.activeWeek] = {
@@ -5178,15 +5205,13 @@ function renderCaja() {
   const totalGastos = gastosCaja.reduce((s, g) => s + (parseFloat(g.importe) || 0), 0);
   const totalRetiros = retiros.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
   // Base del saldo del periodo:
-  //  · Con saldo inicial capturado (cualquier modo) → parte de ESE número real que tú das,
-  //    ignorando el arrastre/déficit histórico.
-  //  · "Semana activa" sin capturar → arrastra el saldo acumulado de semanas anteriores.
-  //  · "Rango" sin capturar → parte de 0 (solo movimientos del rango); el déficit histórico
-  //    se muestra aparte como advertencia y NO se suma.
-  const baseInicial = usaManual ? saldoInicialManual : (esRango ? 0 : saldoInicial);
+  // Sin saldo inicial fijado NO arrastramos el histórico al total del periodo (ni en rango ni
+  // en semana): se muestra aparte como "pendiente de fijar". Solo un saldo inicial capturado
+  // entra al cálculo. Así el total refleja el periodo actual y no mezcla montos viejos (fase de
+  // pruebas / semanas que nada tienen que ver con este corte).
+  const baseInicial = usaManual ? saldoInicialManual : 0;
   const saldoFinal = baseInicial + totalCortes - totalGastos - totalRetiros;
   const etiquetaRecaudado = esRango ? "Recaudado en el periodo" : "Recaudado esta semana";
-  const etiquetaArrastre = esRango ? "" : "✅ Se arrastra a la próxima semana";
 
   // Botón de ajuste (solo admin, solo modo semana activa).
   const btnAjuste = (esAdmin && !esRango)
@@ -5202,19 +5227,37 @@ function renderCaja() {
           <div style="font-size:10px;color:var(--txt2);margin-top:4px">Sistema calculaba: ${fmt(saldoInicial)}</div>
           ${btnAjuste?`<div style="margin-top:6px">${btnAjuste}</div>`:""}
         </div>`
-    : `<div style="background:${esRango?"#FFF8E1":"var(--claro)"};border-radius:12px;padding:16px;text-align:center${esRango?";border:1.5px dashed #E6A700":""}">
-          <div style="font-size:12px;color:var(--txt2);margin-bottom:4px">${esRango?"⚠ Saldo/déficit anterior":"Saldo inicial"}</div>
-          <div style="font-size:20px;font-weight:700;color:${esRango?"#B8860B":"var(--vd)"}">${fmt(saldoInicial)}</div>
-          <div style="font-size:11px;color:var(--txt2)">${esRango?"NO incluido en el saldo del periodo":"de semanas anteriores"}</div>
-          ${saldoInicialDetalle && saldoInicialDetalle.fechaMin
-            ? `<div style="font-size:10px;color:var(--txt2);margin-top:4px">${saldoInicialDetalle.n} movimiento(s)<br>${fmtDate(saldoInicialDetalle.fechaMin)} – ${fmtDate(saldoInicialDetalle.fechaMax)}</div>`
-            : `<div style="font-size:10px;color:var(--txt2);margin-top:4px">Sin movimientos anteriores</div>`}
-          <div style="display:flex;gap:4px;justify-content:center;margin-top:6px;flex-wrap:wrap">
-            ${saldoInicialDetalle && saldoInicialDetalle.fechaMin ? `<button onclick="revisarSaldoInicial()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">🔍 Cortes/retiros</button>
-            <button onclick="revisarGastosEnAuditoria()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">📈 Gastos en Auditoría</button>`:""}
-            ${btnAjuste}
-          </div>
-        </div>`;
+    : (() => {
+        // Detalle histórico + botones de auditoría, compartido por ambos casos pero colapsado
+        // en un <details> para que las fechas/montos viejos no dominen la hoja.
+        const drill = saldoInicialDetalle && saldoInicialDetalle.fechaMin
+          ? `<div style="font-size:10px;color:var(--txt2);margin-top:4px">${saldoInicialDetalle.n} movimiento(s) · ${fmtDate(saldoInicialDetalle.fechaMin)} – ${fmtDate(saldoInicialDetalle.fechaMax)}</div>
+             <div style="display:flex;gap:4px;justify-content:center;margin-top:6px;flex-wrap:wrap">
+               <button onclick="revisarSaldoInicial()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">🔍 Cortes/retiros</button>
+               <button onclick="revisarGastosEnAuditoria()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">📈 Gastos en Auditoría</button>
+             </div>`
+          : `<div style="font-size:10px;color:var(--txt2);margin-top:4px">Sin movimientos anteriores</div>`;
+        if(esRango){
+          return `<div style="background:#FFF8E1;border-radius:12px;padding:16px;text-align:center;border:1.5px dashed #E6A700">
+              <div style="font-size:12px;color:var(--txt2);margin-bottom:4px">⚠ Saldo/déficit anterior</div>
+              <div style="font-size:20px;font-weight:700;color:#B8860B">${fmt(saldoInicial)}</div>
+              <div style="font-size:11px;color:var(--txt2)">NO incluido en el saldo del periodo</div>
+              ${drill}
+            </div>`;
+        }
+        // Semana activa sin saldo inicial fijado → estado "pendiente de fijar".
+        return `<div style="background:#FFF8E1;border-radius:12px;padding:16px;text-align:center;border:1.5px dashed #E6A700">
+            <div style="font-size:12px;color:var(--txt2);margin-bottom:6px">⚠ Saldo inicial sin fijar</div>
+            <div style="font-size:12px;color:#B8860B;margin-bottom:10px;line-height:1.4">El total muestra solo los movimientos de esta semana. Fija el efectivo con el que abre el periodo.</div>
+            ${esAdmin
+              ? `<button onclick="abrirAjusteSaldo()" style="padding:8px 14px;background:var(--do);border:none;color:white;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">🔒 Fijar saldo inicial</button>`
+              : `<div style="font-size:10px;color:var(--txt2)">Un administrador debe fijarlo.</div>`}
+            <details style="margin-top:10px;text-align:left">
+              <summary style="font-size:10px;color:var(--txt2);cursor:pointer;text-align:center">Ver arrastre histórico (${fmt(saldoInicial)})</summary>
+              <div style="text-align:center;margin-top:4px">${drill}</div>
+            </details>
+          </div>`;
+      })();
 
   // Render conciliación
   const conc = document.getElementById("cajaConciliacion");
@@ -5258,7 +5301,7 @@ function renderCaja() {
       <div style="background:${saldoFinal >= 0 ? "var(--claro)" : "#FFF5F5"};border-radius:12px;padding:18px;text-align:center;border:2px solid ${saldoFinal >= 0 ? "var(--vd)" : "var(--red)"};margin-bottom:16px">
         <div style="font-size:13px;color:var(--txt2);margin-bottom:4px">${usaManual?"Saldo final en caja (con saldo inicial ajustado)":(esRango?"Saldo del periodo (solo movimientos del rango)":"Saldo final del periodo")}</div>
         <div style="font-size:28px;font-weight:700;color:${saldoFinal >= 0 ? "var(--vd)" : "var(--red)"}">${fmt(saldoFinal)}</div>
-        <div style="font-size:11px;color:var(--txt2)">${usaManual ? "Saldo inicial ajustado + recaudado − gastos − retiros" : (esRango ? "No incluye el saldo/déficit anterior" : (saldoFinal < 0 ? "⚠ Déficit — revisar" : etiquetaArrastre))}</div>
+        <div style="font-size:11px;color:var(--txt2)">${usaManual ? "Saldo inicial ajustado + recaudado − gastos − retiros" : (esRango ? "No incluye el saldo/déficit anterior" : "Solo movimientos de esta semana — fija el saldo inicial para incluir el efectivo de apertura")}</div>
       </div>
       <h4 style="margin:0 0 8px;color:var(--vd);font-size:14px">Desglose de gastos pagados de caja:</h4>
       ${gastosHTML}
@@ -5358,9 +5401,9 @@ function exportarCajaPDF(){
   const totalCortes=cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
   const totalGastos=gastosCaja.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
   const totalRetiros=retiros.reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
-  // Consistente con renderCaja: saldo capturado (cualquier modo) parte de ese número; Rango
-  // sin capturar parte de 0; Semana sin capturar arrastra el saldo anterior.
-  const baseInicial = usaManual ? datos.saldoInicialManual : (esRango ? 0 : saldoInicial);
+  // Consistente con renderCaja: solo un saldo inicial capturado entra al cálculo; sin capturar
+  // (rango o semana) parte de 0 y el saldo anterior se muestra aparte, no incluido.
+  const baseInicial = usaManual ? datos.saldoInicialManual : 0;
   const saldoFinal = baseInicial + totalCortes - totalGastos - totalRetiros;
 
   const doc=new jsPDF({unit:"mm",format:"letter"});
@@ -5374,7 +5417,7 @@ function exportarCajaPDF(){
   doc.text(`Periodo: ${periodoLabel||""} | Generado: ${new Date().toLocaleDateString("es-MX")}`,MAR,23);
   Y=40;
 
-  const cards=[[usaManual?"Saldo inicial en caja":(esRango?"Saldo anterior (no incluido)":"Saldo inicial"),fmt(usaManual?datos.saldoInicialManual:saldoInicial)],["Recaudado",fmt(totalCortes)],["Gastado efectivo",fmt(totalGastos)],["Retiros",fmt(totalRetiros)]];
+  const cards=[[usaManual?"Saldo inicial en caja":"Saldo anterior (no incluido)",fmt(usaManual?datos.saldoInicialManual:saldoInicial)],["Recaudado",fmt(totalCortes)],["Gastado efectivo",fmt(totalGastos)],["Retiros",fmt(totalRetiros)]];
   const cw=W/4;
   cards.forEach(([lbl,val],i)=>{
     const x=MAR+i*cw; doc.setFillColor(...CL); doc.roundedRect(x,Y,cw-3,18,2,2,"F");
@@ -5383,7 +5426,7 @@ function exportarCajaPDF(){
   });
   Y+=25;
   doc.setFillColor(...(saldoFinal>=0?ME:RED)); doc.roundedRect(MAR,Y,W,16,2,2,"F");
-  doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont("helvetica","normal"); doc.text(usaManual?"SALDO FINAL EN CAJA":(esRango?"SALDO DEL PERIODO (SIN SALDO ANTERIOR)":"SALDO FINAL DEL PERIODO"),MAR+4,Y+6);
+  doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont("helvetica","normal"); doc.text(usaManual?"SALDO FINAL EN CAJA":"SALDO DEL PERIODO (SIN SALDO ANTERIOR)",MAR+4,Y+6);
   doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.text(fmt(saldoFinal),MAR+4,Y+13);
   Y+=24;
 
