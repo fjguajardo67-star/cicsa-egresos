@@ -846,6 +846,7 @@ tr:hover td { background:var(--claro); }
     <div class="btn-row" style="margin-bottom:20px">
       <button class="btn btn-green" onclick="exportarReportePDF()">🖨️ Exportar PDF</button>
       <button class="btn btn-light" onclick="exportarReporteExcel()">📊 Exportar Excel</button>
+      <button class="btn btn-light" onclick="abrirRevisionDuplicados()" title="Encuentra facturas contadas dos veces (padre 'Dividida' viejo + categorías sueltas, o capturas repetidas) para borrarlas con un clic">🧹 Revisar duplicados</button>
     </div>
     <div style="margin-bottom:28px">
       <div class="card-title" style="font-size:14px">📊 Por categoría</div>
@@ -981,6 +982,17 @@ tr:hover td { background:var(--claro); }
 </div>
 
 <!-- MODAL: REVISAR ALIAS SOSPECHOSOS -->
+<div class="modal-overlay" id="dupReviewModal">
+  <div class="modal" style="max-width:760px">
+    <h3>🧹 Revisar facturas duplicadas</h3>
+    <p style="font-size:13px;color:var(--txt2);margin:4px 0 16px">Estas facturas parecen estar <strong>contadas dos veces</strong>: el formato viejo de divididas guardaba la factura padre "Dividida" <em>y además</em> cada categoría como gasto aparte, y también hay capturas repetidas. El registro marcado en naranja es el que se sugiere borrar. <strong>Revisa cada grupo</strong> antes de borrar — nada se borra solo.</p>
+    <div id="dupReviewList" style="max-height:60vh;overflow-y:auto"></div>
+    <div class="btn-row" style="margin-top:16px">
+      <button class="btn btn-light" onclick="cerrarRevisionDuplicados()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="aliasReviewModal">
   <div class="modal" style="max-width:680px">
     <h3>🧹 Revisar alias sospechosos</h3>
@@ -3524,6 +3536,108 @@ async function quitarAliasProducto(id, alias){
   }catch(e){ alert("No se pudo guardar: "+(e.message||e)); return; }
   renderRevisionAlias();
   renderCatalogoProductos();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REVISAR DUPLICADOS — facturas contadas dos veces
+// ═══════════════════════════════════════════════════════════════════════════
+// El formato viejo de facturas divididas guardaba la factura padre (categoría "Dividida") Y
+// ADEMÁS cada categoría como gasto aparte con el mismo folio — así que la misma factura sumaba
+// doble en todos los reportes. El formato actual (un solo registro con _partidas) ya no lo
+// hace, pero los registros dobles de esa época siguen en los datos. También detecta capturas
+// repetidas exactas (mismo folio, fecha e importe). Devuelve GRUPOS con una sugerencia de qué
+// borrar; la decisión final siempre es del usuario.
+function duplicadosSospechosos(gastos){
+  gastos = gastos || allGastosAllWeeks();
+  const norm = s => String(s||"").trim().toUpperCase();
+  const porFolio = {};
+  gastos.forEach(g=>{
+    const folio = norm(g.factura);
+    if(!folio) return;                                   // sin folio no hay cómo agrupar con confianza
+    const key = norm(g.proveedor)+"|"+folio;
+    (porFolio[key] = porFolio[key]||[]).push(g);
+  });
+  const grupos = [];
+  Object.values(porFolio).forEach(regs=>{
+    if(regs.length < 2) return;
+    const esPadre = g => g.categoria==="Dividida" || g._dividida===true;
+    const imp = g => parseFloat(g.importe)||0;
+    const padres = regs.filter(esPadre), hijos = regs.filter(g=>!esPadre(g));
+    const tol = t => Math.max(2.01, t*0.01);             // centavos de redondeo entre padre y partidas
+    let sugeridos = [], motivo = "";
+    if(padres.length && hijos.length){
+      const p0 = padres[0], sumaHijos = hijos.reduce((s,g)=>s+imp(g),0);
+      if(Math.abs(sumaHijos - imp(p0)) <= tol(imp(p0))){
+        // La factura está completa por los dos lados. Si el padre trae el desglose interno
+        // (_partidas), es el registro más rico → se sugiere borrar las categorías sueltas;
+        // si no lo trae, el desglose vive en las sueltas → se sugiere borrar el padre.
+        const padreConDetalle = Array.isArray(p0._partidas) && p0._partidas.length >= 2;
+        sugeridos = padreConDetalle ? hijos.map(g=>g.id) : [p0.id];
+        motivo = `El padre "Dividida" (${fmt(imp(p0))}) y ${hijos.length===1?"la categoría suelta":"las categorías sueltas"} suman lo mismo — la factura está contada DOS veces.`;
+      } else if(hijos.some(h=>Math.abs(imp(h)-imp(p0)) <= 0.005)){
+        sugeridos = [p0.id];
+        motivo = `El padre "Dividida" repite el importe de otro registro del mismo folio.`;
+      }
+    }
+    if(!sugeridos.length){
+      // Capturas repetidas exactas: misma fecha y mismo importe (ej. la misma factura de hielo
+      // guardada dos veces). Se sugiere borrar la copia capturada después (id más reciente).
+      const vistos = {};
+      regs.forEach(g=>{
+        const k = (g.fecha||"")+"|"+imp(g).toFixed(2);
+        if(vistos[k]) sugeridos.push(String(vistos[k].id) < String(g.id) ? g.id : vistos[k].id);
+        else vistos[k] = g;
+      });
+      if(sugeridos.length) motivo = "Captura repetida: mismo folio, fecha e importe.";
+    }
+    if(sugeridos.length){
+      grupos.push({
+        proveedor: regs[0].proveedor, folio: norm(regs[0].factura),
+        registros: regs, sugeridos, motivo,
+        exceso: sugeridos.reduce((s,id)=>{ const g=regs.find(r=>r.id===id); return s+(g?imp(g):0); },0)
+      });
+    }
+  });
+  return grupos.sort((a,b)=>b.exceso-a.exceso);
+}
+function abrirRevisionDuplicados(){
+  renderRevisionDuplicados();
+  document.getElementById("dupReviewModal").classList.add("open");
+}
+function cerrarRevisionDuplicados(){ document.getElementById("dupReviewModal").classList.remove("open"); }
+function renderRevisionDuplicados(){
+  const cont = document.getElementById("dupReviewList");
+  const grupos = duplicadosSospechosos();
+  if(!grupos.length){ cont.innerHTML = `<div style="padding:16px;text-align:center;color:var(--vm)">✅ No se encontraron facturas duplicadas. Todo limpio.</div>`; return; }
+  const totalExceso = grupos.reduce((s,g)=>s+g.exceso,0);
+  cont.innerHTML = `<div style="background:#FFF3E0;border:1px solid var(--naranja);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#BF360C">
+      ${grupos.length} grupo(s) sospechoso(s) — aprox. <strong>${fmt(totalExceso)}</strong> contados de más en los reportes.
+    </div>` + grupos.map(gr=>{
+    const filas = gr.registros.map(g=>{
+      const sug = gr.sugeridos.includes(g.id);
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;margin-bottom:4px;background:${sug?"#FFF3E0":"#F7F7F4"};border:1px solid ${sug?"var(--naranja)":"var(--border)"}">
+        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--txt2);flex-shrink:0">${fmtDate(g.fecha)}</span>
+        <span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.categoria||"")}${g._weekLabel?` <span style="color:#B0B0A8">· ${esc(g._weekLabel)}</span>`:""}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;flex-shrink:0">${fmt(g.importe)}</span>
+        ${sug?`<span style="font-size:10px;color:#BF360C;font-weight:700;flex-shrink:0">SUGERIDO</span>`:""}
+        <button onclick="borrarGastoDuplicado('${String(g.id).replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px;flex-shrink:0">🗑️</button>
+      </div>`;
+    }).join("");
+    return `<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="font-weight:600;color:var(--vd);font-size:14px">${esc(gr.proveedor)} <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">#${esc(gr.folio)}</span></div>
+      <div style="font-size:11px;color:var(--txt2);margin:2px 0 8px">${esc(gr.motivo)}</div>
+      ${filas}
+    </div>`;
+  }).join("");
+}
+function borrarGastoDuplicado(id){
+  if(!confirm("¿Eliminar este registro? Se resta de todos los reportes y se sincroniza a todos los dispositivos.")) return;
+  state.weeks.forEach(w => { w.gastos = (w.gastos||[]).filter(g => String(g.id) !== String(id)); });
+  save();
+  renderRevisionDuplicados();
+  if(document.getElementById("gastosBody")) renderGastos();
+  if(document.getElementById("rBodyDetalle")) renderReportes();
+  if(document.getElementById("reporteContent")) renderReporteActual();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
