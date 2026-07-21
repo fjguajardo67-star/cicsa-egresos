@@ -46,6 +46,7 @@ const FUNCS = [
   "allGastosAllWeeks", "todosLosCortes", "todosLosRetiros",
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
+  "fmt", "duplicadosSospechosos",
 ];
 
 const sandbox = { state: { weeks: [], activeWeek: null, budget: {} }, console };
@@ -231,6 +232,54 @@ t("marca aliases de otro producto (Queso americano bajo Queso crema), respeta le
   assert.ok(!q.sospechosos.includes("Queso crema BC 1.36kg"), "no debe marcar alias legítimo con palabras compartidas");
   assert.ok(!r.find(x => x.id === "2"), "queso panela sin sospechosos");
   assert.ok(!r.find(x => x.id === "3"), "sinónimo sin palabra en común (Alitas/Alas) no se marca");
+});
+
+console.log("\n== duplicados sospechosos (facturas contadas dos veces) ==");
+t("padre 'Dividida' + categorías sueltas que suman lo mismo → sugiere borrar el padre", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "p1", proveedor: "WALMART", factura: "ICAJG465599", fecha: "2026-07-01", categoria: "Dividida", importe: 2817.99 },
+    { id: "h1", proveedor: "WALMART", factura: "ICAJG465599", fecha: "2026-07-01", categoria: "Gastos Generales", importe: 64.00 },
+    { id: "h2", proveedor: "WALMART", factura: "ICAJG465599", fecha: "2026-07-01", categoria: "Lácteos / Cremería", importe: 170.00 },
+    { id: "h3", proveedor: "WALMART", factura: "ICAJG465599", fecha: "2026-07-01", categoria: "Cárnicos", importe: 1733.97 },
+    { id: "h4", proveedor: "WALMART", factura: "ICAJG465599", fecha: "2026-07-01", categoria: "Limpieza / Plásticos", importe: 399.01 },
+    { id: "h5", proveedor: "WALMART", factura: "ICAJG465599", fecha: "2026-07-01", categoria: "Abarrotes / Secos", importe: 220.00 },
+    { id: "h6", proveedor: "WALMART", factura: "ICAJG465599", fecha: "2026-07-01", categoria: "Frutas y Verduras", importe: 230.01 },
+  ]);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r[0].sugeridos, ["p1"], "sin _partidas en el padre, el desglose vive en las sueltas → borrar padre");
+  close(r[0].exceso, 2817.99);
+});
+t("padre nuevo CON _partidas + una categoría suelta igual → sugiere borrar la suelta", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "p1", proveedor: "WALMART", factura: "IBAGY272028", fecha: "2026-07-01", categoria: "Dividida", importe: 637.00,
+      _dividida: true, _partidas: [{ categoria: "Abarrotes / Secos", importe: 400 }, { categoria: "Limpieza / Plásticos", importe: 237 }] },
+    { id: "h1", proveedor: "WALMART", factura: "IBAGY272028", fecha: "2026-07-01", categoria: "Abarrotes / Secos", importe: 637.00 },
+  ]);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r[0].sugeridos, ["h1"], "el padre trae el desglose → se conserva; se borra la captura plana");
+});
+t("captura repetida exacta (mismo folio, fecha e importe) → sugiere borrar la más reciente", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "1001", proveedor: "JOSE LEONARDO DURAN PARRA", factura: "F-1426", fecha: "2026-07-01", categoria: "Hielo", importe: 17250.00 },
+    { id: "1002", proveedor: "JOSE LEONARDO DURAN PARRA", factura: "F-1426", fecha: "2026-07-01", categoria: "Hielo", importe: 17250.00 },
+  ]);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r[0].sugeridos, ["1002"]);
+  close(r[0].exceso, 17250.00);
+});
+t("mismo folio con importes distintos que no cuadran (partidas viejas sin padre) → NO se marca", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "a", proveedor: "WALMART", factura: "ICAJG465231", fecha: "2026-06-30", categoria: "Abarrotes / Secos", importe: 1200.00 },
+    { id: "b", proveedor: "WALMART", factura: "ICAJG465231", fecha: "2026-06-30", categoria: "Frutas y Verduras", importe: 601.00 },
+  ]);
+  assert.equal(r.length, 0, "categorías sueltas legítimas del formato viejo no son duplicado");
+});
+t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "a", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
+    { id: "b", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
+  ]);
+  assert.equal(r.length, 0);
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
