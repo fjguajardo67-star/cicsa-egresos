@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-21-c</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-21-d</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -483,11 +483,22 @@ tr:hover td { background:var(--claro); }
 <div class="modal-overlay" id="weekModal">
   <div class="modal">
     <h3>📅 Seleccionar semana</h3>
-    <div style="margin-bottom:14px">
-      <input id="newWeekInput" type="text" placeholder="Vacío = rango de esta semana (lun–dom)"
-        style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;
-        font-size:14px;margin-bottom:8px;box-sizing:border-box;font-family:'DM Sans',sans-serif">
-      <button class="btn btn-green" onclick="createNewWeek()" style="width:100%;justify-content:center">➕ Nueva semana</button>
+    <div style="margin-bottom:14px;padding:12px;border:1.5px solid var(--border);border-radius:10px;background:var(--claro)">
+      <div style="font-size:12px;font-weight:600;color:var(--vd);margin-bottom:8px">➕ Nueva semana — elige el rango en el calendario</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <div style="flex:1;min-width:130px">
+          <label style="font-size:11px;color:var(--txt2);display:block;margin-bottom:2px">Inicio</label>
+          <input type="date" id="newWeekIni" onchange="previewNewWeek()" style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div style="flex:1;min-width:130px">
+          <label style="font-size:11px;color:var(--txt2);display:block;margin-bottom:2px">Fin</label>
+          <input type="date" id="newWeekFin" onchange="previewNewWeek()" style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box">
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--txt2);margin-bottom:8px">Nombre: <strong id="newWeekPreview" style="color:var(--vd)">—</strong></div>
+      <input id="newWeekInput" type="text" placeholder="Nombre opcional (por defecto se genera del rango)"
+        style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;margin-bottom:8px;box-sizing:border-box;font-family:'DM Sans',sans-serif">
+      <button class="btn btn-green" onclick="createNewWeek()" style="width:100%;justify-content:center">➕ Crear semana</button>
     </div>
     <div class="week-list" id="weekList"></div>
     <div class="btn-row" style="margin-top:16px">
@@ -1888,6 +1899,8 @@ function gastosDelPeriodoSP(){
   const p=getPeriodoSP();
   if(p.modo==="rango") return allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=p.ini && g.fecha<=p.fin);
   const wk=state.weeks.find(w=>w.id===p.weekId);
+  // Semana con rango → por fecha real (cuadra con Auditoría). Semana vieja sin rango → su bolsa.
+  if(wk && wk.ini && wk.fin) return allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=wk.ini && g.fecha<=wk.fin);
   return (wk?.gastos)||[];
 }
 function totalesPorCatPeriodo(){
@@ -1940,22 +1953,41 @@ function onCambioPeriodoSP(containerId, onChange){
   }
   if(typeof window[onChange]==="function") window[onChange]();
 }
+// Nombre legible de un rango arbitrario ini..fin (YYYY-MM-DD) — ej. "13 al 19 jul 2026".
+function labelDeRango(ini, fin){
+  const a=new Date(ini+"T12:00:00"), b=new Date(fin+"T12:00:00");
+  const dd=x=>String(x.getDate()).padStart(2,"0");
+  const mes=x=>x.toLocaleDateString("es-MX",{month:"short"}).replace(".","");
+  const mismo=a.getMonth()===b.getMonth() && a.getFullYear()===b.getFullYear();
+  return mismo ? `${dd(a)} al ${dd(b)} ${mes(b)} ${b.getFullYear()}`
+              : `${dd(a)} ${mes(a)} al ${dd(b)} ${mes(b)} ${b.getFullYear()}`;
+}
+function previewNewWeek(){
+  const ini=document.getElementById("newWeekIni")?.value, fin=document.getElementById("newWeekFin")?.value;
+  const el=document.getElementById("newWeekPreview");
+  if(el) el.textContent = (ini&&fin&&ini<=fin) ? labelDeRango(ini,fin) : "—";
+}
+// Una semana ahora es un RANGO DE FECHAS con nombre. El reporte de esa semana se calcula por la
+// fecha real de cada factura dentro del rango (no por en qué bolsa se capturó), así que el total
+// del listado cuadra con Auditoría/Seguimiento. El arreglo gastos[] sigue siendo dónde caen las
+// capturas nuevas, pero ya no define el reporte.
 function createNewWeek(silent=false) {
-  const today=new Date();
-  const defaultLabel=rangoSemanaLabel(today);
-  let label;
+  let ini, fin;
   if(silent){
-    label=defaultLabel;
+    const s=semanaCalendario(new Date()); ini=s.ini; fin=s.fin;
   } else {
-    const inp=document.getElementById("newWeekInput");
-    label=(inp&&inp.value.trim()) ? inp.value.trim() : defaultLabel;
-    if(inp) inp.value="";
+    ini=document.getElementById("newWeekIni")?.value;
+    fin=document.getElementById("newWeekFin")?.value;
+    if(!ini || !fin){ const s=semanaCalendario(new Date()); ini=ini||s.ini; fin=fin||s.fin; }
+    if(ini>fin){ alert("La fecha de inicio no puede ser posterior a la fin."); return; }
   }
+  const inp=silent?null:document.getElementById("newWeekInput");
+  const label=(inp&&inp.value.trim()) ? inp.value.trim() : labelDeRango(ini,fin);
   const id=Date.now().toString();
-  state.weeks.push({id,label,gastos:[]});
+  state.weeks.push({id,label,ini,fin,gastos:[]});
   state.activeWeek=id;
   save(); renderAll();
-  if(!silent) closeWeekModal();
+  if(!silent){ if(inp) inp.value=""; closeWeekModal(); }
 }
 
 function switchWeek(id){ state.activeWeek=id; save(); renderAll(); closeWeekModal(); }
@@ -1973,36 +2005,60 @@ function renombrarSemana(id){
   if(id===state.activeWeek) renderAll();
 }
 
-// Solo permite borrar semanas SIN gastos — evita perder datos por accidente. Existen porque
-// un bug de carga (ya corregido) creaba semanas vacías de más en ciertos casos de recarga.
-function eliminarSemanaVacia(id){
+// Quita la ENTRADA del listado de semanas — NO borra datos. Los gastos/cortes/retiros que
+// tuviera esa bolsa se reubican en la semana más reciente que quede, así siguen en el acervo y
+// se pueden revisar por rango de fechas (Auditoría/Caja/Seguimiento en modo rango). Sirve para
+// limpiar semanas duplicadas o que se crearon solo para consultar.
+function eliminarSemana(id){
   const w=state.weeks.find(x=>x.id===id);
   if(!w) return;
-  if((w.gastos||[]).length>0){ alert("Esta semana tiene gastos — no se puede eliminar."); return; }
-  if(!confirm(`¿Eliminar la semana vacía "${w.label}"?`)) return;
-  state.weeks=state.weeks.filter(x=>x.id!==id);
-  if(state.activeWeek===id){
-    state.activeWeek = state.weeks.length>0 ? state.weeks[state.weeks.length-1].id : null;
-    if(!state.activeWeek){ createNewWeek(true); return; }
+  if(state.weeks.length<=1){ alert("Debe quedar al menos una semana en el listado."); return; }
+  const destino=state.weeks.filter(x=>x.id!==id).slice(-1)[0];
+  const n=(w.gastos||[]).length+(w.cortes||[]).length+(w.retiros||[]).length;
+  const msg = n>0
+    ? `Se quita "${w.label}" del listado.\n\nSus ${n} registro(s) NO se borran — se conservan y siguen disponibles por rango de fechas. Se reubican en "${destino.label}".\n\n¿Continuar?`
+    : `¿Quitar la semana "${w.label}" del listado?`;
+  if(!confirm(msg)) return;
+  if(n>0){
+    destino.gastos=(destino.gastos||[]).concat(w.gastos||[]);
+    destino.cortes=(destino.cortes||[]).concat(w.cortes||[]);
+    destino.retiros=(destino.retiros||[]).concat(w.retiros||[]);
   }
-  save();
-  openWeekModal();
-  renderAll();
+  state.weeks=state.weeks.filter(x=>x.id!==id);
+  if(state.activeWeek===id) state.activeWeek=destino.id;
+  // Si el periodo compartido apuntaba a la semana borrada, cae a la nueva activa.
+  const per=getPeriodoSPRaw(); if(per.weekId===id) setPeriodoSP({weekId:state.activeWeek});
+  save(); openWeekModal(); renderAll();
+}
+
+// Total de una semana: por FECHA real dentro de su rango si lo tiene (cuadra con Auditoría);
+// las semanas viejas sin rango caen al total de su bolsa de captura (comportamiento legado).
+function totalSemana(w){
+  if(w.ini && w.fin) return allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=w.ini && g.fecha<=w.fin).reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+  return (w.gastos||[]).reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
 }
 
 function openWeekModal() {
+  // Precarga el rango de "nueva semana" con la semana natural de hoy (un clic y listo).
+  const s=semanaCalendario(new Date());
+  const iniEl=document.getElementById("newWeekIni"), finEl=document.getElementById("newWeekFin");
+  if(iniEl && !iniEl.value) iniEl.value=s.ini;
+  if(finEl && !finEl.value) finEl.value=s.fin;
+  previewNewWeek();
   const list=document.getElementById("weekList");
   list.innerHTML="";
+  const puedeBorrar=state.weeks.length>1;
   [...state.weeks].reverse().forEach(w=>{
     const div=document.createElement("div");
     div.className="week-item"+(w.id===state.activeWeek?" active":"");
-    const total=(w.gastos||[]).reduce((s,g)=>s+g.importe,0);
+    const total=totalSemana(w);
     const safeId=w.id.replace(/'/g,"\\'");
+    const sub=(w.ini&&w.fin) ? "" : ` <span style="font-size:10px;color:#B8860B" title="Semana sin rango de fechas — su total sale de la bolsa de captura, no por fecha">⚠ sin rango</span>`;
     div.innerHTML=`
-      <span onclick="switchWeek('${safeId}')" style="cursor:pointer;flex:1">${w.label}</span>
+      <span onclick="switchWeek('${safeId}')" style="cursor:pointer;flex:1">${esc(w.label)}${sub}</span>
       <span style="font-family:'JetBrains Mono',monospace;font-size:12px;margin-right:8px">${fmt(total)}</span>
       <button style="border:none;background:transparent;cursor:pointer;font-size:13px;padding:2px 4px" onclick="event.stopPropagation();renombrarSemana('${safeId}')" title="Renombrar semana">✏️</button>
-      ${(w.gastos||[]).length===0?`<button style="border:none;background:transparent;cursor:pointer;font-size:13px;padding:2px 4px" onclick="event.stopPropagation();eliminarSemanaVacia('${safeId}')" title="Eliminar semana vacía">🗑️</button>`:""}
+      ${puedeBorrar?`<button style="border:none;background:transparent;cursor:pointer;font-size:13px;padding:2px 4px" onclick="event.stopPropagation();eliminarSemana('${safeId}')" title="Quitar del listado (los datos se conservan)">🗑️</button>`:""}
     `;
     list.appendChild(div);
   });
