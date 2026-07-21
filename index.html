@@ -2956,7 +2956,10 @@ function renderReporteRango(ini, fin, label){
   if(!ini||!fin){ const p=getPeriodoSP(); ini=p.ini; fin=p.fin; label=label||p.label; }
   const gastos=allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=ini&&g.fecha<=fin);
   const totalGlobal=gastos.reduce((s,g)=>s+g.importe,0), byCat={};
-  gastos.forEach(g=>{ if(!byCat[g.categoria]) byCat[g.categoria]=[]; byCat[g.categoria].push(g); });
+  // Desglosa las facturas divididas en sus partidas reales (igual que Auditoría y Presupuesto),
+  // para que su parte llegue a cada categoría en vez de amontonarse en una categoría "Dividida".
+  // El total no cambia: las partidas suman el importe de la factura.
+  partidasExpandidas(gastos).forEach(g=>{ if(!byCat[g.categoria]) byCat[g.categoria]=[]; byCat[g.categoria].push(g); });
   const budget=state.budget||{}, allCats=[...new Set([...Object.keys(byCat),...Object.keys(DEFAULT_BUDGET)])];
   const totalPres=allCats.reduce((s,c)=>s+(budget[c]||DEFAULT_BUDGET[c]||0),0);
   const sobre=allCats.filter(c=>(byCat[c]||[]).reduce((s,g)=>s+g.importe,0)>(budget[c]||DEFAULT_BUDGET[c]||0));
