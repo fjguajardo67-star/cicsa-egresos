@@ -1352,8 +1352,16 @@ tr:hover td { background:var(--claro); }
 <div class="modal-overlay" id="ajusteSaldoModal">
   <div class="modal" style="max-width:640px">
     <h3>🔒 Ajustar saldo inicial de caja</h3>
-    <p style="font-size:13px;color:var(--txt2);margin:4px 0 16px">Cuenta el efectivo real en caja por denominación. El total se fija como saldo inicial de la <strong>semana activa</strong> y reemplaza el arrastre calculado. Se sincroniza a todos los dispositivos.</p>
-    <div id="conteoDenoms" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px"></div>
+    <p style="font-size:13px;color:var(--txt2);margin:4px 0 14px">El monto se fija como saldo inicial de la <strong>semana activa</strong> y reemplaza el arrastre calculado. Se sincroniza a todos los dispositivos.</p>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <button type="button" id="ajModoDirectoBtn" onclick="setAjusteModo('directo')" class="btn btn-gold" style="flex:1;padding:8px">💵 Monto directo</button>
+      <button type="button" id="ajModoConteoBtn" onclick="setAjusteModo('conteo')" class="btn btn-light" style="flex:1;padding:8px">🧮 Contar por denominación</button>
+    </div>
+    <div id="ajusteDirectoBox" style="margin-bottom:14px">
+      <label class="form-label">Saldo inicial en caja ($)</label>
+      <input type="number" min="0" step="0.01" id="ajusteMontoDirecto" class="form-input" placeholder="Ej: 34900.00" oninput="actualizarConteoCaja()">
+    </div>
+    <div id="conteoDenoms" style="display:none;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px"></div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
       <div style="background:var(--claro);border-radius:10px;padding:12px;text-align:center">
         <div style="font-size:11px;color:var(--txt2)">Total conteo</div>
@@ -4880,11 +4888,33 @@ async function abrirAjusteSaldo(){
       <label class="form-label" style="font-size:11px">Monedas $</label>
       <input type="number" min="0" step="0.01" id="den_monedas" class="form-input" style="padding:6px 8px" value="${cont.monedas||""}" placeholder="0.00" oninput="actualizarConteoCaja()">
     </div>`;
-  actualizarConteoCaja();
+  // ¿El ajuste previo se hizo por denominación? Si sí, abre en modo conteo; si fue monto
+  // directo (o no hay previo), abre en modo directo con el valor precargado.
+  const tieneConteo = CAJA_DENOMS.some(d=>(parseInt(cont[d])||0)>0) || (parseFloat(cont.monedas)||0)>0;
+  document.getElementById("ajusteMontoDirecto").value =
+    (prev && typeof prev.valor === "number" && !tieneConteo) ? prev.valor : "";
+  setAjusteModo(tieneConteo ? "conteo" : "directo");
   document.getElementById("ajusteSaldoModal").classList.add("open");
+}
+let _ajusteModo = "directo";
+function setAjusteModo(m){
+  _ajusteModo = m;
+  const dirBox = document.getElementById("ajusteDirectoBox");
+  const conBox = document.getElementById("conteoDenoms");
+  const dirBtn = document.getElementById("ajModoDirectoBtn");
+  const conBtn = document.getElementById("ajModoConteoBtn");
+  const esDir = m === "directo";
+  dirBox.style.display = esDir ? "block" : "none";
+  conBox.style.display = esDir ? "none" : "grid";
+  dirBtn.className = "btn " + (esDir ? "btn-gold" : "btn-light"); dirBtn.style.flex = "1"; dirBtn.style.padding = "8px";
+  conBtn.className = "btn " + (esDir ? "btn-light" : "btn-gold"); conBtn.style.flex = "1"; conBtn.style.padding = "8px";
+  actualizarConteoCaja();
 }
 function cerrarAjusteSaldo(){ document.getElementById("ajusteSaldoModal").classList.remove("open"); }
 function totalConteoCaja(){
+  if(_ajusteModo === "directo"){
+    return parseFloat(document.getElementById("ajusteMontoDirecto")?.value)||0;
+  }
   let t = 0;
   CAJA_DENOMS.forEach(d=>{ t += d * (parseInt(document.getElementById("den_"+d)?.value)||0); });
   t += parseFloat(document.getElementById("den_monedas")?.value)||0;
@@ -4903,9 +4933,13 @@ function actualizarConteoCaja(){
 function fijarSaldoInicialCaja(){
   if(currentRole !== "admin"){ alert("🔒 Solo un administrador."); return; }
   const total = totalConteoCaja();
+  // En modo directo no guardamos desglose por billete — solo el monto tecleado.
   const conteo = {};
-  CAJA_DENOMS.forEach(d=>{ conteo[d] = parseInt(document.getElementById("den_"+d)?.value)||0; });
-  conteo.monedas = parseFloat(document.getElementById("den_monedas")?.value)||0;
+  if(_ajusteModo === "conteo"){
+    CAJA_DENOMS.forEach(d=>{ conteo[d] = parseInt(document.getElementById("den_"+d)?.value)||0; });
+    conteo.monedas = parseFloat(document.getElementById("den_monedas")?.value)||0;
+  }
+  if(total <= 0){ alert("El saldo inicial debe ser mayor a $0. Captura el monto o el conteo."); return; }
   if(!confirm(`¿Fijar el saldo inicial de caja en ${fmt(total)} para la semana activa?\n\nReemplaza el saldo calculado y se sincroniza a todos los dispositivos.`)) return;
   if(!state.cajaSaldoInicial) state.cajaSaldoInicial = {};
   state.cajaSaldoInicial[state.activeWeek] = {
@@ -5178,15 +5212,13 @@ function renderCaja() {
   const totalGastos = gastosCaja.reduce((s, g) => s + (parseFloat(g.importe) || 0), 0);
   const totalRetiros = retiros.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
   // Base del saldo del periodo:
-  //  · Con saldo inicial capturado (cualquier modo) → parte de ESE número real que tú das,
-  //    ignorando el arrastre/déficit histórico.
-  //  · "Semana activa" sin capturar → arrastra el saldo acumulado de semanas anteriores.
-  //  · "Rango" sin capturar → parte de 0 (solo movimientos del rango); el déficit histórico
-  //    se muestra aparte como advertencia y NO se suma.
-  const baseInicial = usaManual ? saldoInicialManual : (esRango ? 0 : saldoInicial);
+  // Sin saldo inicial fijado NO arrastramos el histórico al total del periodo (ni en rango ni
+  // en semana): se muestra aparte como "pendiente de fijar". Solo un saldo inicial capturado
+  // entra al cálculo. Así el total refleja el periodo actual y no mezcla montos viejos (fase de
+  // pruebas / semanas que nada tienen que ver con este corte).
+  const baseInicial = usaManual ? saldoInicialManual : 0;
   const saldoFinal = baseInicial + totalCortes - totalGastos - totalRetiros;
   const etiquetaRecaudado = esRango ? "Recaudado en el periodo" : "Recaudado esta semana";
-  const etiquetaArrastre = esRango ? "" : "✅ Se arrastra a la próxima semana";
 
   // Botón de ajuste (solo admin, solo modo semana activa).
   const btnAjuste = (esAdmin && !esRango)
@@ -5202,19 +5234,37 @@ function renderCaja() {
           <div style="font-size:10px;color:var(--txt2);margin-top:4px">Sistema calculaba: ${fmt(saldoInicial)}</div>
           ${btnAjuste?`<div style="margin-top:6px">${btnAjuste}</div>`:""}
         </div>`
-    : `<div style="background:${esRango?"#FFF8E1":"var(--claro)"};border-radius:12px;padding:16px;text-align:center${esRango?";border:1.5px dashed #E6A700":""}">
-          <div style="font-size:12px;color:var(--txt2);margin-bottom:4px">${esRango?"⚠ Saldo/déficit anterior":"Saldo inicial"}</div>
-          <div style="font-size:20px;font-weight:700;color:${esRango?"#B8860B":"var(--vd)"}">${fmt(saldoInicial)}</div>
-          <div style="font-size:11px;color:var(--txt2)">${esRango?"NO incluido en el saldo del periodo":"de semanas anteriores"}</div>
-          ${saldoInicialDetalle && saldoInicialDetalle.fechaMin
-            ? `<div style="font-size:10px;color:var(--txt2);margin-top:4px">${saldoInicialDetalle.n} movimiento(s)<br>${fmtDate(saldoInicialDetalle.fechaMin)} – ${fmtDate(saldoInicialDetalle.fechaMax)}</div>`
-            : `<div style="font-size:10px;color:var(--txt2);margin-top:4px">Sin movimientos anteriores</div>`}
-          <div style="display:flex;gap:4px;justify-content:center;margin-top:6px;flex-wrap:wrap">
-            ${saldoInicialDetalle && saldoInicialDetalle.fechaMin ? `<button onclick="revisarSaldoInicial()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">🔍 Cortes/retiros</button>
-            <button onclick="revisarGastosEnAuditoria()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">📈 Gastos en Auditoría</button>`:""}
-            ${btnAjuste}
-          </div>
-        </div>`;
+    : (() => {
+        // Detalle histórico + botones de auditoría, compartido por ambos casos pero colapsado
+        // en un <details> para que las fechas/montos viejos no dominen la hoja.
+        const drill = saldoInicialDetalle && saldoInicialDetalle.fechaMin
+          ? `<div style="font-size:10px;color:var(--txt2);margin-top:4px">${saldoInicialDetalle.n} movimiento(s) · ${fmtDate(saldoInicialDetalle.fechaMin)} – ${fmtDate(saldoInicialDetalle.fechaMax)}</div>
+             <div style="display:flex;gap:4px;justify-content:center;margin-top:6px;flex-wrap:wrap">
+               <button onclick="revisarSaldoInicial()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">🔍 Cortes/retiros</button>
+               <button onclick="revisarGastosEnAuditoria()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">📈 Gastos en Auditoría</button>
+             </div>`
+          : `<div style="font-size:10px;color:var(--txt2);margin-top:4px">Sin movimientos anteriores</div>`;
+        if(esRango){
+          return `<div style="background:#FFF8E1;border-radius:12px;padding:16px;text-align:center;border:1.5px dashed #E6A700">
+              <div style="font-size:12px;color:var(--txt2);margin-bottom:4px">⚠ Saldo/déficit anterior</div>
+              <div style="font-size:20px;font-weight:700;color:#B8860B">${fmt(saldoInicial)}</div>
+              <div style="font-size:11px;color:var(--txt2)">NO incluido en el saldo del periodo</div>
+              ${drill}
+            </div>`;
+        }
+        // Semana activa sin saldo inicial fijado → estado "pendiente de fijar".
+        return `<div style="background:#FFF8E1;border-radius:12px;padding:16px;text-align:center;border:1.5px dashed #E6A700">
+            <div style="font-size:12px;color:var(--txt2);margin-bottom:6px">⚠ Saldo inicial sin fijar</div>
+            <div style="font-size:12px;color:#B8860B;margin-bottom:10px;line-height:1.4">El total muestra solo los movimientos de esta semana. Fija el efectivo con el que abre el periodo.</div>
+            ${esAdmin
+              ? `<button onclick="abrirAjusteSaldo()" style="padding:8px 14px;background:var(--do);border:none;color:white;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">🔒 Fijar saldo inicial</button>`
+              : `<div style="font-size:10px;color:var(--txt2)">Un administrador debe fijarlo.</div>`}
+            <details style="margin-top:10px;text-align:left">
+              <summary style="font-size:10px;color:var(--txt2);cursor:pointer;text-align:center">Ver arrastre histórico (${fmt(saldoInicial)})</summary>
+              <div style="text-align:center;margin-top:4px">${drill}</div>
+            </details>
+          </div>`;
+      })();
 
   // Render conciliación
   const conc = document.getElementById("cajaConciliacion");
@@ -5258,7 +5308,7 @@ function renderCaja() {
       <div style="background:${saldoFinal >= 0 ? "var(--claro)" : "#FFF5F5"};border-radius:12px;padding:18px;text-align:center;border:2px solid ${saldoFinal >= 0 ? "var(--vd)" : "var(--red)"};margin-bottom:16px">
         <div style="font-size:13px;color:var(--txt2);margin-bottom:4px">${usaManual?"Saldo final en caja (con saldo inicial ajustado)":(esRango?"Saldo del periodo (solo movimientos del rango)":"Saldo final del periodo")}</div>
         <div style="font-size:28px;font-weight:700;color:${saldoFinal >= 0 ? "var(--vd)" : "var(--red)"}">${fmt(saldoFinal)}</div>
-        <div style="font-size:11px;color:var(--txt2)">${usaManual ? "Saldo inicial ajustado + recaudado − gastos − retiros" : (esRango ? "No incluye el saldo/déficit anterior" : (saldoFinal < 0 ? "⚠ Déficit — revisar" : etiquetaArrastre))}</div>
+        <div style="font-size:11px;color:var(--txt2)">${usaManual ? "Saldo inicial ajustado + recaudado − gastos − retiros" : (esRango ? "No incluye el saldo/déficit anterior" : "Solo movimientos de esta semana — fija el saldo inicial para incluir el efectivo de apertura")}</div>
       </div>
       <h4 style="margin:0 0 8px;color:var(--vd);font-size:14px">Desglose de gastos pagados de caja:</h4>
       ${gastosHTML}
@@ -5358,9 +5408,9 @@ function exportarCajaPDF(){
   const totalCortes=cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
   const totalGastos=gastosCaja.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
   const totalRetiros=retiros.reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
-  // Consistente con renderCaja: saldo capturado (cualquier modo) parte de ese número; Rango
-  // sin capturar parte de 0; Semana sin capturar arrastra el saldo anterior.
-  const baseInicial = usaManual ? datos.saldoInicialManual : (esRango ? 0 : saldoInicial);
+  // Consistente con renderCaja: solo un saldo inicial capturado entra al cálculo; sin capturar
+  // (rango o semana) parte de 0 y el saldo anterior se muestra aparte, no incluido.
+  const baseInicial = usaManual ? datos.saldoInicialManual : 0;
   const saldoFinal = baseInicial + totalCortes - totalGastos - totalRetiros;
 
   const doc=new jsPDF({unit:"mm",format:"letter"});
@@ -5374,7 +5424,7 @@ function exportarCajaPDF(){
   doc.text(`Periodo: ${periodoLabel||""} | Generado: ${new Date().toLocaleDateString("es-MX")}`,MAR,23);
   Y=40;
 
-  const cards=[[usaManual?"Saldo inicial en caja":(esRango?"Saldo anterior (no incluido)":"Saldo inicial"),fmt(usaManual?datos.saldoInicialManual:saldoInicial)],["Recaudado",fmt(totalCortes)],["Gastado efectivo",fmt(totalGastos)],["Retiros",fmt(totalRetiros)]];
+  const cards=[[usaManual?"Saldo inicial en caja":"Saldo anterior (no incluido)",fmt(usaManual?datos.saldoInicialManual:saldoInicial)],["Recaudado",fmt(totalCortes)],["Gastado efectivo",fmt(totalGastos)],["Retiros",fmt(totalRetiros)]];
   const cw=W/4;
   cards.forEach(([lbl,val],i)=>{
     const x=MAR+i*cw; doc.setFillColor(...CL); doc.roundedRect(x,Y,cw-3,18,2,2,"F");
@@ -5383,7 +5433,7 @@ function exportarCajaPDF(){
   });
   Y+=25;
   doc.setFillColor(...(saldoFinal>=0?ME:RED)); doc.roundedRect(MAR,Y,W,16,2,2,"F");
-  doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont("helvetica","normal"); doc.text(usaManual?"SALDO FINAL EN CAJA":(esRango?"SALDO DEL PERIODO (SIN SALDO ANTERIOR)":"SALDO FINAL DEL PERIODO"),MAR+4,Y+6);
+  doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont("helvetica","normal"); doc.text(usaManual?"SALDO FINAL EN CAJA":"SALDO DEL PERIODO (SIN SALDO ANTERIOR)",MAR+4,Y+6);
   doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.text(fmt(saldoFinal),MAR+4,Y+13);
   Y+=24;
 
