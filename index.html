@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-21-a</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-21-b</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1350,7 +1350,7 @@ tr:hover td { background:var(--claro); }
 <div class="modal-overlay" id="ajusteSaldoModal">
   <div class="modal" style="max-width:640px">
     <h3>🔒 Ajustar saldo inicial de caja</h3>
-    <p style="font-size:13px;color:var(--txt2);margin:4px 0 14px">El monto se fija como saldo inicial de la <strong>semana activa</strong> y reemplaza el arrastre calculado. Se sincroniza a todos los dispositivos.</p>
+    <p style="font-size:13px;color:var(--txt2);margin:4px 0 14px">El monto se fija como saldo inicial del <strong>periodo consultado</strong> (por su fecha de inicio). Se sincroniza a todos los dispositivos.</p>
     <div style="display:flex;gap:8px;margin-bottom:14px">
       <button type="button" id="ajModoDirectoBtn" onclick="setAjusteModo('directo')" class="btn btn-gold" style="flex:1;padding:8px">💵 Monto directo</button>
       <button type="button" id="ajModoConteoBtn" onclick="setAjusteModo('conteo')" class="btn btn-light" style="flex:1;padding:8px">🧮 Contar por denominación</button>
@@ -1427,30 +1427,23 @@ tr:hover td { background:var(--claro); }
     <div class="status" id="retiroStatus"></div>
   </div>
 
-  <!-- Consultar por periodo -->
+  <!-- Periodo de trabajo -->
   <div class="card" style="margin-bottom:20px">
-    <h3 style="color:var(--vd);margin:0 0 16px">🔍 Consultar por periodo</h3>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:12px;align-items:end;flex-wrap:wrap">
+    <h3 style="color:var(--vd);margin:0 0 16px">🔍 Periodo</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end;flex-wrap:wrap">
       <div>
-        <label class="form-label">Modo de vista</label>
-        <select id="cajaModoVista" class="form-input" onchange="toggleCajaModoVista()">
-          <option value="semana">Semana activa</option>
-          <option value="rango">Rango de fechas</option>
-        </select>
-      </div>
-      <div id="cajaRangoIniWrap" style="display:none">
         <label class="form-label">Fecha inicio</label>
         <input type="date" id="cajaRangoIni" class="form-input" onchange="onCajaRangoChange()">
       </div>
-      <div id="cajaRangoFinWrap" style="display:none">
+      <div>
         <label class="form-label">Fecha fin</label>
         <input type="date" id="cajaRangoFin" class="form-input" onchange="onCajaRangoChange()">
       </div>
-      <button class="btn btn-light" id="cajaBtnConsultar" style="display:none;height:42px" onclick="renderCaja()">🔍 Consultar</button>
+      <button class="btn btn-light" id="cajaBtnConsultar" style="height:42px" onclick="renderCaja()">🔍 Consultar</button>
     </div>
   </div>
 
-  <!-- Resumen del periodo -->
+  <!-- Conciliación del periodo: saldo inicial → ingresos → egresos → saldo -->
   <div class="card" style="margin-bottom:20px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
       <h3 style="color:var(--vd);margin:0">📊 Conciliación <span id="cajaPeriodoLabel" style="font-weight:400;color:var(--txt2);font-size:14px"></span></h3>
@@ -1458,22 +1451,6 @@ tr:hover td { background:var(--claro); }
     </div>
     <div id="cajaConciliacion">
       <p style="color:var(--txt2);font-size:14px">Cargando...</p>
-    </div>
-  </div>
-
-  <!-- Historial de cortes -->
-  <div class="card" style="margin-bottom:20px">
-    <h3 style="color:var(--vd);margin:0 0 16px">📋 Cortes registrados</h3>
-    <div id="cajaHistorial">
-      <p style="color:var(--txt2);font-size:14px">No hay cortes registrados en este periodo.</p>
-    </div>
-  </div>
-
-  <!-- Historial de retiros -->
-  <div class="card">
-    <h3 style="color:var(--vd);margin:0 0 16px">📋 Retiros registrados</h3>
-    <div id="retiroHistorial">
-      <p style="color:var(--txt2);font-size:14px">No hay retiros registrados en este periodo.</p>
     </div>
   </div>
 </div>
@@ -1874,20 +1851,28 @@ function semanaCalendario(fecha){
   return { ini:fechaLocalStr(lunes), fin:fechaLocalStr(domingo), label:rangoSemanaLabel(fecha) };
 }
 function getPeriodoSPRaw(){ try{ return JSON.parse(localStorage.getItem(PERIODO_SP_KEY)||"{}"); }catch(e){ return {}; } }
+// Modos: "Semana guardada" (default) = una semana de trabajo del negocio. La operación va una
+// semana atrás del calendario (mercancía → remisión → factura → pago), así que la semana del
+// calendario no sirve como default; el periodo real es la semana guardada que se está
+// trabajando. Al empezar periodo nuevo se crea semana nueva (modal "Seleccionar semana").
+// "Rango de fechas" = ventana por fecha real de factura, para revisiones.
 function getPeriodoSP(){
   const raw=getPeriodoSPRaw();
   if(raw.modo==="rango" && raw.ini && raw.fin){
     return { modo:"rango", ini:raw.ini, fin:raw.fin, label:`${fmtDate(raw.ini)} al ${fmtDate(raw.fin)}` };
   }
-  const s=semanaCalendario(new Date());              // default: esta semana, siempre al día
-  return { modo:"semana", ini:s.ini, fin:s.fin, label:s.label };
+  // Default: la semana guardada elegida (o la activa de captura si no se ha elegido ninguna).
+  const wk = state.weeks.find(w=>w.id===raw.weekId) || getActiveWeek();
+  return { modo:"semana", weekId: wk?.id||null, label: wk?.label||"Sin semana" };
 }
 function setPeriodoSP(patch){
   try{ localStorage.setItem(PERIODO_SP_KEY, JSON.stringify({...getPeriodoSPRaw(), ...patch})); }catch(e){}
 }
 function gastosDelPeriodoSP(){
   const p=getPeriodoSP();
-  return allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=p.ini && g.fecha<=p.fin);
+  if(p.modo==="rango") return allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=p.ini && g.fecha<=p.fin);
+  const wk=state.weeks.find(w=>w.id===p.weekId);
+  return (wk?.gastos)||[];
 }
 function totalesPorCatPeriodo(){
   const t={};
@@ -1899,37 +1884,43 @@ function totalesPorCatPeriodo(){
 // alternan la visibilidad del rango y re-renderizan (sin repintar, para no perder el foco).
 function pintarSelectorPeriodoSP(containerId, onChange){
   const cont=document.getElementById(containerId); if(!cont) return;
-  const p=getPeriodoSP();
+  const p=getPeriodoSP(), raw=getPeriodoSPRaw();
+  const selStyle="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit";
+  const weekOpts=state.weeks.slice().reverse().map(w=>
+    `<option value="${w.id}" ${p.modo==="semana"&&w.id===p.weekId?"selected":""}>${esc(w.label)}</option>`).join("");
+  const s=semanaCalendario(new Date());
   cont.innerHTML=`
     <div class="field" style="flex:0 0 auto">
       <label>Modo de vista</label>
-      <select id="${containerId}_modo" onchange="onCambioPeriodoSP('${containerId}','${onChange}')"
-        style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
-        <option value="semana" ${p.modo==="semana"?"selected":""}>Esta semana</option>
+      <select id="${containerId}_modo" onchange="onCambioPeriodoSP('${containerId}','${onChange}')" style="${selStyle}">
+        <option value="semana" ${p.modo==="semana"?"selected":""}>Semana guardada</option>
         <option value="rango" ${p.modo==="rango"?"selected":""}>Rango de fechas</option>
       </select>
     </div>
+    <div class="field" id="${containerId}_semBox" style="display:${p.modo==="semana"?"block":"none"};flex:0 0 auto">
+      <label>Semana</label>
+      <select id="${containerId}_week" onchange="onCambioPeriodoSP('${containerId}','${onChange}')" style="${selStyle};max-width:240px">${weekOpts||`<option value="">Sin semanas</option>`}</select>
+    </div>
     <div id="${containerId}_rango" style="display:${p.modo==="rango"?"flex":"none"};gap:10px;align-items:flex-end;flex-wrap:wrap">
-      <div class="field"><label>Fecha inicio</label><input type="date" id="${containerId}_ini" value="${p.ini}" onchange="onCambioPeriodoSP('${containerId}','${onChange}')"></div>
-      <div class="field"><label>Fecha fin</label><input type="date" id="${containerId}_fin" value="${p.fin}" onchange="onCambioPeriodoSP('${containerId}','${onChange}')"></div>
+      <div class="field"><label>Fecha inicio</label><input type="date" id="${containerId}_ini" value="${raw.ini||s.ini}" onchange="onCambioPeriodoSP('${containerId}','${onChange}')"></div>
+      <div class="field"><label>Fecha fin</label><input type="date" id="${containerId}_fin" value="${raw.fin||s.fin}" onchange="onCambioPeriodoSP('${containerId}','${onChange}')"></div>
     </div>`;
 }
 function onCambioPeriodoSP(containerId, onChange){
   const modo=document.getElementById(containerId+"_modo")?.value||"semana";
   const rangoBox=document.getElementById(containerId+"_rango");
+  const semBox=document.getElementById(containerId+"_semBox");
   if(modo==="rango"){
     if(rangoBox) rangoBox.style.display="flex";
-    let ini=document.getElementById(containerId+"_ini")?.value||"";
-    let fin=document.getElementById(containerId+"_fin")?.value||"";
-    if(!ini || !fin){                                // primera vez en rango → arranca en esta semana
-      const s=semanaCalendario(new Date()); ini=ini||s.ini; fin=fin||s.fin;
-      const iEl=document.getElementById(containerId+"_ini"), fEl=document.getElementById(containerId+"_fin");
-      if(iEl) iEl.value=ini; if(fEl) fEl.value=fin;
-    }
-    setPeriodoSP({modo:"rango", ini, fin});
+    if(semBox) semBox.style.display="none";
+    const ini=document.getElementById(containerId+"_ini")?.value||"";
+    const fin=document.getElementById(containerId+"_fin")?.value||"";
+    if(ini && fin) setPeriodoSP({modo:"rango", ini, fin});
   } else {
     if(rangoBox) rangoBox.style.display="none";
-    setPeriodoSP({modo:"semana"});
+    if(semBox) semBox.style.display="block";
+    const weekId=document.getElementById(containerId+"_week")?.value||state.activeWeek;
+    setPeriodoSP({modo:"semana", weekId});
   }
   if(typeof window[onChange]==="function") window[onChange]();
 }
@@ -2956,17 +2947,14 @@ function resetPresupuesto(){ if(!confirm("¿Restaurar valores predeterminados?")
 // ═══════════════════════════════════════════════════════════════════════════
 // REPORTE — CAMBIO 1: semáforo PDF + CAMBIO 2: sin col Notas
 // ═══════════════════════════════════════════════════════════════════════════
-// Seguimiento usa el periodo compartido (getPeriodoSP) y SIEMPRE renderiza por la fecha real de
-// cada factura — no por la caja de captura. El periodo se persiste solo (localStorage) y se
-// comparte con Presupuesto, así que no hay que guardar filtros aparte ni reconfigurar nada.
+// Seguimiento usa el periodo compartido (getPeriodoSP): la semana guardada elegida o un rango
+// por fecha real. El periodo se persiste solo (localStorage) y se comparte con Presupuesto.
 function renderReporteActual(){
   const p=getPeriodoSP();
-  renderReporteRango(p.ini, p.fin, p.label);
+  renderSeguimientoVista(gastosDelPeriodoSP(), p.label);
 }
 
-function renderReporteRango(ini, fin, label){
-  if(!ini||!fin){ const p=getPeriodoSP(); ini=p.ini; fin=p.fin; label=label||p.label; }
-  const gastos=allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=ini&&g.fecha<=fin);
+function renderSeguimientoVista(gastos, label){
   const totalGlobal=gastos.reduce((s,g)=>s+g.importe,0), byCat={};
   // Desglosa las facturas divididas en sus partidas reales (igual que Auditoría y Presupuesto),
   // para que su parte llegue a cada categoría en vez de amontonarse en una categoría "Dividida".
@@ -2975,9 +2963,9 @@ function renderReporteRango(ini, fin, label){
   const budget=state.budget||{}, allCats=[...new Set([...Object.keys(byCat),...Object.keys(DEFAULT_BUDGET)])];
   const totalPres=allCats.reduce((s,c)=>s+(budget[c]||DEFAULT_BUDGET[c]||0),0);
   const sobre=allCats.filter(c=>(byCat[c]||[]).reduce((s,g)=>s+g.importe,0)>(budget[c]||DEFAULT_BUDGET[c]||0));
-  let html=`<div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--vd);margin-bottom:18px">Seguimiento — ${label||`${fmtDate(ini)} al ${fmtDate(fin)}`}</div>
+  let html=`<div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--vd);margin-bottom:18px">Seguimiento — ${esc(label||"")}</div>
   <div class="summary-grid" style="margin-bottom:20px">
-    <div class="scard"><div class="scard-label">Total gastado</div><div class="scard-val">${fmt(totalGlobal)}</div><div class="scard-sub">${gastos.length} facturas · ${fmtDate(ini)} al ${fmtDate(fin)}</div></div>
+    <div class="scard"><div class="scard-label">Total gastado</div><div class="scard-val">${fmt(totalGlobal)}</div><div class="scard-sub">${gastos.length} facturas · ${esc(label||"")}</div></div>
     <div class="scard"><div class="scard-label">Presupuesto asignado</div><div class="scard-val">${fmt(totalPres)}</div></div>
     <div class="scard ${totalGlobal>totalPres?'alert':''}"><div class="scard-label">Diferencia</div><div class="scard-val" style="color:${totalGlobal>totalPres?'var(--red)':'var(--vm)'}">
       ${totalGlobal>totalPres?'−':'+'} ${fmt(Math.abs(totalPres-totalGlobal))}</div></div>
@@ -2996,7 +2984,7 @@ function renderReporteRango(ini, fin, label){
         ${pres>0?fmt(pres):''} ${over?`<span style="color:var(--red);font-weight:700">⚠${((gastado/pres)*100).toFixed(0)}%</span>`:''}
       </div></div>`;
   });
-  html+=`</div></div><div class="card"><div class="card-title">📋 Detalle — ${fmtDate(ini)} al ${fmtDate(fin)}</div>
+  html+=`</div></div><div class="card"><div class="card-title">📋 Detalle — ${esc(label||"")}</div>
     <div class="tbl-wrap"><table style="width:100%;table-layout:fixed">
     <colgroup><col style="width:10%"><col style="width:22%"><col style="width:16%"><col style="width:13%"><col style="width:18%"><col style="width:14%"><col style="width:7%"></colgroup>
     <thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th>No. Factura</th><th>Forma de pago</th><th style="text-align:right">Importe</th><th style="text-align:center">Acción</th></tr></thead><tbody>`;
@@ -4933,12 +4921,19 @@ ensureAdminRecord();
 // CAJA DE CORTES
 // ══════════════════════════════════════════════════════════════
 
+// El periodo de Caja se persiste (localStorage): la operación trabaja periodos que van una
+// semana atrás del calendario, así que el default útil es "el último periodo consultado", no
+// "hoy". Sin nada guardado arranca en la semana natural de hoy.
+const CAJA_PERIODO_KEY = "cicsa_caja_periodo";
 function initCaja() {
   const today = todayStr();
   document.getElementById("cajaFecha").value = today;
   document.getElementById("retiroFecha").value = today;
-  if(!document.getElementById("cajaRangoIni").value) document.getElementById("cajaRangoIni").value = today;
-  if(!document.getElementById("cajaRangoFin").value) document.getElementById("cajaRangoFin").value = today;
+  let per = null;
+  try{ per = JSON.parse(localStorage.getItem(CAJA_PERIODO_KEY)||"null"); }catch(e){}
+  if(!per || !per.ini || !per.fin){ const s = semanaCalendario(new Date()); per = { ini:s.ini, fin:s.fin }; }
+  if(!document.getElementById("cajaRangoIni").value) document.getElementById("cajaRangoIni").value = per.ini;
+  if(!document.getElementById("cajaRangoFin").value) document.getElementById("cajaRangoFin").value = per.fin;
   renderCaja();
 }
 
@@ -4948,21 +4943,19 @@ function diaSemanaLabel(fechaStr){
   return dias[d.getDay()] || "";
 }
 
-function toggleCajaModoVista(){
-  const rango = document.getElementById("cajaModoVista").value === "rango";
-  document.getElementById("cajaRangoIniWrap").style.display = rango ? "block" : "none";
-  document.getElementById("cajaRangoFinWrap").style.display = rango ? "block" : "none";
-  document.getElementById("cajaBtnConsultar").style.display = rango ? "inline-flex" : "none";
+function onCajaRangoChange(){
+  const ini=document.getElementById("cajaRangoIni")?.value, fin=document.getElementById("cajaRangoFin")?.value;
+  if(ini && fin){ try{ localStorage.setItem(CAJA_PERIODO_KEY, JSON.stringify({ini,fin})); }catch(e){} }
   renderCaja();
 }
-function onCajaRangoChange(){ renderCaja(); }
 
-// ── Ajuste de saldo inicial de caja (conteo de efectivo, admin + PIN) ─────────
-// Fija el saldo inicial REAL de la semana activa contando el efectivo por denominación —
-// reemplaza el arrastre especulativo. Guardado en el estado COMPARTIDO (Firestore, no
-// localStorage) para que sea autoritativo y sincronice entre dispositivos, con registro de
-// quién y cuándo. Doble candado: rol admin + PIN. El PIN va hasheado (SHA-256), no en texto
-// plano — es un disuasivo, no una bóveda (la página es pública).
+// ── Ajuste de saldo inicial de caja (admin + PIN) ─────────────────────────────
+// Fija el saldo inicial REAL con el que abre el PERIODO consultado (se guarda por fecha de
+// inicio del periodo) — es el conteo físico, como en el sistema de Cortes, que es la fuente
+// de verdad del efectivo. Guardado en el estado COMPARTIDO (Firestore, no localStorage) para
+// que sea autoritativo y sincronice entre dispositivos, con registro de quién y cuándo.
+// Doble candado: rol admin + PIN. El PIN va hasheado (SHA-256), no en texto plano — es un
+// disuasivo, no una bóveda (la página es pública).
 const AJUSTE_PIN_HASH = "727afcf800e2cd6f2331be5df650b17af345ad630cf6a5c70bbdd8f3db34b257";
 const CAJA_DENOMS = [500,200,100,50,20,10,5,2,1];
 
@@ -4970,20 +4963,23 @@ async function sha256Hex(s){
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
 }
-// Ajuste vigente para la semana activa (o null). Solo aplica en modo "Semana activa".
+// Clave del ajuste = fecha inicio del periodo consultado (los registros viejos por weekId
+// quedan huérfanos pero inofensivos — un id-timestamp nunca coincide con una fecha).
+function cajaPeriodoIni(){ return document.getElementById("cajaRangoIni")?.value || ""; }
 function cajaSaldoAjusteActual(){
-  const modo = document.getElementById("cajaModoVista")?.value || "semana";
-  if(modo === "rango") return null;
-  const rec = (state.cajaSaldoInicial||{})[state.activeWeek];
+  const ini = cajaPeriodoIni();
+  if(!ini) return null;
+  const rec = (state.cajaSaldoInicial||{})[ini];
   return (rec && typeof rec.valor === "number") ? rec : null;
 }
 async function abrirAjusteSaldo(){
   if(currentRole !== "admin"){ alert("🔒 Solo un administrador puede ajustar el saldo inicial de caja."); return; }
+  if(!cajaPeriodoIni()){ alert("Selecciona primero el periodo (fecha inicio y fin)."); return; }
   const pin = prompt("PIN de ajuste (admin):");
   if(pin === null) return;
   if((await sha256Hex(pin.trim())) !== AJUSTE_PIN_HASH){ alert("❌ PIN incorrecto."); return; }
   // Construye los campos de denominación y precarga el conteo previo si existe.
-  const prev = (state.cajaSaldoInicial||{})[state.activeWeek];
+  const prev = (state.cajaSaldoInicial||{})[cajaPeriodoIni()];
   const cont = prev?.conteo || {};
   const cont_ = document.getElementById("conteoDenoms");
   cont_.innerHTML = CAJA_DENOMS.map(d=>`
@@ -5029,7 +5025,9 @@ function totalConteoCaja(){
 }
 function actualizarConteoCaja(){
   const total = totalConteoCaja();
-  const sist  = saldoInicialSemana(state.activeWeek).saldo;   // arrastre calculado (sin ajuste)
+  // Arrastre calculado por fecha: todo el efectivo (cortes − gastos efectivo − retiros)
+  // ANTERIOR al inicio del periodo. Es la referencia contra la que se compara el conteo.
+  const sist  = cajaPeriodoIni() ? calcularSaldoAntesDe(cajaPeriodoIni()).saldo : 0;
   const dif   = total - sist;
   document.getElementById("conteoTotal").textContent = fmt(total);
   document.getElementById("conteoSistema").textContent = fmt(sist);
@@ -5047,9 +5045,11 @@ function fijarSaldoInicialCaja(){
     conteo.monedas = parseFloat(document.getElementById("den_monedas")?.value)||0;
   }
   if(total <= 0){ alert("El saldo inicial debe ser mayor a $0. Captura el monto o el conteo."); return; }
-  if(!confirm(`¿Fijar el saldo inicial de caja en ${fmt(total)} para la semana activa?\n\nReemplaza el saldo calculado y se sincroniza a todos los dispositivos.`)) return;
+  const ini = cajaPeriodoIni();
+  if(!ini){ alert("Selecciona primero el periodo."); return; }
+  if(!confirm(`¿Fijar el saldo inicial en ${fmt(total)} para el periodo que inicia el ${fmtDate(ini)}?\n\nSe sincroniza a todos los dispositivos.`)) return;
   if(!state.cajaSaldoInicial) state.cajaSaldoInicial = {};
-  state.cajaSaldoInicial[state.activeWeek] = {
+  state.cajaSaldoInicial[ini] = {
     valor: total, conteo,
     fecha: todayStr(),
     porEmail: (currentUser && currentUser.email) || "admin",
@@ -5059,8 +5059,8 @@ function fijarSaldoInicialCaja(){
 }
 function quitarSaldoInicialCaja(){
   if(currentRole !== "admin"){ alert("🔒 Solo un administrador."); return; }
-  if(!confirm("¿Quitar el ajuste y volver al saldo calculado (arrastre)?")) return;
-  if(state.cajaSaldoInicial) delete state.cajaSaldoInicial[state.activeWeek];
+  if(!confirm("¿Quitar el saldo inicial de este periodo?")) return;
+  if(state.cajaSaldoInicial) delete state.cajaSaldoInicial[cajaPeriodoIni()];
   save(); cerrarAjusteSaldo(); renderCaja();
 }
 
@@ -5070,10 +5070,9 @@ function quitarSaldoInicialCaja(){
 function revisarSaldoInicial(){
   const d = obtenerDatosCaja().saldoInicialDetalle;
   if(!d || !d.fechaMin){ alert("No hay movimientos anteriores registrados — el saldo inicial es $0."); return; }
-  document.getElementById("cajaModoVista").value = "rango";
   document.getElementById("cajaRangoIni").value = d.fechaMin;
   document.getElementById("cajaRangoFin").value = d.fechaMax;
-  toggleCajaModoVista();
+  renderCaja();
 }
 
 // Los cortes/retiros se revisan y borran aquí mismo en Caja (revisarSaldoInicial), pero los
@@ -5085,16 +5084,6 @@ function revisarGastosEnAuditoria(){
   if(!d || !d.fechaMin){ alert("No hay movimientos anteriores registrados."); return; }
   try{ localStorage.setItem(REPORTES_FILTROS_KEY, JSON.stringify({ini:d.fechaMin, fin:d.fechaMax, cat:"", prov:""})); }catch(e){}
   showPage("reportes", document.getElementById("navReportes"));
-}
-
-function getCortesSemana() {
-  const week = state.weeks.find(w => w.id === state.activeWeek);
-  return (week && week.cortes) ? week.cortes : [];
-}
-
-function getRetirosSemana() {
-  const week = state.weeks.find(w => w.id === state.activeWeek);
-  return (week && week.retiros) ? week.retiros : [];
 }
 
 // Junta cortes/retiros de TODAS las semanas (no solo la activa) — para la consulta por
@@ -5125,40 +5114,28 @@ function calcularSaldoAntesDe(fecha){
 
 // Punto único de datos para Caja — usado tanto por renderCaja() como por exportarCajaPDF(),
 // para que la pantalla y el PDF nunca puedan mostrar números distintos.
+// TODO se calcula estrictamente por la FECHA de cada movimiento dentro del periodo consultado
+// — nunca por la "caja de captura", que puede traer movimientos de otras fechas. El efectivo
+// real lo lleva el sistema de Cortes; esta hoja lo concilia: saldo inicial + ingresos −
+// egresos − retiros.
 function obtenerDatosCaja(){
-  const modo = document.getElementById("cajaModoVista")?.value || "semana";
-  if(modo === "rango"){
-    const ini = document.getElementById("cajaRangoIni")?.value;
-    const fin = document.getElementById("cajaRangoFin")?.value;
-    if(!ini || !fin){
-      return { modo, cortes:[], gastosCaja:[], retiros:[], saldoInicial:0, saldoInicialDetalle:null, periodoLabel:"Selecciona un rango de fechas", vacio:true };
-    }
-    const detalleIni = calcularSaldoAntesDe(ini);
-    return {
-      modo,
-      cortes: todosLosCortes().filter(c=>c.fecha>=ini && c.fecha<=fin),
-      gastosCaja: allGastosAllWeeks().filter(esGastoEfectivo).filter(g=>g.fecha>=ini && g.fecha<=fin),
-      retiros: todosLosRetiros().filter(r=>r.fecha>=ini && r.fecha<=fin),
-      saldoInicial: detalleIni.saldo,
-      saldoInicialDetalle: detalleIni,
-      saldoInicialManual: null,          // el ajuste admin es por semana, no aplica a rangos
-      saldoInicialAjuste: null,
-      periodoLabel: `${fmtDate(ini)} al ${fmtDate(fin)}`,
-      vacio:false
-    };
+  const ini = document.getElementById("cajaRangoIni")?.value;
+  const fin = document.getElementById("cajaRangoFin")?.value;
+  if(!ini || !fin){
+    return { cortes:[], gastosCaja:[], retiros:[], saldoInicial:0, saldoInicialDetalle:null, saldoInicialManual:null, saldoInicialAjuste:null, periodoLabel:"Selecciona el periodo", vacio:true };
   }
-  const detalleSemana = saldoInicialSemana(state.activeWeek);
+  const detalleIni = calcularSaldoAntesDe(ini);
   const ajuste = cajaSaldoAjusteActual();
   return {
-    modo,
-    cortes: getCortesSemana(),
-    gastosCaja: getGastosCajaSemana(),
-    retiros: getRetirosSemana(),
-    saldoInicial: detalleSemana.saldo,
-    saldoInicialDetalle: detalleSemana,
+    ini, fin,
+    cortes: todosLosCortes().filter(c=>c.fecha>=ini && c.fecha<=fin),
+    gastosCaja: allGastosAllWeeks().filter(esGastoEfectivo).filter(g=>g.fecha>=ini && g.fecha<=fin),
+    retiros: todosLosRetiros().filter(r=>r.fecha>=ini && r.fecha<=fin),
+    saldoInicial: detalleIni.saldo,      // arrastre calculado (referencia/auditoría)
+    saldoInicialDetalle: detalleIni,
     saldoInicialManual: ajuste ? ajuste.valor : null,
     saldoInicialAjuste: ajuste,          // {valor, fecha, porEmail, ...} para la nota de auditoría
-    periodoLabel: getActiveWeek()?.label || "",
+    periodoLabel: `${fmtDate(ini)} al ${fmtDate(fin)}`,
     vacio:false
   };
 }
@@ -5234,12 +5211,6 @@ function cambiarFormaPagoReporte(id, valor){
   renderReporteActual();
 }
 
-function getGastosCajaSemana() {
-  const week = state.weeks.find(w => w.id === state.activeWeek);
-  const gastos = (week && week.gastos) ? week.gastos : [];
-  return gastos.filter(esGastoEfectivo);
-}
-
 function guardarCorte() {
   const fecha  = document.getElementById("cajaFecha").value;
   const monto  = parseFloat(document.getElementById("cajaMonto").value) || 0;
@@ -5307,202 +5278,112 @@ function eliminarRetiro(id) {
 
 function renderCaja() {
   const datos = obtenerDatosCaja();
-  const { modo, cortes, gastosCaja, retiros, saldoInicial, saldoInicialDetalle, saldoInicialManual, saldoInicialAjuste, periodoLabel, vacio } = datos;
+  const { cortes, gastosCaja, retiros, saldoInicial, saldoInicialDetalle, saldoInicialManual, saldoInicialAjuste, periodoLabel, vacio } = datos;
   const esAdmin = (typeof currentRole !== "undefined" && currentRole === "admin");
 
   const lbl = document.getElementById("cajaPeriodoLabel");
   if(lbl) lbl.textContent = periodoLabel ? `— ${periodoLabel}` : "";
 
-  const esRango = modo === "rango";
+  const conc = document.getElementById("cajaConciliacion");
+  if(!conc) return;
+  if(vacio){
+    conc.innerHTML = `<p style="color:var(--txt2);font-size:14px">Selecciona fecha inicio y fin del periodo.</p>`;
+    return;
+  }
+
   const usaManual = saldoInicialManual !== null && saldoInicialManual !== undefined;
   const totalCortes = cortes.reduce((s, c) => s + (parseFloat(c.monto) || 0), 0);
   const totalGastos = gastosCaja.reduce((s, g) => s + (parseFloat(g.importe) || 0), 0);
   const totalRetiros = retiros.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  // Base del saldo del periodo:
-  // Sin saldo inicial fijado NO arrastramos el histórico al total del periodo (ni en rango ni
-  // en semana): se muestra aparte como "pendiente de fijar". Solo un saldo inicial capturado
-  // entra al cálculo. Así el total refleja el periodo actual y no mezcla montos viejos (fase de
-  // pruebas / semanas que nada tienen que ver con este corte).
+  // Solo un saldo inicial fijado (conteo real, como en Cortes) entra al cálculo; sin fijar,
+  // el periodo parte de $0 y el arrastre histórico se muestra aparte, colapsado.
   const baseInicial = usaManual ? saldoInicialManual : 0;
   const saldoFinal = baseInicial + totalCortes - totalGastos - totalRetiros;
-  const etiquetaRecaudado = esRango ? "Recaudado en el periodo" : "Recaudado esta semana";
 
-  // Botón de ajuste (solo admin, solo modo semana activa).
-  const btnAjuste = (esAdmin && !esRango)
-    ? `<button onclick="abrirAjusteSaldo()" style="padding:3px 9px;background:white;border:1px solid var(--do);color:var(--do);border-radius:6px;font-size:10px;cursor:pointer">🔒 ${usaManual?"Reajustar":"Ajustar saldo"}</button>`
-    : "";
+  // 1. Saldo inicial del periodo
+  const btnAjuste = esAdmin
+    ? `<button onclick="abrirAjusteSaldo()" style="padding:6px 12px;background:${usaManual?"white":"var(--do)"};border:1px solid var(--do);color:${usaManual?"var(--do)":"white"};border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">🔒 ${usaManual?"Reajustar":"Fijar saldo inicial"}</button>`
+    : `<span style="font-size:11px;color:var(--txt2)">Solo un administrador puede fijarlo.</span>`;
+  const drill = saldoInicialDetalle && saldoInicialDetalle.fechaMin
+    ? `<div style="font-size:11px;color:var(--txt2);margin-top:4px">Arrastre calculado antes del periodo: <strong>${fmt(saldoInicial)}</strong> · ${saldoInicialDetalle.n} movimiento(s) · ${fmtDate(saldoInicialDetalle.fechaMin)} – ${fmtDate(saldoInicialDetalle.fechaMax)}</div>
+       <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
+         <button onclick="revisarSaldoInicial()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">🔍 Cortes/retiros</button>
+         <button onclick="revisarGastosEnAuditoria()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">📈 Gastos en Auditoría</button>
+       </div>`
+    : `<div style="font-size:11px;color:var(--txt2);margin-top:4px">Sin movimientos anteriores al periodo.</div>`;
+  const seccionInicial = usaManual
+    ? `<div style="background:var(--claro);border:1.5px solid var(--vd);border-radius:12px;padding:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+         <div>
+           <div style="font-size:12px;color:var(--txt2)">Saldo inicial del periodo</div>
+           <div style="font-size:26px;font-weight:700;color:var(--vd)">${fmt(saldoInicialManual)}</div>
+           <div style="font-size:11px;color:var(--vm)">🔒 Fijado${saldoInicialAjuste?.porEmail?` por ${esc(saldoInicialAjuste.porEmail)}`:""}${saldoInicialAjuste?.fecha?` el ${fmtDate(saldoInicialAjuste.fecha)}`:""}</div>
+           <details style="margin-top:4px"><summary style="font-size:10px;color:var(--txt2);cursor:pointer">Referencia del sistema</summary>${drill}</details>
+         </div>
+         ${btnAjuste}
+       </div>`
+    : `<div style="background:#FFF8E1;border:1.5px dashed #E6A700;border-radius:12px;padding:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+         <div>
+           <div style="font-size:13px;font-weight:700;color:#B8860B">⚠ Saldo inicial sin fijar — el periodo parte de $0.00</div>
+           <div style="font-size:12px;color:var(--txt2);margin-top:2px">Fija el efectivo real con el que abre el periodo (conteo del sistema de Cortes).</div>
+           <details style="margin-top:4px"><summary style="font-size:10px;color:var(--txt2);cursor:pointer">Ver arrastre histórico</summary>${drill}</details>
+         </div>
+         ${btnAjuste}
+       </div>`;
 
-  // Primera tarjeta según el modo (semana con ajuste admin / rango / semana con arrastre).
-  const tarjetaInicial = usaManual
-    ? `<div style="background:var(--claro);border-radius:12px;padding:16px;text-align:center;border:1.5px solid var(--vd)">
-          <div style="font-size:12px;color:var(--txt2);margin-bottom:4px">Saldo inicial en caja</div>
-          <div style="font-size:20px;font-weight:700;color:var(--vd)">${fmt(saldoInicialManual)}</div>
-          <div style="font-size:11px;color:var(--vm)">🔒 Ajustado${saldoInicialAjuste?.porEmail?` por ${esc(saldoInicialAjuste.porEmail)}`:""}${saldoInicialAjuste?.fecha?` el ${fmtDate(saldoInicialAjuste.fecha)}`:""}</div>
-          <div style="font-size:10px;color:var(--txt2);margin-top:4px">Sistema calculaba: ${fmt(saldoInicial)}</div>
-          ${btnAjuste?`<div style="margin-top:6px">${btnAjuste}</div>`:""}
-        </div>`
-    : (() => {
-        // Detalle histórico + botones de auditoría, compartido por ambos casos pero colapsado
-        // en un <details> para que las fechas/montos viejos no dominen la hoja.
-        const drill = saldoInicialDetalle && saldoInicialDetalle.fechaMin
-          ? `<div style="font-size:10px;color:var(--txt2);margin-top:4px">${saldoInicialDetalle.n} movimiento(s) · ${fmtDate(saldoInicialDetalle.fechaMin)} – ${fmtDate(saldoInicialDetalle.fechaMax)}</div>
-             <div style="display:flex;gap:4px;justify-content:center;margin-top:6px;flex-wrap:wrap">
-               <button onclick="revisarSaldoInicial()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">🔍 Cortes/retiros</button>
-               <button onclick="revisarGastosEnAuditoria()" style="padding:3px 9px;background:white;border:1px solid var(--vd);color:var(--vd);border-radius:6px;font-size:10px;cursor:pointer">📈 Gastos en Auditoría</button>
-             </div>`
-          : `<div style="font-size:10px;color:var(--txt2);margin-top:4px">Sin movimientos anteriores</div>`;
-        if(esRango){
-          return `<div style="background:#FFF8E1;border-radius:12px;padding:16px;text-align:center;border:1.5px dashed #E6A700">
-              <div style="font-size:12px;color:var(--txt2);margin-bottom:4px">⚠ Saldo/déficit anterior</div>
-              <div style="font-size:20px;font-weight:700;color:#B8860B">${fmt(saldoInicial)}</div>
-              <div style="font-size:11px;color:var(--txt2)">NO incluido en el saldo del periodo</div>
-              ${drill}
-            </div>`;
-        }
-        // Semana activa sin saldo inicial fijado → estado "pendiente de fijar".
-        return `<div style="background:#FFF8E1;border-radius:12px;padding:16px;text-align:center;border:1.5px dashed #E6A700">
-            <div style="font-size:12px;color:var(--txt2);margin-bottom:6px">⚠ Saldo inicial sin fijar</div>
-            <div style="font-size:12px;color:#B8860B;margin-bottom:10px;line-height:1.4">El total muestra solo los movimientos de esta semana. Fija el efectivo con el que abre el periodo.</div>
-            ${esAdmin
-              ? `<button onclick="abrirAjusteSaldo()" style="padding:8px 14px;background:var(--do);border:none;color:white;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">🔒 Fijar saldo inicial</button>`
-              : `<div style="font-size:10px;color:var(--txt2)">Un administrador debe fijarlo.</div>`}
-            <details style="margin-top:10px;text-align:left">
-              <summary style="font-size:10px;color:var(--txt2);cursor:pointer;text-align:center">Ver arrastre histórico (${fmt(saldoInicial)})</summary>
-              <div style="text-align:center;margin-top:4px">${drill}</div>
-            </details>
-          </div>`;
-      })();
+  // 2. Ingresos del periodo (cortes)
+  const filasCortes = cortes.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map((c,i)=>`
+      <tr style="background:${i%2===0?"var(--claro)":"white"}">
+        <td style="padding:8px 12px">${fmtDate(c.fecha)}</td>
+        <td style="padding:8px 12px"><span style="background:var(--claro);color:var(--vd);padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">${esc(c.label||"Corte")}</span></td>
+        <td style="padding:8px 12px;text-align:right;font-weight:600;color:var(--vd)">${fmt(c.monto)}</td>
+        <td style="padding:8px 12px;text-align:center"><button onclick="eliminarCorte('${String(c.id).replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button></td>
+      </tr>`).join("");
+  const tablaIngresos = cortes.length
+    ? `<div class="tbl-wrap"><table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead><tr style="background:var(--vd);color:white"><th style="padding:8px 12px;text-align:left">Fecha</th><th style="padding:8px 12px;text-align:left">Corte</th><th style="padding:8px 12px;text-align:right">Monto</th><th style="padding:8px 12px;text-align:center">Acción</th></tr></thead>
+        <tbody>${filasCortes}
+          <tr style="background:#E8F5E9;font-weight:700"><td colspan="2" style="padding:8px 12px;color:var(--vd)">TOTAL INGRESOS</td><td style="padding:8px 12px;text-align:right;color:var(--vd);font-size:15px">${fmt(totalCortes)}</td><td></td></tr>
+        </tbody></table></div>`
+    : `<div style="color:var(--txt2);font-size:14px;padding:6px 0">Sin cortes registrados en el periodo.</div>`;
 
-  // Render conciliación
-  const conc = document.getElementById("cajaConciliacion");
-  if(conc && vacio) {
-    conc.innerHTML = `<p style="color:var(--txt2);font-size:14px">Selecciona fecha inicio y fin, y da clic en "🔍 Consultar".</p>`;
-  } else if(conc) {
-    let gastosHTML = gastosCaja.length > 0
-      ? gastosCaja.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map(g => `
-          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
-            <span style="font-size:14px;color:var(--txt2)"><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#9DB89D">${fmtDate(g.fecha)}</span> (-) ${g.proveedor} <span style="font-size:12px;color:#9DB89D">${g.categoria}</span>${g.factura?` <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:#B0B0A8">#${g.factura}</span>`:""}</span>
-            <span style="font-size:14px;color:var(--red);font-weight:600">-${fmt(g.importe)}</span>
-          </div>`).join("")
-      : `<div style="color:var(--txt2);font-size:14px;padding:8px 0">Sin gastos de caja en este periodo.</div>`;
-    let retirosHTML = retiros.length > 0
-      ? retiros.map(r => `
-          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
-            <span style="font-size:14px;color:var(--txt2)">(-) Retiro${r.motivo?" — "+r.motivo:""}</span>
-            <span style="font-size:14px;color:var(--red);font-weight:600">-${fmt(r.monto)}</span>
-          </div>`).join("")
-      : `<div style="color:var(--txt2);font-size:14px;padding:8px 0">Sin retiros en este periodo.</div>`;
+  // 3. Egresos del periodo (gastos en efectivo + retiros)
+  const filasGastos = gastosCaja.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map(g => `
+      <div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+        <span style="font-size:14px;color:var(--txt2)"><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#9DB89D">${fmtDate(g.fecha)}</span> (−) ${esc(g.proveedor||"")} <span style="font-size:12px;color:#9DB89D">${esc(g.categoria||"")}</span>${g.factura?` <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:#B0B0A8">#${esc(g.factura)}</span>`:""}</span>
+        <span style="font-size:14px;color:var(--red);font-weight:600;flex-shrink:0">−${fmt(g.importe)}</span>
+      </div>`).join("");
+  const filasRetiros = retiros.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map(r => `
+      <div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+        <span style="font-size:14px;color:var(--txt2)"><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#9DB89D">${fmtDate(r.fecha)}</span> (−) Retiro${r.motivo?" — "+esc(r.motivo):""}</span>
+        <span style="display:flex;align-items:center;gap:8px;flex-shrink:0"><span style="font-size:14px;color:var(--red);font-weight:600">−${fmt(r.monto)}</span>
+          <button onclick="eliminarRetiro('${String(r.id).replace(/'/g,"\\'")}')" style="padding:2px 8px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:11px">🗑️</button></span>
+      </div>`).join("");
+  const seccionEgresos = `
+    <div style="margin-bottom:6px;font-size:13px;font-weight:600;color:var(--txt2)">Gastos pagados en efectivo — <span style="color:var(--red)">${fmt(totalGastos)}</span> (${gastosCaja.length})</div>
+    ${gastosCaja.length?filasGastos:`<div style="color:var(--txt2);font-size:14px;padding:6px 0">Sin gastos de caja en el periodo.</div>`}
+    <div style="margin:14px 0 6px;font-size:13px;font-weight:600;color:var(--txt2)">Retiros (depósitos/salidas de caja) — <span style="color:var(--red)">${fmt(totalRetiros)}</span> (${retiros.length})</div>
+    ${retiros.length?filasRetiros:`<div style="color:var(--txt2);font-size:14px;padding:6px 0">Sin retiros en el periodo.</div>`}`;
 
-    conc.innerHTML = `
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px">
-        ${tarjetaInicial}
-        <div style="background:var(--claro);border-radius:12px;padding:16px;text-align:center">
-          <div style="font-size:12px;color:var(--txt2);margin-bottom:4px">${etiquetaRecaudado}</div>
-          <div style="font-size:20px;font-weight:700;color:var(--vd)">${fmt(totalCortes)}</div>
-          <div style="font-size:11px;color:var(--txt2)">${cortes.length} corte(s)</div>
-        </div>
-        <div style="background:#FFF5F5;border-radius:12px;padding:16px;text-align:center">
-          <div style="font-size:12px;color:var(--txt2);margin-bottom:4px">Gastado en efectivo</div>
-          <div style="font-size:20px;font-weight:700;color:var(--red)">${fmt(totalGastos)}</div>
-          <div style="font-size:11px;color:var(--txt2)">${gastosCaja.length} gasto(s)</div>
-        </div>
-        <div style="background:#FFF5F5;border-radius:12px;padding:16px;text-align:center">
-          <div style="font-size:12px;color:var(--txt2);margin-bottom:4px">Retiros</div>
-          <div style="font-size:20px;font-weight:700;color:var(--red)">${fmt(totalRetiros)}</div>
-          <div style="font-size:11px;color:var(--txt2)">${retiros.length} retiro(s)</div>
-        </div>
-      </div>
-      <div style="background:${saldoFinal >= 0 ? "var(--claro)" : "#FFF5F5"};border-radius:12px;padding:18px;text-align:center;border:2px solid ${saldoFinal >= 0 ? "var(--vd)" : "var(--red)"};margin-bottom:16px">
-        <div style="font-size:13px;color:var(--txt2);margin-bottom:4px">${usaManual?"Saldo final en caja (con saldo inicial ajustado)":(esRango?"Saldo del periodo (solo movimientos del rango)":"Saldo final del periodo")}</div>
-        <div style="font-size:28px;font-weight:700;color:${saldoFinal >= 0 ? "var(--vd)" : "var(--red)"}">${fmt(saldoFinal)}</div>
-        <div style="font-size:11px;color:var(--txt2)">${usaManual ? "Saldo inicial ajustado + recaudado − gastos − retiros" : (esRango ? "No incluye el saldo/déficit anterior" : "Solo movimientos de esta semana — fija el saldo inicial para incluir el efectivo de apertura")}</div>
-      </div>
-      <h4 style="margin:0 0 8px;color:var(--vd);font-size:14px">Desglose de gastos pagados de caja:</h4>
-      ${gastosHTML}
-      <h4 style="margin:16px 0 8px;color:var(--vd);font-size:14px">Desglose de retiros:</h4>
-      ${retirosHTML}
-    `;
-  }
-
-  // Render historial de cortes
-  const hist = document.getElementById("cajaHistorial");
-  if(hist) {
-    if(cortes.length === 0) {
-      hist.innerHTML = "<p style='color:var(--txt2);font-size:14px'>No hay cortes registrados en este periodo.</p>";
-    } else {
-      hist.innerHTML = `
-        <table style="width:100%;border-collapse:collapse;font-size:14px">
-          <thead>
-            <tr style="background:var(--vd);color:white">
-              <th style="padding:10px 12px;text-align:left">Fecha</th>
-              <th style="padding:10px 12px;text-align:left">Tipo</th>
-              <th style="padding:10px 12px;text-align:right">Monto</th>
-              <th style="padding:10px 12px;text-align:center">Acción</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${cortes.map((c, i) => `
-              <tr style="background:${i%2===0?"var(--claro)":"white"}">
-                <td style="padding:10px 12px">${fmtDate(c.fecha)}</td>
-                <td style="padding:10px 12px">
-                  <span style="background:var(--claro);color:var(--vd);padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600">
-                    ${c.label}
-                  </span>
-                </td>
-                <td style="padding:10px 12px;text-align:right;font-weight:600;color:var(--vd)">${fmt(c.monto)}</td>
-                <td style="padding:10px 12px;text-align:center">
-                  <button onclick="eliminarCorte('${c.id}')"
-                    style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button>
-                </td>
-              </tr>`).join("")}
-            <tr style="background:#E8F5E9;font-weight:700">
-              <td colspan="2" style="padding:10px 12px;color:var(--vd)">TOTAL RECAUDADO</td>
-              <td style="padding:10px 12px;text-align:right;color:var(--vd);font-size:16px">${fmt(totalCortes)}</td>
-              <td></td>
-            </tr>
-          </tbody>
-        </table>
-      `;
-    }
-  }
-
-  // Render historial de retiros
-  const histR = document.getElementById("retiroHistorial");
-  if(histR) {
-    if(retiros.length === 0) {
-      histR.innerHTML = "<p style='color:var(--txt2);font-size:14px'>No hay retiros registrados en este periodo.</p>";
-    } else {
-      histR.innerHTML = `
-        <table style="width:100%;border-collapse:collapse;font-size:14px">
-          <thead>
-            <tr style="background:var(--vd);color:white">
-              <th style="padding:10px 12px;text-align:left">Fecha</th>
-              <th style="padding:10px 12px;text-align:left">Motivo</th>
-              <th style="padding:10px 12px;text-align:right">Monto</th>
-              <th style="padding:10px 12px;text-align:center">Acción</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${retiros.map((r, i) => `
-              <tr style="background:${i%2===0?"var(--claro)":"white"}">
-                <td style="padding:10px 12px">${fmtDate(r.fecha)}</td>
-                <td style="padding:10px 12px;color:var(--txt2)">${r.motivo||"—"}</td>
-                <td style="padding:10px 12px;text-align:right;font-weight:600;color:var(--red)">${fmt(r.monto)}</td>
-                <td style="padding:10px 12px;text-align:center">
-                  <button onclick="eliminarRetiro('${r.id}')"
-                    style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button>
-                </td>
-              </tr>`).join("")}
-            <tr style="background:#FFEBEE;font-weight:700">
-              <td colspan="2" style="padding:10px 12px;color:var(--red)">TOTAL RETIROS</td>
-              <td style="padding:10px 12px;text-align:right;color:var(--red);font-size:16px">${fmt(totalRetiros)}</td>
-              <td></td>
-            </tr>
-          </tbody>
-        </table>
-      `;
-    }
-  }
+  // 4. Saldo del periodo (al final, como pide el flujo de conciliación)
+  conc.innerHTML = `
+    <div style="margin-bottom:18px">
+      <h4 style="margin:0 0 8px;color:var(--vd);font-size:14px">1️⃣ Saldo inicial del periodo</h4>
+      ${seccionInicial}
+    </div>
+    <div style="margin-bottom:18px">
+      <h4 style="margin:0 0 8px;color:var(--vd);font-size:14px">2️⃣ Ingresos del periodo — cortes de efectivo</h4>
+      ${tablaIngresos}
+    </div>
+    <div style="margin-bottom:18px">
+      <h4 style="margin:0 0 8px;color:var(--vd);font-size:14px">3️⃣ Egresos del periodo</h4>
+      ${seccionEgresos}
+    </div>
+    <div style="background:${saldoFinal >= 0 ? "var(--claro)" : "#FFF5F5"};border-radius:12px;padding:18px;text-align:center;border:2px solid ${saldoFinal >= 0 ? "var(--vd)" : "var(--red)"}">
+      <div style="font-size:13px;color:var(--txt2);margin-bottom:4px">4️⃣ Saldo del periodo</div>
+      <div style="font-size:30px;font-weight:700;color:${saldoFinal >= 0 ? "var(--vd)" : "var(--red)"}">${fmt(saldoFinal)}</div>
+      <div style="font-size:12px;color:var(--txt2);font-family:'JetBrains Mono',monospace">${fmt(baseInicial)} inicial + ${fmt(totalCortes)} ingresos − ${fmt(totalGastos)} gastos − ${fmt(totalRetiros)} retiros</div>
+      ${usaManual?"":`<div style="font-size:11px;color:#B8860B;margin-top:4px">⚠ Sin saldo inicial fijado — el saldo parte de $0.00</div>`}
+    </div>`;
 }
 
 function exportarCajaPDF(){
@@ -5510,7 +5391,6 @@ function exportarCajaPDF(){
   const datos = obtenerDatosCaja();
   if(datos.vacio){ alert("Selecciona un rango de fechas antes de exportar."); return; }
   const { cortes, gastosCaja, retiros, saldoInicial, periodoLabel } = datos;
-  const esRango = datos.modo === "rango";
   const usaManual = datos.saldoInicialManual !== null && datos.saldoInicialManual !== undefined;
   const totalCortes=cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
   const totalGastos=gastosCaja.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
@@ -5531,7 +5411,7 @@ function exportarCajaPDF(){
   doc.text(`Periodo: ${periodoLabel||""} | Generado: ${new Date().toLocaleDateString("es-MX")}`,MAR,23);
   Y=40;
 
-  const cards=[[usaManual?"Saldo inicial en caja":"Saldo anterior (no incluido)",fmt(usaManual?datos.saldoInicialManual:saldoInicial)],["Recaudado",fmt(totalCortes)],["Gastado efectivo",fmt(totalGastos)],["Retiros",fmt(totalRetiros)]];
+  const cards=[["Saldo inicial del periodo",fmt(baseInicial)+(usaManual?"":" (sin fijar)")],["Ingresos (cortes)",fmt(totalCortes)],["Gastos efectivo",fmt(totalGastos)],["Retiros",fmt(totalRetiros)]];
   const cw=W/4;
   cards.forEach(([lbl,val],i)=>{
     const x=MAR+i*cw; doc.setFillColor(...CL); doc.roundedRect(x,Y,cw-3,18,2,2,"F");
@@ -5540,13 +5420,13 @@ function exportarCajaPDF(){
   });
   Y+=25;
   doc.setFillColor(...(saldoFinal>=0?ME:RED)); doc.roundedRect(MAR,Y,W,16,2,2,"F");
-  doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont("helvetica","normal"); doc.text(usaManual?"SALDO FINAL EN CAJA":"SALDO DEL PERIODO (SIN SALDO ANTERIOR)",MAR+4,Y+6);
+  doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont("helvetica","normal"); doc.text("SALDO DEL PERIODO",MAR+4,Y+6);
   doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.text(fmt(saldoFinal),MAR+4,Y+13);
   Y+=24;
 
   doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
-  doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.text("CORTES REGISTRADOS",MAR+3,Y+4.8); Y+=7;
-  if(cortes.length===0){ doc.setTextColor(120,120,120); doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.text("Sin cortes esta semana.",MAR+3,Y+5); Y+=8; }
+  doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.text("INGRESOS DEL PERIODO — CORTES",MAR+3,Y+4.8); Y+=7;
+  if(cortes.length===0){ doc.setTextColor(120,120,120); doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.text("Sin cortes en el periodo.",MAR+3,Y+5); Y+=8; }
   else cortes.forEach((c,i)=>{
     if(Y>260){ doc.addPage(); Y=MAR; }
     doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6,"F");
@@ -5558,8 +5438,8 @@ function exportarCajaPDF(){
   Y+=8;
 
   doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
-  doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.text("GASTOS EN EFECTIVO",MAR+3,Y+4.8); Y+=7;
-  if(gastosCaja.length===0){ doc.setTextColor(120,120,120); doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.text("Sin gastos en efectivo esta semana.",MAR+3,Y+5); Y+=8; }
+  doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.text("EGRESOS — GASTOS EN EFECTIVO",MAR+3,Y+4.8); Y+=7;
+  if(gastosCaja.length===0){ doc.setTextColor(120,120,120); doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.text("Sin gastos en efectivo en el periodo.",MAR+3,Y+5); Y+=8; }
   else gastosCaja.forEach((g,i)=>{
     if(Y>260){ doc.addPage(); Y=MAR; }
     doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6,"F");
@@ -5572,8 +5452,8 @@ function exportarCajaPDF(){
 
   if(Y>230){ doc.addPage(); Y=MAR; }
   doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
-  doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.text("RETIROS",MAR+3,Y+4.8); Y+=7;
-  if(retiros.length===0){ doc.setTextColor(120,120,120); doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.text("Sin retiros esta semana.",MAR+3,Y+5); Y+=8; }
+  doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.text("EGRESOS — RETIROS",MAR+3,Y+4.8); Y+=7;
+  if(retiros.length===0){ doc.setTextColor(120,120,120); doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.text("Sin retiros en el periodo.",MAR+3,Y+5); Y+=8; }
   else retiros.forEach((r,i)=>{
     if(Y>260){ doc.addPage(); Y=MAR; }
     doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6,"F");
