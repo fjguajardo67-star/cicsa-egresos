@@ -294,13 +294,24 @@ def gmail_renovar():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Convierte un valor a int con default seguro: cubre None/""/basura (ej. cuando el cliente manda
+# days_back:null porque el <select> venía vacío) sin tronar en int(None).
+def _int_or(v, default):
+    try:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return default
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
 # ── /gmail-fetch ──────────────────────────────────────────────────────────────
 @app.route("/gmail-fetch", methods=["POST"])
 @require_auth
 def gmail_fetch():
     try:
         d     = request.get_json() or {}
-        days  = int(d.get("days_back", 30))
+        days  = _int_or(d.get("days_back"), 30)
         inc   = bool(d.get("include_seen", False))
         items = fetch_invoice_attachments(days_back=days, include_seen=inc)
         if items and "error" in items[0]:
@@ -315,7 +326,7 @@ def gmail_debug():
     try:
         from gmail_cicsa import gmail_diagnostics
         d = request.get_json() or {}
-        return jsonify(gmail_diagnostics(days_back=int(d.get("days_back", 90))))
+        return jsonify(gmail_diagnostics(days_back=_int_or(d.get("days_back"), 90)))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

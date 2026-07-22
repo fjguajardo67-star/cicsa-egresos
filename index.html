@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-21-d</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-21-e</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -4496,7 +4496,7 @@ async function fetchGmail(includeSeen=false){
   document.getElementById("btnGmailFetch").disabled=true;
   setStatus("gmailStatus", includeSeen?"📬 Revisando Gmail (incluyendo ya revisadas)…":"📬 Revisando Gmail…","loading");
   document.getElementById("gmailInboxCard").style.display="none";
-  try{const days=document.getElementById("gmailDays").value,resp=await fetch(SERVER+"/gmail-fetch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({days_back:parseInt(days), include_seen:includeSeen})}),data=await resp.json();if(!resp.ok)throw new Error(data.error||"Error");
+  try{const days=parseInt(document.getElementById("gmailDays").value,10)||30,resp=await fetch(SERVER+"/gmail-fetch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({days_back:days, include_seen:includeSeen})}),data=await resp.json();if(!resp.ok)throw new Error(data.error||"Error");
     // Los nuevos se agregan a los que ya estaban pendientes (no procesados) de un escaneo
     // anterior, en vez de reemplazarlos — así no se pierden si quedaron a medias. Se deduplica
     // por nombre de archivo (que incluye el msg_id) para que "incluir ya revisadas" no muestre
