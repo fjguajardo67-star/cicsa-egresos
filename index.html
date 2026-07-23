@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-23-a</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-23-b</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -3039,7 +3039,7 @@ function renderPresupuesto(){
           <button onclick="saveSingleBudget('${cat}')"
             style="flex-shrink:0;padding:5px 10px;background:var(--vd);color:white;border:none;
             border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;line-height:1">✓</button>
-          <input class="bcard-input" id="bp_${cat.replace(/\W/g,'_')}" type="number" value="${presup}" placeholder="0"
+          <input class="bcard-input" id="bp_${cat.replace(/\W/g,'_')}" type="number" value="${presup||''}" placeholder="0"
             style="flex:1;min-width:0;width:100%" oninput="actualizarTotalPresupuesto()">
         </div>
       </div>`;
