@@ -46,7 +46,7 @@ const FUNCS = [
   "allGastosAllWeeks", "todosLosCortes", "todosLosRetiros",
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
-  "fmt", "duplicadosSospechosos",
+  "fmt", "duplicadosSospechosos", "migrarCategorias",
 ];
 
 const sandbox = { state: { weeks: [], activeWeek: null, budget: {} }, console };
@@ -280,6 +280,36 @@ t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
     { id: "b", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
   ]);
   assert.equal(r.length, 0);
+});
+
+console.log("\n== migración de categorías ==");
+t("renombra Limpieza/Plásticos → Artículos de limpieza (gastos, partidas, presupuesto) y blanco → Desechables (1 vez)", () => {
+  S.CAT_RENAMES = { "Limpieza / Plásticos": "Artículos de limpieza" };
+  let saves = 0; S.save = () => { saves++; };
+  S.state = {
+    budget: { "Limpieza / Plásticos": 5000, "Cárnicos": 80000 },
+    weeks: [{ id: "w1", gastos: [
+      { id: "g1", categoria: "Limpieza / Plásticos", importe: 100 },
+      { id: "g2", categoria: "", importe: 16201.10 },          // el recuadro en blanco
+      { id: "g3", categoria: "Cárnicos", importe: 200 },
+      { id: "g4", _dividida: true, categoria: "Dividida", importe: 300,
+        _partidas: [{ categoria: "Limpieza / Plásticos", importe: 120 }, { categoria: "", importe: 180 }] },
+    ]}],
+  };
+  S.migrarCategorias();
+  const g = S.state.weeks[0].gastos;
+  assert.equal(g[0].categoria, "Artículos de limpieza");
+  assert.equal(g[1].categoria, "Desechables");
+  assert.equal(g[2].categoria, "Cárnicos");
+  assert.equal(g[3]._partidas[0].categoria, "Artículos de limpieza");
+  assert.equal(g[3]._partidas[1].categoria, "Desechables");
+  assert.equal(S.state.budget["Artículos de limpieza"], 5000);
+  assert.ok(!("Limpieza / Plásticos" in S.state.budget), "la llave vieja se elimina");
+  assert.equal(S.state.migracionDesechables, true);
+  // idempotente: correr de nuevo no reintroduce blancos ni cambia nada
+  S.state.weeks[0].gastos.push({ id: "g5", categoria: "", importe: 9 });  // blanco NUEVO post-migración
+  S.migrarCategorias();
+  assert.equal(S.state.weeks[0].gastos[4].categoria, "", "un blanco nuevo NO se vuelve Desechables tras la migración única");
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);

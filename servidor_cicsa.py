@@ -91,7 +91,7 @@ CORS(app, origins=["https://fjguajardo67-star.github.io", "https://cicsa-egresos
 CATEGORIAS = [
     "Cárnicos", "Lácteos / Cremería", "Frutas y Verduras", "Tortilla",
     "Abarrotes / Secos", "Refrescos / Pepsi", "Hielo", "Gas",
-    "Limpieza / Plásticos", "Mantenimiento y Equipo",
+    "Artículos de limpieza", "Desechables", "Mantenimiento y Equipo",
     "Transporte / Combustible", "Servicios (Basura, Agua, Luz)",
     "Nómina / Personal", "Gastos Generales", "Otro"
 ]
@@ -254,7 +254,8 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
 IMPORTANTE:
 - La suma de todos los importes de partidas debe ser igual al total del documento.
 - Si un producto no encaja en ninguna categoría usa "Otro" y descríbelo.
-- Agrupa todos los productos de limpieza, desengrasantes, cloro en "Limpieza / Plásticos".
+- Agrupa jabón, cloro, desengrasantes, detergentes y utensilios de limpieza en "Artículos de limpieza".
+- Agrupa desechables (vasos, platos, cubiertos y bolsas de plástico/unicel, papel) en "Desechables".
 - Agrupa carnes, aves, embutidos en "Cárnicos".
 - Agrupa lácteos, quesos, leche en "Lácteos / Cremería".
 - Agrupa frutas y verduras frescas en "Frutas y Verduras".

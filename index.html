@@ -395,7 +395,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-21-e</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-21-f</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -566,7 +566,7 @@ tr:hover td { background:var(--claro); }
           </optgroup>
           <optgroup label="🏭 Operación">
             <option value="Gas">🔥 Gas</option>
-            <option value="Limpieza / Plásticos">🧹 Limpieza / Plásticos</option>
+            <option value="Artículos de limpieza">🧹 Artículos de limpieza</option><option value="Desechables">🥤 Desechables</option>
             <option value="Mantenimiento y Equipo">🔧 Mantenimiento y Equipo</option>
             <option value="Transporte / Combustible">⛽ Transporte / Combustible</option>
             <option value="Servicios (Basura, Agua, Luz)">🗑 Servicios</option>
@@ -646,7 +646,7 @@ tr:hover td { background:var(--claro); }
             </optgroup>
             <optgroup label="🏭 Operación">
               <option value="Gas">🔥 Gas</option>
-              <option value="Limpieza / Plásticos">🧹 Limpieza / Plásticos</option>
+              <option value="Artículos de limpieza">🧹 Artículos de limpieza</option><option value="Desechables">🥤 Desechables</option>
               <option value="Mantenimiento y Equipo">🔧 Mantenimiento y Equipo</option>
               <option value="Transporte / Combustible">⛽ Transporte / Combustible</option>
               <option value="Servicios (Basura, Agua, Luz)">🗑 Servicios</option>
@@ -856,7 +856,7 @@ tr:hover td { background:var(--claro); }
           <option value="">Todas</option>
           <option>Cárnicos</option><option>Lácteos / Cremería</option><option>Frutas y Verduras</option>
           <option>Tortilla</option><option>Abarrotes / Secos</option><option>Refrescos / Pepsi</option>
-          <option>Hielo</option><option>Gas</option><option>Limpieza / Plásticos</option>
+          <option>Hielo</option><option>Gas</option><option>Artículos de limpieza</option><option>Desechables</option>
           <option>Mantenimiento y Equipo</option><option>Transporte / Combustible</option>
           <option>Servicios (Basura, Agua, Luz)</option><option>Nómina / Personal</option>
           <option>Gastos Generales</option><option>Otro</option>
@@ -1077,7 +1077,7 @@ tr:hover td { background:var(--claro); }
             </optgroup>
             <optgroup label="🏭 Operación">
               <option value="Gas">🔥 Gas</option>
-              <option value="Limpieza / Plásticos">🧹 Limpieza / Plásticos</option>
+              <option value="Artículos de limpieza">🧹 Artículos de limpieza</option><option value="Desechables">🥤 Desechables</option>
               <option value="Mantenimiento y Equipo">🔧 Mantenimiento y Equipo</option>
               <option value="Transporte / Combustible">⛽ Transporte / Combustible</option>
               <option value="Servicios (Basura, Agua, Luz)">🗑 Servicios</option>
@@ -1755,13 +1755,13 @@ async function fbSet(path, data) {
 const CATS = [
   "Cárnicos","Lácteos / Cremería","Frutas y Verduras","Tortilla",
   "Abarrotes / Secos","Refrescos / Pepsi","Hielo","Gas",
-  "Limpieza / Plásticos","Mantenimiento y Equipo","Transporte / Combustible",
+  "Artículos de limpieza","Desechables","Mantenimiento y Equipo","Transporte / Combustible",
   "Servicios (Basura, Agua, Luz)","Nómina / Personal","Gastos Generales","Otro"
 ];
 const DEFAULT_BUDGET = {
   "Cárnicos":80000,"Lácteos / Cremería":10000,"Frutas y Verduras":30000,
   "Tortilla":60000,"Abarrotes / Secos":20000,"Refrescos / Pepsi":100000,
-  "Hielo":40000,"Gas":10000,"Limpieza / Plásticos":20000,
+  "Hielo":40000,"Gas":10000,"Artículos de limpieza":20000,"Desechables":10000,
   "Mantenimiento y Equipo":5000,"Transporte / Combustible":5000,
   "Servicios (Basura, Agua, Luz)":25000,"Nómina / Personal":70000,
   "Gastos Generales":10000,"Otro":5000
@@ -1831,10 +1831,44 @@ async function initState() {
   if(!state.budget) state.budget={...DEFAULT_BUDGET};
   if(!state.weeks)  state.weeks=[];
   if(!state.activeWeek&&state.weeks.length>0) state.activeWeek=state.weeks[state.weeks.length-1].id;
+  migrarCategorias();
   // Solo si de verdad no hay NADA en ningún lado (ni local, ni Flask, ni Firestore) se crea
   // una semana nueva.
   if(state.weeks.length===0) createNewWeek(true);
   localStorage.setItem("cicsa_egresos", JSON.stringify(state));
+}
+
+// Renombra categorías en los DATOS existentes al cargar, para que los gastos históricos no
+// queden huérfanos cuando cambia la lista de categorías. Idempotente: renombrar A→B sobre datos
+// ya migrados no hace nada. El paso "categoría en blanco → Desechables" se corre UNA sola vez
+// (con bandera) porque un gasto futuro sin categoría NO debe convertirse en Desechables solo.
+const CAT_RENAMES = { "Limpieza / Plásticos": "Artículos de limpieza" };
+function migrarCategorias(){
+  let cambios = 0;
+  const renombra = obj => { if(obj && CAT_RENAMES[obj.categoria]){ obj.categoria = CAT_RENAMES[obj.categoria]; cambios++; } };
+  (state.weeks||[]).forEach(w => (w.gastos||[]).forEach(g => {
+    renombra(g);
+    (g._partidas||[]).forEach(renombra);
+  }));
+  if(state.budget){
+    for(const [viejo,nuevo] of Object.entries(CAT_RENAMES)){
+      if(state.budget[viejo] != null){
+        if(state.budget[nuevo] == null) state.budget[nuevo] = state.budget[viejo];
+        delete state.budget[viejo]; cambios++;
+      }
+    }
+  }
+  // Una sola vez: los gastos SIN categoría (el recuadro en blanco del presupuesto) → Desechables.
+  if(!state.migracionDesechables){
+    const aDesechables = obj => { if(obj && (obj.categoria==null || !String(obj.categoria).trim())){ obj.categoria = "Desechables"; cambios++; } };
+    (state.weeks||[]).forEach(w => (w.gastos||[]).forEach(g => {
+      // Un gasto dividido tiene categoria "Dividida" (no en blanco); se revisan sus partidas.
+      if(g._dividida && Array.isArray(g._partidas)) g._partidas.forEach(aDesechables);
+      else aDesechables(g);
+    }));
+    state.migracionDesechables = true; cambios++;
+  }
+  if(cambios) save();
 }
 
 function getActiveWeek(){ return state.weeks.find(w=>w.id===state.activeWeek)||state.weeks[0]; }
