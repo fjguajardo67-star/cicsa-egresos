@@ -398,7 +398,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-23-c</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-23-d</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -3033,7 +3033,7 @@ function renderPresupuesto(){
     const presup=parseFloat(state.budget[cat])||0, gastado=totals[cat]||0, pct=presup>0?Math.min((gastado/presup)*100,100):0, over=presup>0&&gastado>presup;
     const div=document.createElement("div"); div.className="bcard";
     div.innerHTML=`<div class="bcard-name">${cat}</div>
-      <div class="bcard-nums"><span class="bcard-gastado">${fmt(gastado)}</span><span class="bcard-presup">/ ${fmt(presup)}</span></div>
+      <div class="bcard-nums"><span class="bcard-gastado" onclick="editarGastosCategoria('${cat.replace(/'/g,"\\'")}')" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" title="Ver y reclasificar las facturas de esta categoría en Auditoría">${fmt(gastado)}</span><span class="bcard-presup">/ ${fmt(presup)}</span></div>
       <div class="bcard-bar-wrap"><div class="bcard-bar ${over?'over':''}" style="width:${pct}%"></div></div>
       ${over?`<div style="font-size:11px;color:var(--red);font-weight:600">⚠ Excedido en ${fmt(gastado-presup)}</div>`:""}
       <div style="margin-top:8px">
@@ -4354,6 +4354,43 @@ function gastosFiltradosReporte(){
   const ini=document.getElementById("rFechaIni")?.value||"",fin=document.getElementById("rFechaFin")?.value||"",cat=document.getElementById("rCategoria")?.value||"",prov=(document.getElementById("rProveedor")?.value||"").trim();
   return allGastosAllWeeks().filter(g=>{if(ini&&g.fecha<ini)return false;if(fin&&g.fecha>fin)return false;if(cat&&g.categoria!==cat&&!(g._partidas||[]).some(p=>p.categoria===cat))return false;if(prov&&g.proveedor!==prov)return false;return true;});
 }
+// Select de categoría editable para el detalle de Auditoría — permite reclasificar un gasto
+// (ej. las facturas que quedaron en Desechables por la migración de "sin categoría") a su
+// categoría real sin salir de la hoja. Los gastos divididos no se tocan aquí: su categoría vive
+// en las partidas (se editan al dividir).
+function categoriaSelectHtml(g){
+  if(g._dividida) return `<span class="cat-badge">🔀 Dividida</span>`;
+  const actual=g.categoria||"";
+  const extra=(actual==="")?`<option value="" selected>(sin categoría)</option>`
+    :(!CATS.includes(actual)?`<option value="${esc(actual)}" selected>${esc(actual)}</option>`:"");
+  const opts=CATS.map(c=>`<option value="${esc(c)}" ${c===actual?"selected":""}>${esc(c)}</option>`).join("");
+  return `<select onchange="cambiarCategoriaGasto('${String(g.id).replace(/'/g,"\\'")}', this.value)" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;max-width:160px">${extra}${opts}</select>`;
+}
+function cambiarCategoriaGasto(id, cat){
+  let found=false;
+  state.weeks.forEach(w=>(w.gastos||[]).forEach(g=>{ if(String(g.id)===String(id)){ g.categoria=cat; found=true; } }));
+  if(!found) return;
+  save();
+  renderReportes();
+  if(document.getElementById("budgetGrid")) renderPresupuesto();
+  if(document.getElementById("reporteContent")) renderReporteActual();
+}
+// Rango de fechas del periodo compartido (para drill-down desde Presupuesto a Auditoría).
+function periodoSPRango(){
+  const p=getPeriodoSP();
+  if(p.modo==="rango") return { ini:p.ini, fin:p.fin };
+  const wk=state.weeks.find(w=>w.id===p.weekId);
+  if(wk && wk.ini && wk.fin) return { ini:wk.ini, fin:wk.fin };
+  return { ini:"", fin:"" };
+}
+// Salta a Auditoría filtrado por esta categoría y el periodo actual, donde cada factura se puede
+// reclasificar o borrar. Hace "editable" el gastado de una categoría del Presupuesto.
+function editarGastosCategoria(cat){
+  const r=periodoSPRango();
+  try{ localStorage.setItem(REPORTES_FILTROS_KEY, JSON.stringify({ini:r.ini, fin:r.fin, cat, prov:""})); }catch(e){}
+  showPage("reportes", document.getElementById("navReportes"));
+}
+
 function renderReportes(){
   guardarFiltrosReportes();
   poblarProveedores();
@@ -4369,7 +4406,7 @@ function renderReportes(){
   Object.entries(porProv).sort((a,b)=>b[1].total-a[1].total).forEach(([prov,d],i)=>{const catP=Object.entries(d.cats).sort((a,b)=>b[1]-a[1])[0]?.[0]||"—";const tr=document.createElement("tr");tr.innerHTML=`<td style="font-weight:700;color:var(--vd)">${i+1}</td><td><strong>${prov}</strong></td><td style="text-align:center">${d.count}</td><td><span class="cat-badge">${catP}</span></td><td class="amount-cell">${fmt(d.total)}</td>`;tbody.appendChild(tr);});
   const tbody2=document.getElementById("rBodyDetalle");tbody2.innerHTML="";
   document.getElementById("rEmpty").style.display=gastos.length===0?"block":"none";
-  gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{const tr=document.createElement("tr");tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td>${g.proveedor}</td><td><span class="cat-badge">${g.categoria}</span></td><td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${g.factura||"—"}</td><td style="font-size:12px;color:var(--txt2)">${formaPagoLabel(g)}</td><td class="amount-cell">${fmt(g.importe)}</td><td style="text-align:center"><button onclick="eliminarGasto('${g.id.replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button></td>`;tbody2.appendChild(tr);});
+  gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{const tr=document.createElement("tr");tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td>${g.proveedor}</td><td>${categoriaSelectHtml(g)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${g.factura||"—"}</td><td style="font-size:12px;color:var(--txt2)">${formaPagoLabel(g)}</td><td class="amount-cell">${fmt(g.importe)}</td><td style="text-align:center"><button onclick="eliminarGasto('${g.id.replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button></td>`;tbody2.appendChild(tr);});
 }
 function poblarProveedores(){const sel=document.getElementById("rProveedor");if(!sel)return;const prev=sel.value,provs=[...new Set(allGastosAllWeeks().map(g=>g.proveedor).filter(Boolean))].sort();sel.innerHTML='<option value="">Todos los proveedores</option>'+provs.map(p=>`<option value="${p}" ${p===prev?"selected":""}>${p}</option>`).join("");}
 // El filtro (fechas/categoría/proveedor) de "Reportes" se reiniciaba a "mes actual, todo" cada
