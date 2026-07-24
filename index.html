@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-h</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-i</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -491,6 +491,17 @@ tr:hover td { background:var(--claro); }
     </div>
     <h4 style="margin:0 0 12px;color:var(--vd)">Usuarios registrados</h4>
     <div id="adminUserList"><div style="color:#9DB89D;font-size:14px">Cargando...</div></div>
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
+    <h4 style="margin:0 0 6px;color:var(--vd)">👁 Actividad de usuarios operativos</h4>
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Quién está operando ahora y cuánto tiempo llevan trabajando hoy. Solo lo ves tú.</div>
+    <button class="btn btn-light" onclick="abrirActividadModal()">👁 Ver actividad</button>
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
+    <h4 style="margin:0 0 6px;color:var(--vd)">🗜️ Mantenimiento</h4>
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Mueve las imágenes de facturas viejas que todavía viven dentro del estado hacia Firebase Storage. Aligera la app y baja el uso de memoria. Es seguro y puedes correrlo cuando quieras.</div>
+    <button class="btn btn-light" id="btnMigrarRespaldos" onclick="ejecutarMigracionRespaldos()">🗜️ Optimizar imágenes guardadas</button>
+    <div class="status" id="migracionStatus" style="margin-top:8px"></div>
   </div>
 </div>
 
@@ -1767,6 +1778,52 @@ async function subirRespaldoAStorage(gastoIds, b64, mimeType, factura){
   } catch(e){ console.warn("subirRespaldoAStorage error:", e); }
 }
 
+// Barrido único (o cuantas veces se quiera): las facturas VIEJAS guardaban la imagen como
+// base64 DENTRO del documento estado/cicsa. Eso engorda lo que se baja y se reescribe en cada
+// guardado. Aquí cada imagen incrustada se sube a Storage (queda solo la URL, texto liviano) y
+// se limpia respaldo. Si la subida falla (reglas de Storage, red), se conserva la imagen tal
+// cual — nunca se pierde el respaldo.
+async function migrarRespaldosAStorage(onProgreso){
+  const pendientes = [];
+  (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{
+    if(typeof g.respaldo === "string" && g.respaldo.startsWith("data:")) pendientes.push(g);
+  }));
+  let migrados = 0, fallidos = 0;
+  for(let i=0; i<pendientes.length; i++){
+    const g = pendientes[i];
+    if(onProgreso) onProgreso(i+1, pendientes.length);
+    try{
+      const m = g.respaldo.match(/^data:([^;]+);base64,([\s\S]*)$/);
+      if(!m){ fallidos++; continue; }
+      const mime = m[1], b64 = m[2];
+      if(!g._respaldoUrl) await subirRespaldoAStorage(g.id, b64, mime, g.factura);
+      const gg = encontrarGastoPorId(g.id);
+      if(gg && gg._respaldoUrl){ gg.respaldo = null; migrados++; }   // ya está a salvo en Storage
+      else fallidos++;
+    }catch(e){ console.warn("migrar respaldo:", e); fallidos++; }
+  }
+  if(migrados) save();
+  return { migrados, fallidos, total: pendientes.length };
+}
+async function ejecutarMigracionRespaldos(){
+  const st = document.getElementById("migracionStatus");
+  const btn = document.getElementById("btnMigrarRespaldos");
+  const set = (msg, cls)=>{ if(st){ st.style.display="block"; st.className="status "+(cls||""); st.textContent=msg; } };
+  // Conteo previo para no dejar al usuario a ciegas.
+  let total = 0; (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{ if(typeof g.respaldo==="string" && g.respaldo.startsWith("data:")) total++; }));
+  if(!total){ set("✅ No hay imágenes incrustadas — el estado ya está liviano.", "ok"); return; }
+  if(!confirm(`Se moverán ${total} imagen(es) de factura a Storage. Puede tardar un poco si son muchas. ¿Continuar?`)) return;
+  if(btn) btn.disabled = true;
+  set(`Optimizando… 0 / ${total}`, "");
+  try{
+    const r = await migrarRespaldosAStorage((hecho,tot)=>set(`Optimizando… ${hecho} / ${tot}`, ""));
+    if(r.fallidos) set(`✅ ${r.migrados} movida(s) a Storage. ⚠ ${r.fallidos} no se pudieron mover (se conservan tal cual; reintenta más tarde).`, r.migrados?"ok":"err");
+    else set(`✅ Listo — ${r.migrados} imagen(es) movida(s) a Storage. El estado quedó más liviano.`, "ok");
+    if(document.getElementById("gastosBody")) renderGastos();
+  }catch(e){ set("❌ Error en la optimización: "+(e.message||e), "err"); }
+  finally{ if(btn) btn.disabled = false; }
+}
+
 // Abre la factura guardada en Storage. Como las reglas de Storage exigen sesión iniciada
 // (no son públicas), no puede ser un <a href> normal — hay que pedirla con el idToken y
 // abrirla como blob.
@@ -1809,6 +1866,13 @@ async function cargarThumbReal(gastoId, url, wrapElId){
     if(!r.ok) return;
     const blob = await r.blob();
     const objUrl = URL.createObjectURL(blob);
+    // Tope de memoria: los blob URLs no se liberan solos. Al pasar de 80, suelta el más viejo
+    // (se re-descarga si vuelve a hacer falta) para no acumular imágenes en RAM sin límite.
+    if(_thumbBlobCache.size >= 80){
+      const viejo = _thumbBlobCache.keys().next().value;
+      try{ URL.revokeObjectURL(_thumbBlobCache.get(viejo)); }catch(_){}
+      _thumbBlobCache.delete(viejo);
+    }
     _thumbBlobCache.set(gastoId, objUrl);
     const el = document.getElementById(wrapElId);
     if(el) el.innerHTML = `<img src="${objUrl}" alt="factura" style="width:100%;height:100%;object-fit:cover;display:block;pointer-events:none">`;
@@ -2330,13 +2394,50 @@ dz.addEventListener("dragover",e=>{e.preventDefault();dz.classList.add("drag");}
 dz.addEventListener("dragleave",()=>dz.classList.remove("drag"));
 dz.addEventListener("drop",e=>{e.preventDefault();dz.classList.remove("drag");if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0]);});
 
+// Reescala una foto a un lado largo máximo y la re-codifica JPEG. Una foto de celular sale de
+// 3–8 MB; una factura se lee perfecto a ~1100px. Bajarla aquí recorta los tokens de Claude (la
+// imagen es el costo dominante), el peso en Firebase Storage y la memoria en RAM — de un solo
+// golpe, porque TODO lo de aguas abajo (leer-gasto, leer-productos, división, respaldo) usa esta
+// versión ya reducida. Los PDF NO pasan por aquí: se mandan nativos a Claude.
+const IMG_MAX_LADO = 1100, IMG_JPEG_Q = 0.7;
+function _leerArchivoDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=e=>res(e.target.result); r.onerror=rej; r.readAsDataURL(file); }); }
+function _dataURLaBlob(dataURL){ const [h,b]=dataURL.split(","); const mime=(h.match(/data:([^;]+)/)||[])[1]||"image/jpeg"; const bin=atob(b); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i); return new Blob([u],{type:mime}); }
+function _redimensionarDataURL(dataURL, maxLado=IMG_MAX_LADO, q=IMG_JPEG_Q){
+  return new Promise(resolve=>{
+    try{
+      const img=new Image();
+      img.onload=()=>{
+        const w=img.naturalWidth, h=img.naturalHeight;
+        if(!w||!h){ resolve(null); return; }
+        const escala=Math.min(1, maxLado/Math.max(w,h));            // nunca agranda
+        const nw=Math.round(w*escala), nh=Math.round(h*escala);
+        const canvas=document.createElement("canvas"); canvas.width=nw; canvas.height=nh;
+        canvas.getContext("2d").drawImage(img,0,0,nw,nh);
+        resolve(canvas.toDataURL("image/jpeg", q));
+      };
+      img.onerror=()=>resolve(null);
+      img.src=dataURL;
+    }catch(_){ resolve(null); }
+  });
+}
+// Deja capturedB64/DataURL/File en su versión optimizada (JPEG reducido) si convino; si algo
+// falla o ya era más chica, conserva la original. Reusable desde captura de archivo y desde Gmail.
+async function _optimizarCaptura(rawDataURL, nombre){
+  const opt = await _redimensionarDataURL(rawDataURL);
+  const usar = (opt && opt.length < rawDataURL.length) ? opt : rawDataURL;
+  capturedDataURL = usar;
+  capturedB64 = usar.split(",")[1];
+  const mime = (usar.match(/data:([^;]+)/)||[])[1] || "image/jpeg";
+  capturedFile = new File([_dataURLaBlob(usar)], (nombre||"factura").replace(/\.[^.]+$/,"")+ (mime==="image/jpeg"?".jpg":""), { type: mime });
+}
+
 async function handleFile(file){
   capturedFile=file;
   const preview=document.getElementById("imgPreview");
   if(file.type.startsWith("image/")){
-    const reader=new FileReader();
-    reader.onload=ev=>{ capturedDataURL=ev.target.result; capturedB64=ev.target.result.split(",")[1]; preview.src=capturedDataURL; preview.style.display="block"; };
-    reader.readAsDataURL(file);
+    const rawDataURL = await _leerArchivoDataURL(file);
+    await _optimizarCaptura(rawDataURL, file.name);
+    preview.src=capturedDataURL; preview.style.display="block";
   } else if(file.type==="application/pdf"){
     const ab=await file.arrayBuffer();
     capturedB64=btoa(String.fromCharCode(...new Uint8Array(ab)));
@@ -2624,6 +2725,7 @@ function guardarGasto(){
     _gmailMsgId:capturedFile?._gmailMsgId||null, _gmailFile:capturedFile?.name||null
   };
   if(!gasto.proveedor||!(gasto.importe>0)){ setStatus("statusGuardar","⚠ Proveedor e importe (mayor que cero) son obligatorios.","err"); return; }
+  let _saltarExtraccion=false;   // no gastar una 2ª lectura de IA si es duplicado ya en catálogo
   const _dup=findDuplicate(gasto.proveedor,gasto.importe,gasto.fecha,gasto.factura);
   if(_dup){
     // Si el gasto existente no tiene factura adjunta (ej. se capturó a mano desde la
@@ -2639,11 +2741,12 @@ function guardarGasto(){
     } else {
       const _msg=`⚠ DUPLICADO DETECTADO\n\n${_dup.reason}\n\nGasto existente:\n${_dup.gasto.proveedor} · ${fmt(_dup.gasto.importe)} · ${fmtDate(_dup.gasto.fecha)}\n\n¿Guardar de todas formas?`;
       if(!confirm(_msg)){ setStatus("statusGuardar",`🚫 No guardado — ${_dup.reason}`,"err"); return; }
+      _saltarExtraccion=true;   // es duplicado a propósito: sus productos ya están en el catálogo
     }
   }
   getActiveWeek().gastos.push(gasto);
   save();
-  extraerProductosEnSegundoPlano(gasto.id, capturedB64, capturedFile?.type||"image/jpeg");
+  if(!_saltarExtraccion) extraerProductosEnSegundoPlano(gasto.id, capturedB64, capturedFile?.type||"image/jpeg");
   subirRespaldoAStorage(gasto.id, capturedB64, capturedFile?.type||"image/jpeg", gasto.factura);
   const conRespaldo=gasto.respaldo?" 📎 con respaldo":"";
   setStatus("statusGuardar",`✅ Gasto guardado — ${gasto.proveedor} ${fmt(gasto.importe)}${conRespaldo}. Puedes capturar otro.`,"ok");
@@ -4927,7 +5030,15 @@ function verAdjuntoGmail(idx){
 async function gmailProcessItem(idx){
   const item=gmailItems[idx];if(!item)return;
   capturedB64=item.data_b64;capturedFile={type:item.mime_type,name:item.filename,_gmailMsgId:item.msg_id};
-  if(item.mime_type.startsWith("image/"))capturedDataURL=`data:${item.mime_type};base64,${item.data_b64}`;
+  if(item.mime_type.startsWith("image/")){
+    // Misma reducción que en captura de archivo, pero conservando _gmailMsgId (no se puede
+    // convertir a File real porque ese campo alimenta el dedup/respaldo de Gmail aguas abajo).
+    const raw=`data:${item.mime_type};base64,${item.data_b64}`;
+    const opt=await _redimensionarDataURL(raw);
+    capturedDataURL=(opt && opt.length<raw.length)?opt:raw;
+    capturedB64=capturedDataURL.split(",")[1];
+    capturedFile.type=(capturedDataURL.match(/data:([^;]+)/)||[])[1]||"image/jpeg";
+  }
   else if(item.mime_type==="application/pdf"){try{pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";const raw=atob(item.data_b64),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);const pdfDoc=await pdfjsLib.getDocument({data:bytes}).promise,page=await pdfDoc.getPage(1),vp=page.getViewport({scale:1.5}),canvas=document.createElement("canvas");canvas.width=vp.width;canvas.height=vp.height;await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;capturedDataURL=canvas.toDataURL("image/jpeg",0.85);}catch(e){capturedDataURL=null;}}
   else capturedDataURL=null;
   gmailItems[idx]._done=true;
