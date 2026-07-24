@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-e</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-f</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -816,8 +816,9 @@ tr:hover td { background:var(--claro); }
         <div id="presupDif" style="font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace">$0.00</div>
       </div>
     </div>
+    <div id="presupNotaAdmin" style="display:none;font-size:13px;color:var(--txt2);background:var(--claro);border-radius:8px;padding:10px 14px;margin-bottom:14px">🔒 Solo un administrador puede modificar el presupuesto. Lo estás viendo en modo lectura.</div>
     <div class="budget-grid" id="budgetGrid"></div>
-    <div class="btn-row" style="margin-top:16px">
+    <div class="btn-row" id="presupAcciones" style="margin-top:16px">
       <button class="btn btn-gold" onclick="guardarPresupuesto()">💾 Guardar presupuesto</button>
       <button class="btn btn-light" onclick="resetPresupuesto()">↺ Restaurar valores</button>
     </div>
@@ -1851,6 +1852,80 @@ const DEFAULT_BUDGET = {
 
 let state = { weeks:[], activeWeek:null, budget:{...DEFAULT_BUDGET} };
 
+// ── Fusión de estados (anti-sobrescritura multi-dispositivo) ──────────────────
+// El estado vive en UN solo documento (estado/cicsa). Antes cada dispositivo lo pisaba entero
+// (gana el último) — dos personas capturando a la vez → se perdían datos. Ahora al guardar se
+// LEE el remoto, se FUSIONA con lo local y se escribe el resultado, así ninguna captura se
+// pierde. La fusión une entidades por id (gastos/cortes/retiros/semanas) y respeta los borrados
+// vía "tombstones" (ids marcados como eliminados, para que un dispositivo con copia vieja no
+// resucite lo que otro borró). Pura y testeable.
+function _unionPorId(remoteArr, localArr, borradas){
+  const byId = new Map();
+  (remoteArr||[]).forEach(e => { if(e && e.id!=null && !borradas.has(String(e.id))) byId.set(String(e.id), e); });
+  (localArr ||[]).forEach(e => { if(e && e.id!=null && !borradas.has(String(e.id))) byId.set(String(e.id), e); }); // local gana en conflicto
+  return [...byId.values()];
+}
+function mergeEstados(remote, local){
+  remote = remote || {}; local = local || {};
+  const ahora = Date.now(), PRUNE = 45*24*3600*1000;   // olvida tombstones de +45 días
+  const tombMap = new Map();
+  [...(remote.tombstones||[]), ...(local.tombstones||[])].forEach(t => {
+    if(!t || t.id==null || (ahora-(t.ts||0))>=PRUNE) return;
+    const k=String(t.id), p=tombMap.get(k);
+    if(!p || (t.ts||0)>(p.ts||0)) tombMap.set(k, {id:k, ts:t.ts||0});
+  });
+  const borradas = new Set(tombMap.keys());
+  const wById = new Map();
+  (remote.weeks||[]).forEach(w => { if(w && w.id!=null && !borradas.has(String(w.id))) wById.set(String(w.id), {...w}); });
+  (local.weeks||[]).forEach(w => {
+    if(!w || w.id==null || borradas.has(String(w.id))) return;
+    const k=String(w.id), ex=wById.get(k);
+    if(!ex){ wById.set(k, {...w}); return; }
+    wById.set(k, { ...ex, ...w,       // escalares de la semana: local gana (label/ini/fin)
+      gastos:  _unionPorId(ex.gastos,  w.gastos,  borradas),
+      cortes:  _unionPorId(ex.cortes,  w.cortes,  borradas),
+      retiros: _unionPorId(ex.retiros, w.retiros, borradas),
+    });
+  });
+  const weeks = [...wById.values()].sort((a,b)=> String(a.id)<String(b.id)?-1:1);
+  return {
+    ...remote, ...local,             // config/escalares: este dispositivo gana, con fallback remoto
+    weeks,
+    tombstones: [...tombMap.values()],
+    budget: { ...(remote.budget||{}), ...(local.budget||{}) },
+    cajaSaldoInicial: { ...(remote.cajaSaldoInicial||{}), ...(local.cajaSaldoInicial||{}) },
+  };
+}
+// Marca un id como borrado para que la fusión no lo resucite desde una copia vieja de otro
+// dispositivo. Llamar ANTES de save() en cada eliminación.
+function marcarBorrado(id){
+  if(id==null) return;
+  if(!Array.isArray(state.tombstones)) state.tombstones = [];
+  state.tombstones.push({ id:String(id), ts:Date.now() });
+}
+
+// Guardado a Firestore serializado + con rebote: lee-fusiona-escribe, uno a la vez, para que
+// dos guardados rápidos (o de dos dispositivos) no se pisen.
+let _syncTimer=null, _syncing=false, _syncPending=false;
+function programarSync(){ _syncPending=true; clearTimeout(_syncTimer); _syncTimer=setTimeout(ejecutarSync, 350); }
+async function ejecutarSync(){
+  if(_syncing || !_syncPending) return;
+  _syncing=true; _syncPending=false;
+  try{
+    let remote=null;
+    try{ remote = await fbGet('estado/cicsa'); }catch(_){}
+    if(remote && Array.isArray(remote.weeks)) state = mergeEstados(remote, state);
+    await fbSet('estado/cicsa', state);
+    localStorage.setItem("cicsa_egresos", JSON.stringify(state));
+  }catch(e){
+    console.warn("sync error:", e);
+    try{ await fbSet('estado/cicsa', state); }catch(_){}   // al menos sube lo local
+  }finally{
+    _syncing=false;
+    if(_syncPending) ejecutarSync();
+  }
+}
+
 function save() {
   const json = JSON.stringify(state);
   localStorage.setItem("cicsa_egresos", json);
@@ -1860,8 +1935,8 @@ function save() {
   if(IS_LOCAL && SERVER_AVAILABLE){
     fetch(SERVER+"/save-state",{method:"POST",headers:{"Content-Type":"application/json"},body:json}).catch(()=>{});
   }
-  // Always save to Firebase
-  fbSet('estado/cicsa', state).catch(e=>console.warn("Firebase save error:", e));
+  // Firestore con lee-fusiona-escribe (no pisa lo que otro dispositivo haya capturado).
+  programarSync();
 }
 setInterval(()=>{ if(state.weeks&&state.weeks.length>0) save(); }, 60000);
 window.addEventListener("beforeunload",()=>{
@@ -1887,28 +1962,20 @@ async function initState() {
   load();
   let gotRemote = false;
 
+  // Al cargar se FUSIONA remoto + local (unión por id, respetando tombstones) en vez de elegir
+  // uno por conteo — así ningún movimiento capturado en cualquier lado se pierde al abrir.
   if(IS_LOCAL){
     try {
       const r=await fetch(SERVER+"/load-state",{signal:AbortSignal.timeout(2500)});
       const d=await r.json();
-      if(d.ok && d.state && Array.isArray(d.state.weeks)){
-        const sv=(d.state.weeks||[]).reduce((s,w)=>s+(w.gastos||[]).length,0);
-        const lc=(state.weeks||[]).reduce((s,w)=>s+(w.gastos||[]).length,0);
-        if(sv>=lc){ state=d.state; gotRemote=true; }
-      }
+      if(d.ok && d.state && Array.isArray(d.state.weeks)){ state=mergeEstados(d.state, state); gotRemote=true; }
     } catch(e){ /* Flask local no disponible */ }
   }
 
-  if(!gotRemote){
-    try {
-      const fbState = await fbGet('estado/cicsa');
-      if(fbState && Array.isArray(fbState.weeks)){
-        const sv=(fbState.weeks||[]).reduce((s,w)=>s+(w.gastos||[]).length,0);
-        const lc=(state.weeks||[]).reduce((s,w)=>s+(w.gastos||[]).length,0);
-        if(sv>=lc){ state=fbState; gotRemote=true; }
-      }
-    } catch(e){ console.warn("initState: Firebase load error:", e); }
-  }
+  try {
+    const fbState = await fbGet('estado/cicsa');
+    if(fbState && Array.isArray(fbState.weeks)){ state=mergeEstados(fbState, state); gotRemote=true; }
+  } catch(e){ console.warn("initState: Firebase load error:", e); }
 
   if(!state.budget) state.budget={...DEFAULT_BUDGET};
   if(!state.weeks)  state.weeks=[];
@@ -2141,6 +2208,7 @@ function eliminarSemana(id){
     destino.retiros=(destino.retiros||[]).concat(w.retiros||[]);
   }
   state.weeks=state.weeks.filter(x=>x.id!==id);
+  marcarBorrado(id);   // la semana no debe resucitar; sus movimientos ya viven en destino
   if(state.activeWeek===id) state.activeWeek=destino.id;
   // Si el periodo compartido apuntaba a la semana borrada, cae a la nueva activa.
   const per=getPeriodoSPRaw(); if(per.weekId===id) setPeriodoSP({weekId:state.activeWeek});
@@ -3074,6 +3142,7 @@ function eliminarGasto(id){
   // semanas) se puede estar viendo/borrando un gasto que vive en una semana distinta a la
   // que está activa ahora mismo en Gastos.
   state.weeks.forEach(w => { w.gastos = (w.gastos||[]).filter(g => g.id !== id); });
+  marcarBorrado(id);
   save();
   if(document.getElementById("gastosBody")) renderGastos();
   if(document.getElementById("rBodyDetalle")) renderReportes();
@@ -3106,33 +3175,40 @@ function partidasExpandidas(gastos){
 
 function renderPresupuesto(){
   const grid=document.getElementById("budgetGrid"); grid.innerHTML="";
+  const esAdmin = (typeof currentRole !== "undefined" && currentRole === "admin");
   const p=getPeriodoSP();
   const lbl=document.getElementById("presupPeriodoLabel"); if(lbl) lbl.textContent=`— ${p.label}`;
   const totals=totalesPorCatPeriodo(), allCats=[...new Set([...CATS,...Object.keys(totals)])];
   allCats.forEach(cat=>{
     const presup=parseFloat(state.budget[cat])||0, gastado=totals[cat]||0, pct=presup>0?Math.min((gastado/presup)*100,100):0, over=presup>0&&gastado>presup;
     const div=document.createElement("div"); div.className="bcard";
+    // Editar presupuesto: solo admin. El operativo lo ve en modo lectura.
+    const editor = esAdmin
+      ? `<div style="margin-top:8px">
+          <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">Presupuesto:</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <button onclick="saveSingleBudget('${cat}')" style="flex-shrink:0;padding:5px 10px;background:var(--vd);color:white;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;line-height:1">✓</button>
+            <input class="bcard-input" id="bp_${cat.replace(/\W/g,'_')}" type="number" value="${presup||''}" placeholder="0" style="flex:1;min-width:0;width:100%" oninput="actualizarTotalPresupuesto()">
+          </div>
+        </div>`
+      : "";
     div.innerHTML=`<div class="bcard-name">${cat}</div>
       <div class="bcard-nums"><span class="bcard-gastado" onclick="editarGastosCategoria('${cat.replace(/'/g,"\\'")}')" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" title="Ver y reclasificar las facturas de esta categoría en Auditoría">${fmt(gastado)}</span><span class="bcard-presup">/ ${fmt(presup)}</span></div>
       <div class="bcard-bar-wrap"><div class="bcard-bar ${over?'over':''}" style="width:${pct}%"></div></div>
       ${over?`<div style="font-size:11px;color:var(--red);font-weight:600">⚠ Excedido en ${fmt(gastado-presup)}</div>`:""}
-      <div style="margin-top:8px">
-        <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">Presupuesto:</div>
-        <div style="display:flex;gap:6px;align-items:center">
-          <button onclick="saveSingleBudget('${cat}')"
-            style="flex-shrink:0;padding:5px 10px;background:var(--vd);color:white;border:none;
-            border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;line-height:1">✓</button>
-          <input class="bcard-input" id="bp_${cat.replace(/\W/g,'_')}" type="number" value="${presup||''}" placeholder="0"
-            style="flex:1;min-width:0;width:100%" oninput="actualizarTotalPresupuesto()">
-        </div>
-      </div>`;
+      ${editor}`;
     grid.appendChild(div);
   });
+  // Barra superior (objetivo + botones) y la nota, solo para admin.
+  const bar=document.getElementById("presupTotalBar"); if(bar) bar.style.display = esAdmin ? "grid" : "none";
+  const acciones=document.getElementById("presupAcciones"); if(acciones) acciones.style.display = esAdmin ? "flex" : "none";
+  const nota=document.getElementById("presupNotaAdmin");
+  if(nota) nota.style.display = esAdmin ? "none" : "block";
   const obj=document.getElementById("presupObjetivo");
   if(obj) obj.value = (typeof state.budgetObjetivo === "number" && state.budgetObjetivo > 0)
     ? state.budgetObjetivo
     : Object.values(state.budget).reduce((s,v)=>s+(parseFloat(v)||0),0);
-  actualizarTotalPresupuesto();
+  if(esAdmin) actualizarTotalPresupuesto();
 }
 // Barra de referencia: suma EN VIVO los inputs de las tarjetas (sin guardar) y la compara
 // contra el objetivo, para repartir el presupuesto hasta cuadrar sin andar sumando a mano.
@@ -3155,13 +3231,15 @@ function actualizarTotalPresupuesto(){
     difEl.style.color="var(--red)"; lblEl.style.color="var(--red)";
   }
 }
+function _soloAdminPresup(){ if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede modificar el presupuesto."); return false; } return true; }
 function guardarObjetivoPresupuesto(){
+  if(!_soloAdminPresup()) return;
   state.budgetObjetivo=parseFloat(document.getElementById("presupObjetivo")?.value)||0;
   save(); actualizarTotalPresupuesto();
 }
-function saveSingleBudget(cat){ const val=parseFloat(document.getElementById("bp_"+cat.replace(/\W/g,'_'))?.value)||0; state.budget[cat]=val; save(); renderPresupuesto(); }
-function guardarPresupuesto(){ [...new Set([...CATS,...Object.keys(totalesPorCatPeriodo())])].forEach(cat=>{const el=document.getElementById("bp_"+cat.replace(/\W/g,'_'));if(el) state.budget[cat]=parseFloat(el.value)||0;}); save(); renderPresupuesto(); alert("✅ Presupuesto guardado."); }
-function resetPresupuesto(){ if(!confirm("¿Restaurar valores predeterminados?")) return; state.budget={...DEFAULT_BUDGET}; save(); renderPresupuesto(); }
+function saveSingleBudget(cat){ if(!_soloAdminPresup()) return; const val=parseFloat(document.getElementById("bp_"+cat.replace(/\W/g,'_'))?.value)||0; state.budget[cat]=val; save(); renderPresupuesto(); }
+function guardarPresupuesto(){ if(!_soloAdminPresup()) return; [...new Set([...CATS,...Object.keys(totalesPorCatPeriodo())])].forEach(cat=>{const el=document.getElementById("bp_"+cat.replace(/\W/g,'_'));if(el) state.budget[cat]=parseFloat(el.value)||0;}); save(); renderPresupuesto(); alert("✅ Presupuesto guardado."); }
+function resetPresupuesto(){ if(!_soloAdminPresup()) return; if(!confirm("¿Restaurar valores predeterminados?")) return; state.budget={...DEFAULT_BUDGET}; save(); renderPresupuesto(); }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // REPORTE — CAMBIO 1: semáforo PDF + CAMBIO 2: sin col Notas
@@ -3840,6 +3918,7 @@ function renderRevisionDuplicados(){
 function borrarGastoDuplicado(id){
   if(!confirm("¿Eliminar este registro? Se resta de todos los reportes y se sincroniza a todos los dispositivos.")) return;
   state.weeks.forEach(w => { w.gastos = (w.gastos||[]).filter(g => String(g.id) !== String(id)); });
+  marcarBorrado(id);
   save();
   renderRevisionDuplicados();
   if(document.getElementById("gastosBody")) renderGastos();
@@ -5756,6 +5835,7 @@ function eliminarCorte(id) {
   // Busca en TODAS las semanas, no solo la activa — en modo "Rango de fechas" un corte
   // listado puede pertenecer a otra semana.
   state.weeks.forEach(w => { if(w.cortes) w.cortes = w.cortes.filter(c => c.id !== id); });
+  marcarBorrado(id);
   save();
   renderCaja();
 }
@@ -5784,6 +5864,7 @@ function guardarRetiro() {
 
 function eliminarRetiro(id) {
   state.weeks.forEach(w => { if(w.retiros) w.retiros = w.retiros.filter(r => r.id !== id); });
+  marcarBorrado(id);
   save();
   renderCaja();
 }
