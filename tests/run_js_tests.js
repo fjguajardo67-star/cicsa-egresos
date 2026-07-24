@@ -47,6 +47,7 @@ const FUNCS = [
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "migrarCategorias",
+  "_unionPorId", "mergeEstados",
 ];
 
 const sandbox = { state: { weeks: [], activeWeek: null, budget: {} }, console };
@@ -310,6 +311,52 @@ t("renombra Limpieza/Plásticos → Artículos de limpieza (gastos, partidas, pr
   S.state.weeks[0].gastos.push({ id: "g5", categoria: "", importe: 9 });  // blanco NUEVO post-migración
   S.migrarCategorias();
   assert.equal(S.state.weeks[0].gastos[4].categoria, "", "un blanco nuevo NO se vuelve Desechables tras la migración única");
+});
+
+console.log("\n== mergeEstados (anti-sobrescritura multi-dispositivo) ==");
+const wk = (id, obj) => ({ id, label: id, gastos: [], cortes: [], retiros: [], ...obj });
+t("preserva capturas locales que el remoto (viejo) no tiene — el bug que perdió datos", () => {
+  const remote = { weeks: [wk("w1", { gastos: [{ id: "g1", importe: 100 }] })] };
+  const local  = { weeks: [wk("w1", { gastos: [{ id: "g1", importe: 100 }, { id: "g2", importe: 200 }],
+                                       cortes: [{ id: "c1", monto: 50 }], retiros: [{ id: "r1", monto: 10 }] })] };
+  const m = S.mergeEstados(remote, local);
+  const w = m.weeks.find(x => x.id === "w1");
+  assert.deepEqual(w.gastos.map(g => g.id).sort(), ["g1", "g2"]);
+  assert.equal(w.cortes.length, 1);
+  assert.equal(w.retiros.length, 1);
+});
+t("une adiciones de DOS dispositivos distintos (remoto tiene C, local tiene B)", () => {
+  const remote = { weeks: [wk("w1", { gastos: [{ id: "A" }, { id: "C" }] })] };
+  const local  = { weeks: [wk("w1", { gastos: [{ id: "A" }, { id: "B" }] })] };
+  const m = S.mergeEstados(remote, local);
+  assert.deepEqual(m.weeks[0].gastos.map(g => g.id).sort(), ["A", "B", "C"]);
+});
+t("tombstone: lo borrado localmente NO revive aunque el remoto aún lo tenga", () => {
+  const remote = { weeks: [wk("w1", { gastos: [{ id: "A" }, { id: "B" }] })] };
+  const local  = { weeks: [wk("w1", { gastos: [{ id: "A" }] })], tombstones: [{ id: "B", ts: Date.now() }] };
+  const m = S.mergeEstados(remote, local);
+  assert.deepEqual(m.weeks[0].gastos.map(g => g.id), ["A"]);
+});
+t("semana nueva en un dispositivo aparece tras fusionar", () => {
+  const remote = { weeks: [wk("w1")] };
+  const local  = { weeks: [wk("w1"), wk("w2", { gastos: [{ id: "g9" }] })] };
+  const m = S.mergeEstados(remote, local);
+  assert.deepEqual(m.weeks.map(w => w.id), ["w1", "w2"]);
+});
+t("en conflicto de mismo id, gana la versión local (edición más reciente de este equipo)", () => {
+  const remote = { weeks: [wk("w1", { gastos: [{ id: "g1", importe: 100 }] })] };
+  const local  = { weeks: [wk("w1", { gastos: [{ id: "g1", importe: 175 }] })] };
+  const m = S.mergeEstados(remote, local);
+  close(m.weeks[0].gastos[0].importe, 175);
+});
+t("budget y cajaSaldoInicial se unen por llave", () => {
+  const remote = { weeks: [], budget: { "Cárnicos": 80000, "Hielo": 40000 }, cajaSaldoInicial: { "2026-07-01": { valor: 100 } } };
+  const local  = { weeks: [], budget: { "Cárnicos": 90000, "Gas": 10000 }, cajaSaldoInicial: { "2026-07-08": { valor: 200 } } };
+  const m = S.mergeEstados(remote, local);
+  assert.equal(m.budget["Cárnicos"], 90000);      // local gana
+  assert.equal(m.budget["Hielo"], 40000);          // remoto se conserva
+  assert.equal(m.budget["Gas"], 10000);
+  assert.equal(Object.keys(m.cajaSaldoInicial).length, 2);
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
