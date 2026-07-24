@@ -401,16 +401,21 @@ tr:hover td { background:var(--claro); }
 .chat-fab .chat-badge { position:absolute; top:-5px; right:-5px; background:var(--red); color:white;
   font-size:11px; font-weight:700; min-width:20px; height:20px; border-radius:10px;
   display:none; align-items:center; justify-content:center; padding:0 5px; border:2px solid white; }
-.chat-panel { position:fixed; bottom:20px; right:20px; width:340px; max-width:calc(100vw - 24px);
+.chat-panel { position:fixed; bottom:20px; right:20px; width:340px; height:440px;
+  max-width:calc(100vw - 24px); max-height:calc(100vh - 40px);
   background:white; border-radius:14px; border:1px solid var(--border); z-index:151;
   box-shadow:0 10px 34px rgba(0,0,0,.28); display:none; flex-direction:column; overflow:hidden; }
 .chat-panel.open { display:flex; }
-.chat-head { background:var(--vd); color:white; padding:10px 14px; display:flex; align-items:center; gap:8px; }
+.chat-resize { position:absolute; top:0; left:0; width:26px; height:26px; cursor:nwse-resize;
+  z-index:2; display:flex; align-items:center; justify-content:center; color:#BBDCA8;
+  font-size:12px; touch-action:none; user-select:none; }
+.chat-resize:hover { color:white; }
+.chat-head { background:var(--vd); color:white; padding:10px 14px 10px 26px; display:flex; align-items:center; gap:8px; }
 .chat-head .t { font-weight:700; font-size:14px; }
 .chat-head .x { margin-left:auto; background:transparent; border:none; color:white; opacity:.85;
   font-size:15px; cursor:pointer; }
 .chat-body { padding:12px; display:flex; flex-direction:column; gap:9px; background:#F6F9F3;
-  height:300px; overflow-y:auto; }
+  flex:1; min-height:120px; overflow-y:auto; }
 .chat-msg { max-width:84%; padding:7px 11px; border-radius:12px; font-size:12.5px; line-height:1.4; }
 .chat-msg .who { font-size:10px; font-weight:700; margin-bottom:2px; color:var(--do); }
 .chat-msg .hr { font-size:9px; color:var(--txt2); text-align:right; margin-top:2px; }
@@ -438,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-a</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-b</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -492,6 +497,7 @@ tr:hover td { background:var(--claro); }
 <!-- ── Chat de equipo (burbuja flotante, visible sobre todas las pestañas) ── -->
 <button class="chat-fab" id="chatFab" onclick="toggleChat()" title="Chat del equipo">💬<span class="chat-badge" id="chatBadge">0</span></button>
 <div class="chat-panel" id="chatPanel">
+  <div class="chat-resize" id="chatResize" title="Arrastra para cambiar el tamaño">◤</div>
   <div class="chat-head">
     <span>💬</span><span class="t">Chat CICSA</span>
     <button class="x" onclick="toggleChat()">✕</button>
@@ -5144,11 +5150,48 @@ function toggleChat(){
   document.getElementById("chatPanel").classList.toggle("open", _chatOpen);
   document.getElementById("chatFab").style.display = _chatOpen ? "none" : "flex";
   if(_chatOpen){
+    aplicarTamanoChat();
     renderChatMsgs();
     marcarChatVisto();
     setTimeout(()=>document.getElementById("chatText")?.focus(), 50);
   }
 }
+
+// ── Tamaño ajustable del panel ────────────────────────────────────────────────
+// El panel está anclado abajo-derecha, así que se redimensiona jalando la esquina superior
+// izquierda (la única libre). El tamaño se guarda por dispositivo (localStorage).
+const CHAT_SIZE_KEY = "cicsa_chat_size";
+function aplicarTamanoChat(){
+  try{
+    const s = JSON.parse(localStorage.getItem(CHAT_SIZE_KEY)||"null");
+    if(s && s.w && s.h){
+      const p = document.getElementById("chatPanel");
+      p.style.width = s.w+"px"; p.style.height = s.h+"px";
+    }
+  }catch(e){}
+}
+(function initChatResize(){
+  const handle = document.getElementById("chatResize");
+  const panel  = document.getElementById("chatPanel");
+  if(!handle || !panel) return;
+  handle.addEventListener("pointerdown", ev => {
+    ev.preventDefault();
+    handle.setPointerCapture(ev.pointerId);
+    const rect = panel.getBoundingClientRect();          // right/bottom quedan fijos (ancla)
+    const move = e => {
+      const w = Math.min(Math.max(rect.right - e.clientX, 280), Math.min(680, window.innerWidth-24));
+      const h = Math.min(Math.max(rect.bottom - e.clientY, 300), window.innerHeight-40);
+      panel.style.width = w+"px"; panel.style.height = h+"px";
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      try{ localStorage.setItem(CHAT_SIZE_KEY, JSON.stringify({ w:panel.offsetWidth, h:panel.offsetHeight })); }catch(e){}
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  });
+})();
 function chatHora(ts){
   if(!ts) return "";
   const d = new Date(ts), hoy = new Date();
