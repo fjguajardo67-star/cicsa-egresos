@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-c</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-d</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -5216,8 +5216,11 @@ function renderChatMsgs(){
   const miUid = currentUser?.uid;
   body.innerHTML = _chatMsgs.map(m => {
     const mio = m.uid === miUid;
+    // Siempre se muestra el NOMBRE de la cuenta que envió (nunca un "Tú" pelón), para que quede
+    // claro con qué usuario salió cada mensaje. Los propios llevan además "(tú)".
+    const nom = m.nombre || (m.email||"").split("@")[0] || "Usuario";
     return `<div class="chat-msg ${mio?"mine":"other"}">
-      <div class="who">${esc(mio ? "Tú" : (m.nombre || (m.email||"").split("@")[0] || "Usuario"))}</div>
+      <div class="who">${esc(nom)}${mio?" (tú)":""}</div>
       ${esc(m.texto||"")}
       <div class="hr">${chatHora(m.ts)}</div>
     </div>`;
