@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-b</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-c</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -4586,6 +4586,13 @@ function exportarReportePDF(){
   if(Y>230){doc.addPage();Y=MAR;}
   doc.setFillColor(...VD);doc.rect(MAR,Y,W,7,"F");doc.setTextColor(...GO);doc.setFontSize(7.5);doc.setFont("helvetica","bold");doc.text("POR PROVEEDOR",MAR+3,Y+4.5);doc.text("FACTURAS",MAR+100,Y+4.5);doc.text("TOTAL",PW-MAR-2,Y+4.5,{align:"right"});Y+=7;
   Object.entries(porProv).sort((a,b)=>b[1].total-a[1].total).forEach(([prov,d],i)=>{if(Y>255){doc.addPage();Y=MAR;}doc.setFillColor(...(i%2===0?CL:[255,255,255]));doc.rect(MAR,Y,W,5.5,"F");doc.setTextColor(50,50,50);doc.setFontSize(7);doc.setFont("helvetica","normal");doc.text(prov.slice(0,45),MAR+3,Y+3.8);doc.text(String(d.count),MAR+100,Y+3.8);doc.setFont("helvetica","bold");doc.setTextColor(...VD);doc.text(fmt(d.total),PW-MAR-2,Y+3.8,{align:"right"});Y+=5.5;});Y+=6;
+  // DETALLE DE FACTURAS — factura por factura (mismo detalle que la pantalla y el Excel).
+  const fpPlain=g=>formaPagoLabel(g).replace(/^\S+\s/,"");   // quita el emoji (jsPDF no lo dibuja)
+  const detHdr=()=>{doc.setFillColor(...VD);doc.rect(MAR,Y,W,7,"F");doc.setTextColor(...GO);doc.setFontSize(7);doc.setFont("helvetica","bold");doc.text("DETALLE DE FACTURAS",MAR+3,Y+4.6);doc.text("IMPORTE",PW-MAR-2,Y+4.6,{align:"right"});Y+=7;doc.setFillColor(230,235,226);doc.rect(MAR,Y,W,5,"F");doc.setTextColor(90,90,90);doc.setFontSize(6);doc.text("FECHA",MAR+3,Y+3.4);doc.text("PROVEEDOR",MAR+22,Y+3.4);doc.text("CATEGORÍA",MAR+74,Y+3.4);doc.text("FACTURA",MAR+108,Y+3.4);doc.text("PAGO",MAR+134,Y+3.4);Y+=5;};
+  if(Y>235){doc.addPage();Y=MAR;}
+  detHdr();
+  gastos.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).forEach((g,i)=>{if(Y>272){doc.addPage();Y=MAR;detHdr();}doc.setFillColor(...(i%2===0?CL:[255,255,255]));doc.rect(MAR,Y,W,5.2,"F");doc.setTextColor(50,50,50);doc.setFontSize(6.5);doc.setFont("helvetica","normal");doc.text(fmtDate(g.fecha),MAR+3,Y+3.6);doc.text((g.proveedor||"").slice(0,30),MAR+22,Y+3.6);doc.text((g.categoria||"").slice(0,20),MAR+74,Y+3.6);doc.text((g.factura||"—").slice(0,15),MAR+108,Y+3.6);doc.text(fpPlain(g).slice(0,13),MAR+134,Y+3.6);doc.setFont("helvetica","bold");doc.setTextColor(...VD);doc.text(fmt(g.importe),PW-MAR-2,Y+3.6,{align:"right"});Y+=5.2;});Y+=6;
+  if(Y>262){doc.addPage();Y=MAR;}
   doc.setFillColor(...VD);doc.rect(MAR,Y,W,7,"F");doc.setTextColor(...GO);doc.setFontSize(8);doc.setFont("helvetica","bold");doc.text("TOTAL PERÍODO",MAR+3,Y+5);doc.text(fmt(total),PW-MAR-2,Y+5,{align:"right"});
   doc.save(`Reporte_Egresos_${ini}_${fin}.pdf`.replace(/-/g,""));
 }
