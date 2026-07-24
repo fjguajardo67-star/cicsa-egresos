@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-j</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-k</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -502,6 +502,21 @@ tr:hover td { background:var(--claro); }
     <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Mueve las imágenes de facturas viejas que todavía viven dentro del estado hacia Firebase Storage. Aligera la app y baja el uso de memoria. Es seguro y puedes correrlo cuando quieras.</div>
     <button class="btn btn-light" id="btnMigrarRespaldos" onclick="ejecutarMigracionRespaldos()">🗜️ Optimizar imágenes guardadas</button>
     <div class="status" id="migracionStatus" style="margin-top:8px"></div>
+  </div>
+</div>
+
+<!-- ── Actividad de usuarios operativos (solo admin) ── -->
+<div class="modal-overlay" id="actividadModal">
+  <div class="modal-box" style="max-width:820px">
+    <div class="modal-header">
+      <span>👁 Actividad de usuarios operativos</span>
+      <button class="modal-close" onclick="cerrarActividadModal()">✕</button>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-size:12px;color:var(--txt2)">Quién está operando ahora y cuánto llevan trabajando. Solo lo ves tú.</div>
+      <button class="btn btn-light" onclick="renderActividad()">🔄 Actualizar</button>
+    </div>
+    <div id="actividadBody" style="overflow-x:auto"><div style="color:#9DB89D;font-size:14px">Cargando…</div></div>
   </div>
 </div>
 
@@ -2333,6 +2348,7 @@ function showPage(name,btn){
   if(name==="catalogo")    renderCatalogo();
   if(name==="catalogo-productos") renderCatalogoProductos();
   if(name==="sat")         initSatDates();
+  try{ _actPestanaActual = _actLabelPestana(name); if(_actActivo) _actUltInteraccion = Date.now(); }catch(_){}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5298,6 +5314,126 @@ async function doLogin() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ACTIVIDAD DE USUARIOS OPERATIVOS  (solo el admin la ve)
+// ═══════════════════════════════════════════════════════════════════════════
+// Latido discreto: mientras un usuario OPERATIVO teclea/toca/guarda, se marca actividad y cada
+// ~60 s se escribe un documento chico en la colección 'actividad' (1 por usuario, se sobrescribe
+// — no crece). No es login: mide el tiempo realmente operando. El admin NO se rastrea a sí mismo,
+// solo observa. Si las reglas de Firestore no permiten escribir 'actividad', el latido falla en
+// silencio y la operación normal nunca se ve afectada.
+const ACT_COL = "actividad";
+const ACT_IDLE_MS = 5*60*1000;      // 5 min sin tocar nada = sesión pausada
+const ACT_TICK_MS = 60*1000;        // cada tick cuenta 1 minuto activo
+let _actUltInteraccion = 0, _actUltBeat = 0, _actSesionInicio = 0;
+let _actFechaHoy = "", _actMinutosHoy = 0, _actDias = {};
+let _actTimer = null, _actActivo = false, _actPestanaActual = "";
+
+function _actLabelPestana(name){
+  const M = { captura:"Capturar", gastos:"Gastos", caja:"Caja", presupuesto:"Presupuesto",
+    reporte:"Seguimiento", reportes:"Auditoría", pagos:"Pagos", gmail:"Gmail",
+    "catalogo-productos":"Productos", catalogo:"Catálogo", sat:"SAT" };
+  return M[name] || (name||"");
+}
+function iniciarActividadTracker(){
+  if(_actActivo || !currentUser || currentRole === "admin") return;   // solo operativos
+  _actActivo = true;
+  const marcar = ()=>{ _actUltInteraccion = Date.now(); };
+  ["keydown","pointerdown","click","input","change","touchstart"].forEach(ev=>
+    document.addEventListener(ev, marcar, { passive:true, capture:true }));
+  marcar();
+  _actEscribirBeat();                    // aparece "en línea" de inmediato
+  _actTimer = setInterval(_actTick, ACT_TICK_MS);
+  window.addEventListener("beforeunload", ()=>{ try{ db.collection(ACT_COL).doc(currentUser.uid).set({ ultimaActividad:new Date().toISOString() }, {merge:true}); }catch(_){} });
+}
+function _actTick(){
+  const now = Date.now();
+  if(now - _actUltInteraccion > ACT_TICK_MS) return;    // este minuto no hubo actividad
+  const hoy = todayStr();
+  if(_actFechaHoy && _actFechaHoy !== hoy){ _actDias[_actFechaHoy] = _actMinutosHoy; _actMinutosHoy = 0; }
+  _actFechaHoy = hoy;
+  if(!_actSesionInicio || now - _actUltBeat > ACT_IDLE_MS) _actSesionInicio = now;   // reanudó tras pausa
+  _actMinutosHoy++;
+  _actUltBeat = now;
+  _actEscribirBeat();
+}
+async function _actEscribirBeat(){
+  try{
+    const hoy = todayStr();
+    if(!_actFechaHoy) _actFechaHoy = hoy;
+    _actDias[hoy] = _actMinutosHoy;
+    const claves = Object.keys(_actDias).sort();
+    while(claves.length > 10){ delete _actDias[claves.shift()]; }   // solo últimos 10 días
+    if(!_actSesionInicio) _actSesionInicio = Date.now();
+    await db.collection(ACT_COL).doc(currentUser.uid).set({
+      email: currentUser.email || "",
+      nombre: currentNombre || (currentUser.email||"").split("@")[0],
+      rol: currentRole || "operativo",
+      ultimaActividad: new Date().toISOString(),
+      sesionInicio: new Date(_actSesionInicio).toISOString(),
+      pestana: _actPestanaActual || "",
+      dias: _actDias
+    }, { merge:true });
+  }catch(e){ /* silencioso a propósito */ }
+}
+
+async function abrirActividadModal(){
+  if(currentRole !== "admin") return;
+  document.getElementById("actividadModal").classList.add("open");
+  renderActividad();
+}
+function cerrarActividadModal(){ document.getElementById("actividadModal").classList.remove("open"); }
+async function renderActividad(){
+  const cont = document.getElementById("actividadBody");
+  cont.innerHTML = `<div style="color:var(--txt2);font-size:13px;padding:12px">Cargando…</div>`;
+  let docs = [];
+  try{
+    const snap = await db.collection(ACT_COL).get();
+    snap.forEach(d=>docs.push({ id:d.id, ...d.data() }));
+  }catch(e){ cont.innerHTML = `<div style="color:var(--red);padding:12px;font-size:13px">No se pudo cargar la actividad: ${esc(e.message||String(e))}<br><span style="color:var(--txt2)">Puede faltar la regla de Firestore para la colección <code>actividad</code>.</span></div>`; return; }
+  docs = docs.filter(u => (u.rol||"operativo") !== "admin");
+  if(!docs.length){ cont.innerHTML = `<div style="color:var(--txt2);padding:12px;font-size:13px">Aún no hay actividad registrada de usuarios operativos.<br><span style="font-size:11px">Se registra cuando un usuario operativo entra y opera la app.</span></div>`; return; }
+  const now = Date.now(), hoy = todayStr();
+  const fmtMin = m => { m = Math.round(m||0); const h = Math.floor(m/60), mm = m%60; return h ? `${h} h ${mm} min` : `${mm} min`; };
+  const hhmm = iso => { if(!iso) return "—"; const d = new Date(iso); return isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"}); };
+  const haceCuanto = iso => { if(!iso) return "—"; const s = Math.max(0,(now - new Date(iso).getTime())/1000); if(s<90) return "hace "+Math.round(s)+" s"; const min=s/60; if(min<90) return "hace "+Math.round(min)+" min"; const h=min/60; if(h<48) return "hace "+Math.round(h)+" h"; return "hace "+Math.round(h/24)+" d"; };
+  docs.sort((a,b)=> new Date(b.ultimaActividad||0) - new Date(a.ultimaActividad||0));
+  const dias7 = []; for(let i=6;i>=0;i--){ const d = new Date(); d.setDate(d.getDate()-i); dias7.push(fechaLocalStr(d)); }
+  const filas = docs.map(u=>{
+    const ult = u.ultimaActividad || "";
+    const online = ult && (now - new Date(ult).getTime() < 2*60*1000);
+    const minHoy = (u.dias && u.dias[hoy]) || 0;
+    const estado = online
+      ? `<span style="color:var(--vm);font-weight:700">🟢 En línea</span><div style="font-size:10px;color:var(--txt2)">${haceCuanto(ult)}</div>`
+      : `<span style="color:var(--txt2)">⚪ Inactivo</span><div style="font-size:10px;color:var(--txt2)">${haceCuanto(ult)}</div>`;
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:8px 6px;font-weight:600">${esc(u.nombre||u.email||"?")}<div style="font-size:10px;color:var(--txt2);font-weight:400">${esc(u.email||"")}</div></td>
+      <td style="padding:8px 6px">${estado}</td>
+      <td style="padding:8px 6px">${online?hhmm(u.sesionInicio):"—"}</td>
+      <td style="padding:8px 6px">${esc(u.pestana||"—")}</td>
+      <td style="padding:8px 6px;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:700">${fmtMin(minHoy)}</td>
+    </tr>`;
+  }).join("");
+  const encabDias = dias7.map(d=>{ const dd = new Date(d+"T12:00:00"); return `<th style="padding:4px 6px;font-size:10px;font-weight:600;color:var(--txt2);text-align:center">${dd.toLocaleDateString("es-MX",{weekday:"short",day:"numeric"})}</th>`; }).join("");
+  const resumen = docs.map(u=>{
+    const celdas = dias7.map(d=>{ const m = (u.dias&&u.dias[d])||0; return `<td style="padding:4px 6px;text-align:center;font-size:11px;${d===hoy?'font-weight:700;color:var(--vd)':'color:var(--txt2)'}">${m?fmtMin(m):"·"}</td>`; }).join("");
+    return `<tr style="border-top:1px solid var(--border)"><td style="padding:4px 6px;font-weight:600;font-size:12px">${esc(u.nombre||u.email||"?")}</td>${celdas}</tr>`;
+  }).join("");
+  cont.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;min-width:520px;margin-bottom:20px">
+      <thead><tr style="text-align:left;font-size:11px;color:var(--txt2)">
+        <th style="padding:0 6px 6px">Usuario</th><th style="padding:0 6px 6px">Estado</th><th style="padding:0 6px 6px">Sesión desde</th><th style="padding:0 6px 6px">Dónde</th><th style="padding:0 6px 6px;text-align:right">Activo hoy</th>
+      </tr></thead>
+      <tbody>${filas}</tbody>
+    </table>
+    <h4 style="margin:0 0 8px;color:var(--vd);font-size:13px">Últimos 7 días — tiempo activo</h4>
+    <table style="width:100%;border-collapse:collapse;min-width:520px">
+      <thead><tr style="text-align:left"><th style="padding:0 6px 6px;font-size:10px;color:var(--txt2)">Usuario</th>${encabDias}</tr></thead>
+      <tbody>${resumen}</tbody>
+    </table>
+    <div style="font-size:11px;color:var(--txt2);margin-top:14px">"Activo" = tiempo realmente operando la app (teclear, tocar, guardar). Las pausas de más de 5 min no cuentan, y tener la pestaña abierta sin usarla tampoco suma.</div>`;
+}
+
 // ── Auth State Observer ────────────────────────────────────────────────────────
 auth.onAuthStateChanged(async user => {
   if(user) {
@@ -5348,8 +5484,11 @@ auth.onAuthStateChanged(async user => {
     // crear una semana nueva, para no sobreescribir datos reales con un estado vacío.
     (async()=>{ await initState(); renderAll(); checkServer(); })();
     initChat();
+    iniciarActividadTracker();   // registra actividad solo si es operativo
 
   } else {
+    if(_actTimer){ clearInterval(_actTimer); _actTimer = null; }
+    _actActivo = false;
     currentUser = null;
     currentRole = null;
     currentNombre = null;
