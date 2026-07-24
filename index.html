@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-f</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-g</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -3710,8 +3710,14 @@ async function renderCatalogoProductos(forzar){
   }
 
   let lista = _catalogoProductos.slice();
-  if(_catProdFiltro === "duplicados") lista = lista.filter(p=>duplicados.has(p.id));
-  else if(_catProdFiltro !== "todos") lista = lista.filter(p=>p.estado===_catProdFiltro);
+  // Los ignorados (borrado suave) SOLO se ven en su propio filtro; ocultos de todo lo demás.
+  if(_catProdFiltro === "ignorado"){
+    lista = lista.filter(p=>p.estado==="ignorado");
+  } else {
+    lista = lista.filter(p=>p.estado!=="ignorado");
+    if(_catProdFiltro === "duplicados") lista = lista.filter(p=>duplicados.has(p.id));
+    else if(_catProdFiltro !== "todos") lista = lista.filter(p=>p.estado===_catProdFiltro);
+  }
   if(provFiltro) lista = lista.filter(p=>p.proveedor_nombre===provFiltro);
   if(buscar){
     lista = lista.filter(p =>
@@ -3753,9 +3759,10 @@ async function renderCatalogoProductos(forzar){
       <td style="font-size:11px;color:var(--txt2)">${p.fecha_precio||"—"}${p.factura_origen?` · ${p.factura_origen}`:""}</td>
       <td style="display:flex;gap:3px;justify-content:center;flex-wrap:wrap">
         <button class="btn btn-light" style="padding:3px 6px;font-size:13px;min-width:0" onclick="abrirEditorProducto('${safeId}')" title="Editar">✏️</button>
-        ${p.estado!=="validado"?`<button class="btn btn-light" style="padding:3px 6px;font-size:13px;min-width:0" onclick="cambiarEstadoRapido('${safeId}','validado')" title="Validar">✅</button>`:""}
-        ${p.estado!=="ignorado"?`<button class="btn btn-light" style="padding:3px 6px;font-size:13px;min-width:0" onclick="cambiarEstadoRapido('${safeId}','ignorado')" title="Ignorar">🚫</button>`:""}
-        <button class="btn btn-light" style="padding:3px 6px;font-size:13px;min-width:0" onclick="eliminarProducto('${safeId}')" title="Eliminar">🗑️</button>
+        ${p.estado==="ignorado"
+          ? `<button class="btn btn-light" style="padding:3px 8px;font-size:12px;min-width:0" onclick="restaurarProducto('${safeId}')" title="Restaurar al catálogo">↩️ Restaurar</button>`
+          : `${p.estado!=="validado"?`<button class="btn btn-light" style="padding:3px 6px;font-size:13px;min-width:0" onclick="cambiarEstadoRapido('${safeId}','validado')" title="Validar">✅</button>`:""}
+             <button class="btn btn-light" style="padding:3px 6px;font-size:13px;min-width:0" onclick="eliminarProducto('${safeId}')" title="Quitar del catálogo (se puede restaurar; no reaparece al recargar facturas)">🚫</button>`}
       </td>`;
     tbody.appendChild(tr);
   });
@@ -4155,15 +4162,31 @@ async function cambiarEstadoRapido(id, estado){
   renderCatalogoProductos();
 }
 
+// Borrado SUAVE: no se elimina de verdad, se marca "ignorado". Así el sincronizador de facturas
+// lo sigue reconociendo y NO lo vuelve a crear (antes, al borrar de verdad, reaparecía/duplicaba
+// al recargar Gmail). Queda oculto de la lista normal y se puede restaurar desde "🚫 Ignorado".
 async function eliminarProducto(id){
   const p = _catalogoProductos.find(x=>x.id===id);
   if(!p) return;
-  if(!confirm(`¿Eliminar "${p.nombre_comercial}" del catálogo? Esta acción no se puede deshacer.`)) return;
-  await fbDeleteDoc(CATALOGO_COL, id);
-  _catalogoProductos = _catalogoProductos.filter(x=>x.id!==id);
+  if(!confirm(`¿Quitar "${p.nombre_comercial}" del catálogo?\n\nSe oculta y NO volverá a aparecer aunque recargues facturas de Gmail. Lo puedes restaurar cuando quieras desde el filtro "🚫 Ignorado".`)) return;
+  p.estado_previo = (p.estado && p.estado!=="ignorado") ? p.estado : (p.estado_previo||"pendiente");
+  p.estado = "ignorado";
+  const { id:_id, ...datos } = p;
+  await fbUpdateDoc(CATALOGO_COL, id, datos);
   closeProductoModal();
   renderCatalogoProductos();
-  setStatus("catProdStatus", `🗑️ "${p.nombre_comercial}" eliminado.`, "ok");
+  setStatus("catProdStatus", `🚫 "${p.nombre_comercial}" quitado del catálogo (no reaparecerá). Restaurable desde "🚫 Ignorado".`, "ok");
+  setTimeout(()=>{ const el=document.getElementById("catProdStatus"); if(el) el.style.display="none"; }, 3500);
+}
+async function restaurarProducto(id){
+  const p = _catalogoProductos.find(x=>x.id===id);
+  if(!p) return;
+  p.estado = (p.estado_previo && p.estado_previo!=="ignorado") ? p.estado_previo : "pendiente";
+  delete p.estado_previo;
+  const { id:_id, ...datos } = p;
+  await fbUpdateDoc(CATALOGO_COL, id, datos);
+  renderCatalogoProductos();
+  setStatus("catProdStatus", `↩️ "${p.nombre_comercial}" restaurado al catálogo (${p.estado}).`, "ok");
   setTimeout(()=>{ const el=document.getElementById("catProdStatus"); if(el) el.style.display="none"; }, 2500);
 }
 
