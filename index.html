@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-d</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-e</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -5033,6 +5033,12 @@ auth.onAuthStateChanged(async user => {
       const snap = await db.collection("usuarios").doc(user.uid).get();
       currentRole = snap.exists ? (snap.data().rol || "operativo") : "operativo";
       currentNombre = (snap.exists && snap.data().nombre) ? snap.data().nombre : (user.email||"").split("@")[0];
+      // Auto-revinculación: si la cuenta existe en Auth pero no tiene registro en el panel
+      // (ej. fue eliminada del panel y volvió a entrar), se recrea como Operativo con el
+      // prefijo del correo como nombre — el admin ajusta rol/nombre en Gestión de usuarios.
+      if(!snap.exists){
+        try{ await db.collection("usuarios").doc(user.uid).set({ email:user.email||"", nombre:currentNombre, rol:"operativo", fechaCreacion:new Date().toISOString(), revinculado:true }); }catch(e2){}
+      }
       // If admin UID, ensure role is admin
       if(user.uid === ADMIN_UID) currentRole = "admin";
     } catch(e) {
@@ -5300,6 +5306,8 @@ async function cargarUsuarios() {
           <option value="operativo" ${u.rol !== 'admin' ? 'selected' : ''}>Operativo</option>
           <option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>Admin</option>
         </select>
+        <button onclick="resetPasswordUsuario('${u.email}')" title="Enviar correo para restablecer contraseña"
+          style="padding:6px 10px;background:var(--claro);color:var(--vd);border:none;border-radius:6px;cursor:pointer;font-size:12px">🔑</button>
         <button onclick="eliminarUsuario('${doc.id}', '${u.email}')"
           style="padding:6px 10px;background:#FFEBEE;color:#C0392B;border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button>
         ` : '<span style="font-size:12px;color:#9DB89D">Principal</span>'}
@@ -5342,7 +5350,31 @@ async function crearUsuario() {
     document.getElementById("newUserPass").value = "";
     cargarUsuarios();
   } catch(e) {
-    setStatus("adminStatus", `❌ Error: ${e.message}`, "error");
+    if(String(e.message||"").includes("EMAIL_EXISTS")){
+      // La cuenta de acceso sigue viva en Firebase Auth aunque se haya eliminado del panel.
+      // No se recrea: al iniciar sesión se re-vincula sola (ver onAuthStateChanged). Lo único
+      // que puede faltar es la contraseña — se ofrece el restablecimiento aquí mismo.
+      setStatus("adminStatus",
+        `⚠ ${email} ya tiene cuenta de acceso — no hace falta recrearla. En cuanto esa persona inicie sesión, reaparece en este panel (como Operativo; ajusta rol y nombre aquí).`, "warn");
+      if(confirm(`${email} ya tiene cuenta de acceso en Firebase.\n\n¿Le enviamos un correo para RESTABLECER su contraseña y que pueda entrar?`)){
+        try{ await auth.sendPasswordResetEmail(email); setStatus("adminStatus", `✅ Correo de restablecimiento enviado a ${email}.`, "ok"); }
+        catch(e2){ setStatus("adminStatus", `❌ No se pudo enviar el restablecimiento: ${e2.message||e2}`, "error"); }
+      }
+    } else {
+      setStatus("adminStatus", `❌ Error: ${e.message}`, "error");
+    }
+  }
+}
+
+// Envía el correo estándar de Firebase para restablecer contraseña — la vía correcta cuando
+// alguien la olvida: conserva su cuenta y su historial, sin borrar ni recrear nada.
+async function resetPasswordUsuario(email){
+  if(!confirm(`¿Enviar a ${email} un correo para restablecer su contraseña?`)) return;
+  try {
+    await auth.sendPasswordResetEmail(email);
+    setStatus("adminStatus", `✅ Correo de restablecimiento enviado a ${email}. (Revisar spam si no llega.)`, "ok");
+  } catch(e) {
+    setStatus("adminStatus", `❌ No se pudo enviar: ${e.message||e}`, "error");
   }
 }
 
@@ -5371,7 +5403,7 @@ async function cambiarRol(uid, nuevoRol) {
 }
 
 async function eliminarUsuario(uid, email) {
-  if(!confirm(`¿Eliminar acceso de ${email}?`)) return;
+  if(!confirm(`¿Quitar a ${email} del panel?\n\nNota: su cuenta de acceso sigue existiendo en Firebase — si vuelve a iniciar sesión, reaparece como Operativo. Para bloquear el acceso de verdad: Firebase Console → Authentication → inhabilitar usuario.`)) return;
   try {
     await db.collection("usuarios").doc(uid).delete();
     setStatus("adminStatus", `✅ ${email} eliminado.`, "ok");
