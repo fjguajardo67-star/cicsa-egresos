@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-g</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-h</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -3856,7 +3856,7 @@ function duplicadosSospechosos(gastos){
     const imp = g => parseFloat(g.importe)||0;
     const padres = regs.filter(esPadre), hijos = regs.filter(g=>!esPadre(g));
     const tol = t => Math.max(2.01, t*0.01);             // centavos de redondeo entre padre y partidas
-    let sugeridos = [], motivo = "";
+    let sugeridos = [], motivo = "", consolidable = false;
     if(padres.length && hijos.length){
       const p0 = padres[0], sumaHijos = hijos.reduce((s,g)=>s+imp(g),0);
       if(Math.abs(sumaHijos - imp(p0)) <= tol(imp(p0))){
@@ -3866,6 +3866,9 @@ function duplicadosSospechosos(gastos){
         const padreConDetalle = Array.isArray(p0._partidas) && p0._partidas.length >= 2;
         sugeridos = padreConDetalle ? hijos.map(g=>g.id) : [p0.id];
         motivo = `El padre "Dividida" (${fmt(imp(p0))}) y ${hijos.length===1?"la categoría suelta":"las categorías sueltas"} suman lo mismo — la factura está contada DOS veces.`;
+        // Cuando el padre NO trae desglose interno, borrar las sueltas pierde la categoría de
+        // compra. "Consolidar" fusiona total + categorías en UN solo registro dividido.
+        consolidable = !padreConDetalle && hijos.some(h=>h.categoria && h.categoria!=="Dividida");
       } else if(hijos.some(h=>Math.abs(imp(h)-imp(p0)) <= 0.005)){
         sugeridos = [p0.id];
         motivo = `El padre "Dividida" repite el importe de otro registro del mismo folio.`;
@@ -3885,7 +3888,7 @@ function duplicadosSospechosos(gastos){
     if(sugeridos.length){
       grupos.push({
         proveedor: regs[0].proveedor, folio: norm(regs[0].factura),
-        registros: regs, sugeridos, motivo,
+        registros: regs, sugeridos, motivo, consolidable,
         exceso: sugeridos.reduce((s,id)=>{ const g=regs.find(r=>r.id===id); return s+(g?imp(g):0); },0)
       });
     }
@@ -3915,12 +3918,56 @@ function renderRevisionDuplicados(){
         <button onclick="borrarGastoDuplicado('${String(g.id).replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px;flex-shrink:0">🗑️</button>
       </div>`;
     }).join("");
+    const btnConsolidar = gr.consolidable
+      ? `<button onclick="consolidarFacturaDividida('${String(gr.proveedor).replace(/'/g,"\\'")}','${String(gr.folio).replace(/'/g,"\\'")}')" style="padding:5px 12px;background:#E8F5E9;color:var(--vm);border:1px solid var(--vm);border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;margin-top:8px">⚙ Consolidar en 1 factura dividida</button>
+         <div style="font-size:10px;color:var(--txt2);margin-top:3px">Deja UN registro con el total y las categorías juntas (conserva la categoría de compra). Elimina las copias.</div>`
+      : "";
     return `<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
       <div style="font-weight:600;color:var(--vd);font-size:14px">${esc(gr.proveedor)} <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">#${esc(gr.folio)}</span></div>
       <div style="font-size:11px;color:var(--txt2);margin:2px 0 8px">${esc(gr.motivo)}</div>
       ${filas}
+      ${btnConsolidar}
     </div>`;
   }).join("");
+}
+// Fusiona un grupo de duplicados de factura dividida (padre "Dividida" con el total + categorías
+// sueltas con el mismo folio) en UN solo registro dividido: conserva el total Y el desglose por
+// categoría, y elimina (tombstone) las copias. Así limpiar duplicados ya no obliga a elegir entre
+// la categoría de compra y no duplicar el importe.
+function consolidarFacturaDividida(prov, folio){
+  const norm = s => String(s||"").trim().toUpperCase();
+  const imp = g => parseFloat(g.importe)||0;
+  // Referencias VIVAS dentro de state.weeks (allGastosAllWeeks devuelve copias).
+  const regs = [];
+  state.weeks.forEach(w=>(w.gastos||[]).forEach(g=>{ if(norm(g.proveedor)===norm(prov) && norm(g.factura)===norm(folio)) regs.push(g); }));
+  if(regs.length < 2){ alert("Ya no hay duplicados de esta factura para consolidar."); renderRevisionDuplicados(); return; }
+  const esPadre = g => g.categoria==="Dividida" || g._dividida===true;
+  const padres = regs.filter(esPadre), hijos = regs.filter(g=>!esPadre(g));
+  // El que se queda: el padre con imagen de respaldo si existe, si no el primer padre, si no el
+  // registro de mayor importe (conserva folio, fecha, proveedor y el respaldo de la factura).
+  const keeper = padres.find(p=>p.respaldo||p._respaldoUrl) || padres[0] || regs.slice().sort((a,b)=>imp(b)-imp(a))[0];
+  // Junta el desglose: partidas ya existentes del padre + cada categoría suelta, sumando por
+  // categoría (dos sueltas de "Cárnicos" quedan como una sola partida).
+  const acc = {};
+  const push = (cat, importe, desc) => { const c=cat||"Otro"; if(!acc[c]) acc[c]={categoria:c,importe:0,descripcion:desc||""}; acc[c].importe+=importe; if(desc&&!acc[c].descripcion) acc[c].descripcion=desc; };
+  padres.forEach(p=>{ if(Array.isArray(p._partidas)) p._partidas.forEach(x=>push(x.categoria, parseFloat(x.importe)||0, x.descripcion)); });
+  hijos.forEach(h=>push(h.categoria, imp(h), h.descripcion));
+  const partidas = Object.values(acc).filter(p=>p.importe>0)
+    .map(p=>({categoria:p.categoria, importe:Math.round(p.importe*100)/100, descripcion:p.descripcion||""}));
+  if(partidas.length < 1){ alert("No se encontraron categorías para consolidar."); return; }
+  const total = imp(keeper), suma = partidas.reduce((s,p)=>s+p.importe,0);
+  const lista = partidas.map(p=>`• ${p.categoria}: ${fmt(p.importe)}`).join("\n");
+  let msg = `Se dejará 1 factura de ${fmt(total)} dividida en:\n${lista}\n\nSe eliminarán ${regs.length-1} copia(s) duplicada(s).`;
+  if(Math.abs(total-suma) > 1) msg += `\n\n⚠ La suma de categorías (${fmt(suma)}) no cuadra con el total (${fmt(total)}). Puedes ajustarlo después con el editor ✏️.`;
+  if(!confirm(msg)) return;
+  keeper._dividida = true; keeper.categoria = "Dividida"; keeper._partidas = partidas; keeper.esOtro = false;
+  regs.forEach(g=>{ if(g.id !== keeper.id){ state.weeks.forEach(w=>{ w.gastos = (w.gastos||[]).filter(x=>x.id!==g.id); }); marcarBorrado(g.id); } });
+  save();
+  renderRevisionDuplicados();
+  if(document.getElementById("gastosBody")) renderGastos();
+  if(document.getElementById("rBodyDetalle")) renderReportes();
+  if(document.getElementById("budgetGrid")) renderPresupuesto();
+  if(document.getElementById("reporteContent")) renderReporteActual();
 }
 function borrarGastoDuplicado(id){
   if(!confirm("¿Eliminar este registro? Se resta de todos los reportes y se sincroniza a todos los dispositivos.")) return;

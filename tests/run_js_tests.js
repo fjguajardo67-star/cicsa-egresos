@@ -46,11 +46,16 @@ const FUNCS = [
   "allGastosAllWeeks", "todosLosCortes", "todosLosRetiros",
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
-  "fmt", "duplicadosSospechosos", "migrarCategorias",
+  "fmt", "duplicadosSospechosos", "migrarCategorias", "consolidarFacturaDividida",
   "_unionPorId", "mergeEstados",
 ];
 
-const sandbox = { state: { weeks: [], activeWeek: null, budget: {} }, console };
+const sandbox = {
+  state: { weeks: [], activeWeek: null, budget: {} }, console,
+  // Stubs para consolidarFacturaDividida (efectos de UI/persistencia fuera de alcance del test).
+  confirm: () => true, alert: () => {}, save: () => {}, marcarBorrado: () => {},
+  renderRevisionDuplicados: () => {}, document: { getElementById: () => null },
+};
 vm.createContext(sandbox);
 for (const f of FUNCS) vm.runInContext(extractFunction(f), sandbox);
 const S = sandbox;
@@ -249,6 +254,7 @@ t("padre 'Dividida' + categorías sueltas que suman lo mismo → sugiere borrar 
   assert.equal(r.length, 1);
   assert.deepEqual(r[0].sugeridos, ["p1"], "sin _partidas en el padre, el desglose vive en las sueltas → borrar padre");
   close(r[0].exceso, 2817.99);
+  assert.equal(r[0].consolidable, true, "padre sin desglose + categorías sueltas → se puede consolidar");
 });
 t("padre nuevo CON _partidas + una categoría suelta igual → sugiere borrar la suelta", () => {
   const r = S.duplicadosSospechosos([
@@ -258,6 +264,34 @@ t("padre nuevo CON _partidas + una categoría suelta igual → sugiere borrar la
   ]);
   assert.equal(r.length, 1);
   assert.deepEqual(r[0].sugeridos, ["h1"], "el padre trae el desglose → se conserva; se borra la captura plana");
+  assert.equal(r[0].consolidable, false, "el padre ya trae desglose → no hace falta consolidar");
+});
+t("consolidar F5863: padre total + 2 categorías sueltas → 1 factura dividida con ambas categorías", () => {
+  S.state = { activeWeek: "w1", budget: {}, weeks: [{ id: "w1", label: "sem", gastos: [
+    { id: "p1", proveedor: "ASAEL CRUZ", factura: "F5863", fecha: "2026-07-01", categoria: "Dividida", importe: 16201.10, respaldo: null },
+    { id: "h1", proveedor: "ASAEL CRUZ", factura: "F5863", fecha: "2026-07-01", categoria: "Cárnicos", importe: 2903.10 },
+    { id: "h2", proveedor: "ASAEL CRUZ", factura: "F5863", fecha: "2026-07-01", categoria: "Lácteos / Cremería", importe: 13298.00 },
+  ] }] };
+  S.consolidarFacturaDividida("ASAEL CRUZ", "F5863");
+  const regs = S.state.weeks[0].gastos.filter(g => g.factura === "F5863");
+  assert.equal(regs.length, 1, "queda un solo registro de la factura");
+  const g = regs[0];
+  assert.equal(g._dividida, true);
+  close(g.importe, 16201.10);
+  const cats = (g._partidas || []).map(p => p.categoria).sort();
+  assert.deepEqual(cats, ["Cárnicos", "Lácteos / Cremería"], "conserva ambas categorías de compra");
+  close(g._partidas.reduce((s, p) => s + p.importe, 0), 16201.10, 0.02);
+});
+t("consolidar suma categorías repetidas de la misma clase (2 'Cárnicos' → una partida)", () => {
+  S.state = { activeWeek: "w1", budget: {}, weeks: [{ id: "w1", label: "sem", gastos: [
+    { id: "p1", proveedor: "PROV", factura: "X1", fecha: "2026-07-01", categoria: "Dividida", importe: 300.00, respaldo: null },
+    { id: "h1", proveedor: "PROV", factura: "X1", fecha: "2026-07-01", categoria: "Cárnicos", importe: 100.00 },
+    { id: "h2", proveedor: "PROV", factura: "X1", fecha: "2026-07-01", categoria: "Cárnicos", importe: 200.00 },
+  ] }] };
+  S.consolidarFacturaDividida("PROV", "X1");
+  const g = S.state.weeks[0].gastos.find(x => x.factura === "X1");
+  assert.equal(g._partidas.length, 1, "las dos partidas 'Cárnicos' se funden en una");
+  close(g._partidas[0].importe, 300.00);
 });
 t("captura repetida exacta (mismo folio, fecha e importe) → sugiere borrar la más reciente", () => {
   const r = S.duplicadosSospechosos([
