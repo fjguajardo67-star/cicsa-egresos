@@ -382,7 +382,47 @@ tr:hover td { background:var(--claro); }
 }
 
 /* ── Admin Panel ─────────────────────────────────────────────────── */
+/* El modal de usuarios usa .modal-box (no .modal) y quedó sin fondo — se veía transparente
+   encimado sobre la página. Mismo lienzo blanco que .modal + encabezado y botón de cierre. */
+.modal-box { background:white; border-radius:14px; padding:24px 28px; min-width:360px; width:100%;
+             box-shadow:0 20px 60px rgba(0,0,0,.25); max-height:92vh; overflow-y:auto; margin:auto; }
 #adminModal .modal-box { max-width:600px; }
+.modal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;
+                font-family:'DM Serif Display',serif; font-size:18px; color:var(--vd); }
+.modal-close { border:none; background:var(--claro); color:var(--txt2); border-radius:8px;
+               width:30px; height:30px; font-size:14px; cursor:pointer; }
+.modal-close:hover { background:#FFEBEE; color:var(--red); }
+
+/* ── Chat de equipo: burbuja flotante + panel, visibles sobre TODAS las pestañas ── */
+.chat-fab { position:fixed; bottom:20px; right:20px; width:58px; height:58px; border-radius:50%;
+  background:var(--vd); border:2.5px solid var(--do); color:white; font-size:25px; cursor:pointer;
+  display:none; align-items:center; justify-content:center; z-index:150;
+  box-shadow:0 4px 14px rgba(0,0,0,.3); }
+.chat-fab .chat-badge { position:absolute; top:-5px; right:-5px; background:var(--red); color:white;
+  font-size:11px; font-weight:700; min-width:20px; height:20px; border-radius:10px;
+  display:none; align-items:center; justify-content:center; padding:0 5px; border:2px solid white; }
+.chat-panel { position:fixed; bottom:20px; right:20px; width:340px; max-width:calc(100vw - 24px);
+  background:white; border-radius:14px; border:1px solid var(--border); z-index:151;
+  box-shadow:0 10px 34px rgba(0,0,0,.28); display:none; flex-direction:column; overflow:hidden; }
+.chat-panel.open { display:flex; }
+.chat-head { background:var(--vd); color:white; padding:10px 14px; display:flex; align-items:center; gap:8px; }
+.chat-head .t { font-weight:700; font-size:14px; }
+.chat-head .x { margin-left:auto; background:transparent; border:none; color:white; opacity:.85;
+  font-size:15px; cursor:pointer; }
+.chat-body { padding:12px; display:flex; flex-direction:column; gap:9px; background:#F6F9F3;
+  height:300px; overflow-y:auto; }
+.chat-msg { max-width:84%; padding:7px 11px; border-radius:12px; font-size:12.5px; line-height:1.4; }
+.chat-msg .who { font-size:10px; font-weight:700; margin-bottom:2px; color:var(--do); }
+.chat-msg .hr { font-size:9px; color:var(--txt2); text-align:right; margin-top:2px; }
+.chat-msg.other { background:white; border:1px solid var(--border); align-self:flex-start; border-bottom-left-radius:3px; }
+.chat-msg.mine { background:#DCEDC8; align-self:flex-end; border-bottom-right-radius:3px; }
+.chat-msg.mine .who { color:var(--vm); }
+.chat-input { display:flex; gap:8px; padding:10px; border-top:1px solid var(--border); background:white; }
+.chat-input input { flex:1; border:1.5px solid var(--border); border-radius:20px; padding:8px 14px;
+  font-size:13px; font-family:inherit; min-width:0; }
+.chat-input input:focus { outline:none; border-color:var(--vm); }
+.chat-input button { background:var(--vd); color:white; border:none; border-radius:50%;
+  width:36px; height:36px; font-size:14px; cursor:pointer; flex-shrink:0; }
 .user-list-item {
   display:flex; align-items:center; gap:12px; padding:12px;
   border:1px solid #D4E8CC; border-radius:10px; margin-bottom:8px;
@@ -398,7 +438,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-23-e</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-a</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -430,6 +470,8 @@ tr:hover td { background:var(--claro); }
     <div style="margin-bottom:16px">
       <h4 style="margin:0 0 12px;color:var(--vd)">Agregar usuario nuevo</h4>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input type="text" id="newUserNombre" placeholder="Nombre (aparece en el chat)"
+          style="flex:1;padding:10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;min-width:170px">
         <input type="email" id="newUserEmail" placeholder="correo@ejemplo.com"
           style="flex:1;padding:10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;min-width:200px">
         <input type="password" id="newUserPass" placeholder="Contraseña (min 6 chars)"
@@ -444,6 +486,22 @@ tr:hover td { background:var(--claro); }
     </div>
     <h4 style="margin:0 0 12px;color:var(--vd)">Usuarios registrados</h4>
     <div id="adminUserList"><div style="color:#9DB89D;font-size:14px">Cargando...</div></div>
+  </div>
+</div>
+
+<!-- ── Chat de equipo (burbuja flotante, visible sobre todas las pestañas) ── -->
+<button class="chat-fab" id="chatFab" onclick="toggleChat()" title="Chat del equipo">💬<span class="chat-badge" id="chatBadge">0</span></button>
+<div class="chat-panel" id="chatPanel">
+  <div class="chat-head">
+    <span>💬</span><span class="t">Chat CICSA</span>
+    <button class="x" onclick="toggleChat()">✕</button>
+  </div>
+  <div class="chat-body" id="chatBody">
+    <div style="color:var(--txt2);font-size:12px;text-align:center;padding:12px">Cargando mensajes…</div>
+  </div>
+  <div class="chat-input">
+    <input id="chatText" placeholder="Escribe un mensaje…" maxlength="500" onkeydown="if(event.key==='Enter') enviarChat()">
+    <button onclick="enviarChat()" title="Enviar">➤</button>
   </div>
 </div>
 
@@ -4923,6 +4981,7 @@ const db   = firebase.firestore();
 const ADMIN_UID = "NVapfgY8pshXwYbMq7Wz28ry3pC3";
 let currentUser = null;
 let currentRole = null;
+let currentNombre = null;   // nombre para mostrar (chat); viene de usuarios/{uid}.nombre
 
 // ── Login ──────────────────────────────────────────────────────────────────────
 async function doLogin() {
@@ -4956,14 +5015,16 @@ async function doLogin() {
 auth.onAuthStateChanged(async user => {
   if(user) {
     currentUser = user;
-    // Get role from Firestore
+    // Get role + display name from Firestore
     try {
       const snap = await db.collection("usuarios").doc(user.uid).get();
       currentRole = snap.exists ? (snap.data().rol || "operativo") : "operativo";
+      currentNombre = (snap.exists && snap.data().nombre) ? snap.data().nombre : (user.email||"").split("@")[0];
       // If admin UID, ensure role is admin
       if(user.uid === ADMIN_UID) currentRole = "admin";
     } catch(e) {
       currentRole = user.uid === ADMIN_UID ? "admin" : "operativo";
+      currentNombre = (user.email||"").split("@")[0];
     }
 
     // Hide login, show app
@@ -4993,10 +5054,13 @@ auth.onAuthStateChanged(async user => {
     // Init app — initState() consulta Flask/Firestore ANTES de decidir si hace falta
     // crear una semana nueva, para no sobreescribir datos reales con un estado vacío.
     (async()=>{ await initState(); renderAll(); checkServer(); })();
+    initChat();
 
   } else {
     currentUser = null;
     currentRole = null;
+    currentNombre = null;
+    pararChat();
     document.getElementById("loginScreen").classList.remove("hidden");
     document.getElementById("userChip").style.display = "none";
   }
@@ -5048,6 +5112,104 @@ function cambiarPassword() {
     .catch(e => alert("Error: " + e.message));
 }
 
+// ── Chat de equipo ─────────────────────────────────────────────────────────────
+// Una sola conversación compartida (colección "chat" en Firestore) entre los usuarios dados de
+// alta por el admin. En tiempo real vía onSnapshot (el SDK ya está cargado para auth/usuarios).
+// La burbuja flota sobre TODAS las pestañas; el globo cuenta mensajes de otros posteriores a lo
+// último visto en ESTE dispositivo (localStorage).
+let _chatMsgs = [], _chatUnsub = null, _chatOpen = false;
+const CHAT_SEEN_KEY = "cicsa_chat_lastseen";
+
+function initChat(){
+  if(_chatUnsub) return;
+  document.getElementById("chatFab").style.display = "flex";
+  _chatUnsub = db.collection("chat").orderBy("ts","desc").limit(100).onSnapshot(snap => {
+    _chatMsgs = snap.docs.map(d => ({ id:d.id, ...d.data() })).reverse();
+    renderChatMsgs();
+    actualizarChatBadge();
+  }, err => {
+    console.warn("chat:", err);
+    document.getElementById("chatBody").innerHTML =
+      `<div style="color:var(--red);font-size:12px;text-align:center;padding:12px">No se pudo conectar el chat (permisos de Firestore).</div>`;
+  });
+}
+function pararChat(){
+  if(_chatUnsub){ _chatUnsub(); _chatUnsub = null; }
+  _chatMsgs = []; _chatOpen = false;
+  document.getElementById("chatFab").style.display = "none";
+  document.getElementById("chatPanel").classList.remove("open");
+}
+function toggleChat(){
+  _chatOpen = !_chatOpen;
+  document.getElementById("chatPanel").classList.toggle("open", _chatOpen);
+  document.getElementById("chatFab").style.display = _chatOpen ? "none" : "flex";
+  if(_chatOpen){
+    renderChatMsgs();
+    marcarChatVisto();
+    setTimeout(()=>document.getElementById("chatText")?.focus(), 50);
+  }
+}
+function chatHora(ts){
+  if(!ts) return "";
+  const d = new Date(ts), hoy = new Date();
+  const mismaFecha = d.toDateString() === hoy.toDateString();
+  const hora = d.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"});
+  return mismaFecha ? hora : `${d.toLocaleDateString("es-MX",{day:"2-digit",month:"short"})} · ${hora}`;
+}
+function renderChatMsgs(){
+  const body = document.getElementById("chatBody");
+  if(!body) return;
+  if(!_chatMsgs.length){
+    body.innerHTML = `<div style="color:var(--txt2);font-size:12px;text-align:center;padding:12px">Sin mensajes todavía — escribe el primero 👋</div>`;
+    return;
+  }
+  const miUid = currentUser?.uid;
+  body.innerHTML = _chatMsgs.map(m => {
+    const mio = m.uid === miUid;
+    return `<div class="chat-msg ${mio?"mine":"other"}">
+      <div class="who">${esc(mio ? "Tú" : (m.nombre || (m.email||"").split("@")[0] || "Usuario"))}</div>
+      ${esc(m.texto||"")}
+      <div class="hr">${chatHora(m.ts)}</div>
+    </div>`;
+  }).join("");
+  body.scrollTop = body.scrollHeight;
+  if(_chatOpen) marcarChatVisto();
+}
+function marcarChatVisto(){
+  if(_chatMsgs.length){
+    try{ localStorage.setItem(CHAT_SEEN_KEY, _chatMsgs[_chatMsgs.length-1].ts || ""); }catch(e){}
+  }
+  actualizarChatBadge();
+}
+function actualizarChatBadge(){
+  const badge = document.getElementById("chatBadge");
+  if(!badge) return;
+  let lastSeen = "";
+  try{ lastSeen = localStorage.getItem(CHAT_SEEN_KEY) || ""; }catch(e){}
+  const miUid = currentUser?.uid;
+  const n = _chatMsgs.filter(m => m.uid !== miUid && (m.ts||"") > lastSeen).length;
+  badge.style.display = (n > 0 && !_chatOpen) ? "flex" : "none";
+  badge.textContent = n > 99 ? "99+" : String(n);
+}
+async function enviarChat(){
+  const inp = document.getElementById("chatText");
+  const texto = (inp?.value || "").trim();
+  if(!texto || !currentUser) return;
+  inp.value = "";
+  try {
+    await db.collection("chat").add({
+      uid: currentUser.uid,
+      nombre: currentNombre || (currentUser.email||"").split("@")[0],
+      email: currentUser.email || "",
+      texto,
+      ts: new Date().toISOString()
+    });
+  } catch(e){
+    alert("No se pudo enviar el mensaje: " + (e.message||e));
+    inp.value = texto;   // no perder lo escrito
+  }
+}
+
 // ── Admin Modal ───────────────────────────────────────────────────────────────
 async function abrirAdminModal() {
   if(currentRole !== "admin") return;
@@ -5070,9 +5232,15 @@ async function cargarUsuarios() {
       const u = doc.data();
       const div = document.createElement("div");
       div.className = "user-list-item";
+      const nombre = u.nombre || "";
       div.innerHTML = `
-        <div class="user-avatar" style="width:36px;height:36px;font-size:14px">${(u.email||"?").charAt(0).toUpperCase()}</div>
-        <div class="user-email">${u.email || doc.id}</div>
+        <div class="user-avatar" style="width:36px;height:36px;font-size:14px">${(nombre||u.email||"?").charAt(0).toUpperCase()}</div>
+        <div class="user-email" style="display:flex;flex-direction:column;gap:1px">
+          <span style="font-weight:600">${esc(nombre)||'<span style="color:#B8860B;font-weight:400">⚠ sin nombre</span>'}
+            <button onclick="editarNombreUsuario('${doc.id}', ${JSON.stringify(nombre).replace(/"/g,'&quot;')})" title="Editar nombre (aparece en el chat)" style="border:none;background:transparent;cursor:pointer;font-size:12px;padding:0 2px">✏️</button>
+          </span>
+          <span style="font-size:12px;color:var(--txt2)">${esc(u.email || doc.id)}</span>
+        </div>
         <span class="user-role ${u.rol === 'admin' ? 'role-admin' : 'role-operativo'}">${u.rol === 'admin' ? 'Admin' : 'Operativo'}</span>
         ${doc.id !== ADMIN_UID ? `
         <select onchange="cambiarRol('${doc.id}', this.value)" style="padding:6px;border:1px solid var(--border);border-radius:6px;font-size:12px">
@@ -5091,11 +5259,13 @@ async function cargarUsuarios() {
 }
 
 async function crearUsuario() {
+  const nombre = document.getElementById("newUserNombre").value.trim();
   const email = document.getElementById("newUserEmail").value.trim();
   const pass  = document.getElementById("newUserPass").value;
   const rol   = document.getElementById("newUserRole").value;
   const status = document.getElementById("adminStatus");
 
+  if(!nombre){ setStatus("adminStatus", "⚠ Pon el nombre con el que aparecerá en el chat.", "warn"); return; }
   if(!email || !pass) { setStatus("adminStatus", "⚠ Completa todos los campos.", "warn"); return; }
   if(pass.length < 6) { setStatus("adminStatus", "⚠ La contraseña debe tener mínimo 6 caracteres.", "warn"); return; }
 
@@ -5111,14 +5281,29 @@ async function crearUsuario() {
     if(data.error) throw new Error(data.error.message);
 
     // Save role in Firestore
-    await db.collection("usuarios").doc(data.localId).set({ email, rol, creadoPor: currentUser.uid, fechaCreacion: new Date().toISOString() });
+    await db.collection("usuarios").doc(data.localId).set({ email, nombre, rol, creadoPor: currentUser.uid, fechaCreacion: new Date().toISOString() });
 
-    setStatus("adminStatus", `✅ Usuario ${email} creado como ${rol}.`, "ok");
+    setStatus("adminStatus", `✅ Usuario ${nombre} (${email}) creado como ${rol}.`, "ok");
+    document.getElementById("newUserNombre").value = "";
     document.getElementById("newUserEmail").value = "";
     document.getElementById("newUserPass").value = "";
     cargarUsuarios();
   } catch(e) {
     setStatus("adminStatus", `❌ Error: ${e.message}`, "error");
+  }
+}
+
+async function editarNombreUsuario(uid, actual){
+  const nuevo = prompt("Nombre del usuario (aparece en el chat):", actual||"");
+  if(nuevo===null) return;
+  const limpio = nuevo.trim();
+  if(!limpio){ alert("El nombre no puede quedar vacío."); return; }
+  try {
+    await db.collection("usuarios").doc(uid).update({ nombre: limpio });
+    setStatus("adminStatus", "✅ Nombre actualizado.", "ok");
+    cargarUsuarios();
+  } catch(e) {
+    setStatus("adminStatus", "❌ Error al guardar el nombre.", "error");
   }
 }
 
