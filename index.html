@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-i</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-j</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -2388,6 +2388,9 @@ async function checkServer(){
 // FILE HANDLING
 // ═══════════════════════════════════════════════════════════════════════════
 let capturedFile=null, capturedDataURL=null, capturedB64=null;
+// Productos que /leer-gasto-full ya devolvió junto con el encabezado. Se guardan aquí para que
+// al guardar el gasto NO se vuelva a mandar la imagen a Claude solo por los productos.
+let _productosPreleidos=null;
 document.getElementById("fileIn").addEventListener("change",function(){ if(this.files[0]) handleFile(this.files[0]); });
 const dz=document.getElementById("dropzone");
 dz.addEventListener("dragover",e=>{e.preventDefault();dz.classList.add("drag");});
@@ -2433,6 +2436,7 @@ async function _optimizarCaptura(rawDataURL, nombre){
 
 async function handleFile(file){
   capturedFile=file;
+  _productosPreleidos=null;
   const preview=document.getElementById("imgPreview");
   if(file.type.startsWith("image/")){
     const rawDataURL = await _leerArchivoDataURL(file);
@@ -2472,9 +2476,14 @@ async function leerDocumento(){
     const toB64=f=>new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
     if(!capturedB64&&capturedFile) capturedB64=await toB64(capturedFile);
     const mimeToSend=capturedFile?.type||"image/jpeg";
-    const resp=await fetch(SERVER+"/leer-gasto",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:mimeToSend})});
+    _productosPreleidos=null;
+    // Una sola llamada: encabezado (para el formulario) + productos (para el catálogo). Si el
+    // servidor viejo aún no tiene /leer-gasto-full, cae al /leer-gasto de siempre.
+    let resp=await fetch(SERVER+"/leer-gasto-full",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:mimeToSend})});
+    if(resp.status===404) resp=await fetch(SERVER+"/leer-gasto",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:mimeToSend})});
     const data=await resp.json();
     if(!resp.ok) throw new Error(data.error||"Error desconocido");
+    if(Array.isArray(data.productos)) _productosPreleidos=data.productos;   // se usan al guardar
     if(data.mixto){
       setStatus("statusLectura",`🔀 <strong>Documento mixto detectado</strong> — ${data.proveedor} · ${fmt(data.importe)}<br><span style="font-size:12px">Este documento tiene productos de varias categorías.</span>`,"ok");
       document.getElementById("fProv").value=data.proveedor||"";
@@ -2659,7 +2668,11 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
 }
 
 function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
-  if(!b64){
+  // Si la lectura (/leer-gasto-full) ya trajo los productos, se usan directo — NO se manda la
+  // imagen a Claude una segunda vez. Solo si no hay pre-leídos se cae a /leer-productos.
+  const preleidos = (Array.isArray(_productosPreleidos) && _productosPreleidos.length) ? _productosPreleidos : null;
+  _productosPreleidos = null;
+  if(!b64 && !preleidos){
     try{ setStatus("statusLectura", "⚠ El gasto se guardó, pero no hay imagen de la factura en memoria para desglosar los productos (vuelve a leerla con IA para poblar el catálogo).", "err"); }catch(_){}
     return;
   }
@@ -2674,7 +2687,8 @@ function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
     // catálogo y el usuario no tenía forma de saber por qué. Ahora se avisa en pantalla.
     try{ setStatus("statusLectura", `⚠ El gasto se guardó, pero NO se pudieron desglosar los productos para el catálogo: ${esc(msg)}`, "err"); }catch(_){}
   };
-  const promesa = pedirProductosConReintento(b64, mimeType)
+  const fuente = preleidos ? Promise.resolve({ productos: preleidos }) : pedirProductosConReintento(b64, mimeType);
+  const promesa = fuente
     .then(async data=>{
       if(!data.productos || data.productos.length===0){
         marcarError("La IA no encontró productos individuales en esta factura.");

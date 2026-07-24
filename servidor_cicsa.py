@@ -227,6 +227,54 @@ y en "categoria" pon la categoría principal (la de mayor importe).''',
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ── /leer-gasto-full  (encabezado + productos en UNA sola llamada) ────────────
+# Antes cada factura se mandaba a Claude DOS veces: /leer-gasto (encabezado para el formulario)
+# y luego /leer-productos (renglones para el catálogo). La imagen es el costo dominante de
+# tokens, así que mandarla dos veces duplicaba el gasto. Este endpoint devuelve ambas cosas en
+# una sola llamada. El frontend usa el encabezado para el formulario y guarda los productos para
+# el catálogo sin volver a pedir la imagen.
+@app.route("/leer-gasto-full", methods=["POST"])
+@require_auth
+def leer_gasto_full():
+    try:
+        d = request.get_json()
+        client = get_client()
+        data = call_claude(client, d["image_base64"], d.get("mime_type","image/jpeg"),
+            f'''Analiza este documento (factura, recibo o ticket de proveedor).
+Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
+{{
+  "proveedor": "nombre del proveedor/emisor",
+  "fecha": "YYYY-MM-DD",
+  "factura": "número de factura, folio o ticket",
+  "importe": 1234.56,
+  "mixto": false,
+  "categoria": "categoría de esta lista: {CATS_STR}",
+  "productos": [
+    {{
+      "nombre": "producto específico (ej: Pollo pechuga, Res molida, Papa blanca), no la marca ni el proveedor",
+      "cantidad": 10.5,
+      "unidad": "kg",
+      "precio_unitario": 85.00,
+      "importe": 892.50
+    }}
+  ]
+}}
+REGLAS:
+- "importe" es el TOTAL del documento.
+- Si el documento tiene productos de VARIAS categorías distintas, pon "mixto": true y en
+  "categoria" la categoría principal (la de mayor importe).
+- unidad de cada producto debe ser: kg, lt, pz, cja o paq.
+- precio_unitario es el precio por unidad (kg, lt, pz), NO el importe total del renglón.
+- Si no muestra precio unitario, calcula precio_unitario = importe / cantidad.
+- Incluye TODOS los productos del documento sin omitir ninguno (facturas grandes pueden traer
+  20-30+). Si es un ticket simple sin detalle de productos, devuelve "productos": [].''',
+            max_tokens=5000)
+        return jsonify(data)
+    except (json.JSONDecodeError, KeyError):
+        return jsonify({"error":"No pude leer el documento. Captura manualmente."}), 422
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ── /analizar-division  (desglose por categoría de doc mixto) ─────────────────
 @app.route("/analizar-division", methods=["POST"])
 @require_auth
