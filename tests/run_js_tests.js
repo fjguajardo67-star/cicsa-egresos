@@ -48,6 +48,7 @@ const FUNCS = [
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "migrarCategorias", "consolidarFacturaDividida",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
+  "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
 ];
 
 const sandbox = {
@@ -347,6 +348,19 @@ t("CFDI 3.2 (atributos en minúscula) también se lee", () => {
 });
 t("un XML que no es CFDI regresa null", () => {
   assert.equal(S.parseCFDIXML(`<root><foo bar="1"/></root>`), null);
+});
+t("almacén CFDI: filtra por rango, agrupa por mes y saca YYYY-MM", () => {
+  const store = [
+    { uuid:"A", fecha:"2026-07-05", total:100 },
+    { uuid:"B", fecha:"2026-07-12", total:200 },
+    { uuid:"C", fecha:"2026-06-30", total:300 },
+  ];
+  assert.equal(S.cfdiMes("2026-07-12"), "2026-07");
+  const rango = S.filtrarCfdisPorRango(store, "2026-07-07", "2026-07-14");
+  assert.deepEqual(rango.map(c=>c.uuid), ["B"], "solo el que cae en el rango 7-14 jul");
+  const g = S.agruparCfdisPorMes(store);
+  assert.equal(g["2026-07"].length, 2);
+  assert.equal(g["2026-06"].length, 1);
 });
 
 console.log("\n== migración de categorías ==");

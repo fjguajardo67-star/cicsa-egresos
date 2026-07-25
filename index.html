@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-l</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-m</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1028,6 +1028,18 @@ tr:hover td { background:var(--claro); }
         <input type="file" id="satPdfFile" accept=".pdf" style="font-size:12px;padding:6px 0;display:block;margin-top:4px">
         <button class="btn btn-light" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSAT()">🤖 Analizar PDF con IA</button>
       </div>
+    </div>
+    <div style="background:#F0F7F0;border:1.5px solid var(--vm);border-radius:10px;padding:14px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:700;color:var(--vd)">☁️ CFDIs guardados en la nube</div>
+        <div id="cfdisStoreResumen" style="font-size:12px;color:var(--txt2)">—</div>
+      </div>
+      <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Los XML que subes se guardan aquí (mes completo). Elige un mes y concilia el periodo que quieras sin volver a subir.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="satMesGuardado" onchange="onMesGuardadoChange()" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;min-width:180px"></select>
+        <button class="btn btn-green" style="padding:8px 12px" onclick="conciliarDesdeStore()">🔎 Conciliar el periodo seleccionado</button>
+      </div>
+      <div id="cfdisStoreBody" style="max-height:220px;overflow:auto;margin-top:10px"></div>
     </div>
     <div class="btn-row"><button class="btn btn-light" id="btnSatExport" style="display:none" onclick="exportarConciliacion()">📊 Exportar Excel</button></div>
     <div class="status" id="satStatus"></div>
@@ -3616,6 +3628,7 @@ async function initSatDates(){
   const hoy=new Date(), ini=new Date(hoy.getFullYear(),hoy.getMonth(),1);
   if(!document.getElementById("satFechaIni").value) document.getElementById("satFechaIni").value=fechaLocalStr(ini);
   if(!document.getElementById("satFechaFin").value) document.getElementById("satFechaFin").value=fechaLocalStr(hoy);
+  renderCfdisStore();   // carga el menú de CFDIs guardados en la nube
 }
 
 async function procesarSATExcel(){
@@ -3657,6 +3670,95 @@ async function procesarSATExcel(){
   } catch(err){ setStatus("satStatus","❌ "+err.message,"err"); }
 }
 
+// ── Almacén de CFDIs en la nube (Firestore) ─────────────────────────────────
+// Los CFDIs se guardan una vez (todo el mes) y quedan disponibles para consultar y re-conciliar
+// cualquier periodo sin volver a subir los XML. Se guarda SOLO el dato (UUID, RFC, proveedor,
+// fecha, total) — no el archivo XML — así ocupa muy poco y se comparte entre equipos. La llave
+// del documento es el UUID, de modo que subir el mismo CFDI dos veces lo actualiza, no lo duplica.
+const CFDIS_COL = "cfdis";
+let _cfdisStore = null;
+function cfdiMes(fecha){ return (fecha||"").slice(0,7); }                      // "YYYY-MM"
+function filtrarCfdisPorRango(cfdis, ini, fin){
+  return (cfdis||[]).filter(c=>{ if(ini && c.fecha && c.fecha<ini) return false; if(fin && c.fecha && c.fecha>fin) return false; return true; });
+}
+function agruparCfdisPorMes(cfdis){
+  const g={}; (cfdis||[]).forEach(c=>{ const m=c.mes||cfdiMes(c.fecha); if(!m) return; (g[m]=g[m]||[]).push(c); }); return g;
+}
+async function cargarCfdisStore(forzar){
+  if(_cfdisStore && !forzar) return _cfdisStore;
+  _cfdisStore = await fbListCollection(CFDIS_COL);
+  return _cfdisStore;
+}
+// Upsert de un arreglo de CFDIs parseados. Devuelve {nuevos, existentes}.
+async function guardarCfdisEnStore(cfdis){
+  await cargarCfdisStore();
+  const yaHay = new Set(_cfdisStore.map(c=>String(c.uuid||c.id).toUpperCase()));
+  let nuevos=0, existentes=0;
+  const tareas=[];
+  for(const c of cfdis){
+    const uuid=(c.uuid||c.folio||"").trim(); if(!uuid) continue;
+    const docId = uuid.replace(/[^A-Za-z0-9_-]/g,"_");
+    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, mes:cfdiMes(c.fecha), subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
+    tareas.push({ docId, data });
+    if(yaHay.has(uuid.toUpperCase())){ existentes++; const i=_cfdisStore.findIndex(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase()); if(i>=0)_cfdisStore[i]={id:docId,...data}; }
+    else { nuevos++; _cfdisStore.push({ id:docId, ...data }); yaHay.add(uuid.toUpperCase()); }
+  }
+  // Escritura en paralelo por tandas (PATCH = crea si no existe) para no esperar 80 viajes en fila.
+  for(let i=0;i<tareas.length;i+=25){
+    await Promise.all(tareas.slice(i,i+25).map(t=>fbUpdateDoc(CFDIS_COL, t.docId, t.data)));
+  }
+  return { nuevos, existentes };
+}
+async function renderCfdisStore(){
+  const sel=document.getElementById("satMesGuardado"), resumen=document.getElementById("cfdisStoreResumen"), body=document.getElementById("cfdisStoreBody");
+  if(!sel) return;
+  await cargarCfdisStore();
+  const grupos=agruparCfdisPorMes(_cfdisStore);
+  const meses=Object.keys(grupos).sort().reverse();
+  const totalCfdis=_cfdisStore.length;
+  if(resumen) resumen.textContent = totalCfdis ? `${totalCfdis} CFDI en ${meses.length} mes(es)` : "Aún no hay CFDIs guardados";
+  const prev=sel.value;
+  sel.innerHTML = meses.length ? meses.map(m=>`<option value="${m}">${nombreMes(m)} — ${grupos[m].length} CFDI</option>`).join("") : `<option value="">— sin CFDIs guardados —</option>`;
+  if(prev && meses.includes(prev)) sel.value=prev; else if(meses.length) sel.value=meses[0];
+  renderTablaMesCfdi();
+}
+function nombreMes(m){
+  const [y,mm]=(m||"").split("-"); if(!y||!mm) return m||"—";
+  const nombres=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  return `${nombres[parseInt(mm,10)-1]||mm} ${y}`;
+}
+function renderTablaMesCfdi(){
+  const sel=document.getElementById("satMesGuardado"), body=document.getElementById("cfdisStoreBody"); if(!body) return;
+  const mes=sel?.value||"";
+  const lista=(_cfdisStore||[]).filter(c=>(c.mes||cfdiMes(c.fecha))===mes).sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||""));
+  if(!lista.length){ body.innerHTML=`<div style="font-size:12px;color:var(--txt2);padding:8px">Selecciona un mes con CFDIs guardados.</div>`; return; }
+  body.innerHTML=`<table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr style="text-align:left;color:var(--txt2);font-size:11px"><th style="padding:2px 6px">Fecha</th><th style="padding:2px 6px">Proveedor</th><th style="padding:2px 6px">RFC</th><th style="padding:2px 6px;text-align:right">Total</th></tr></thead>
+    <tbody>${lista.map(c=>`<tr style="border-top:1px solid var(--border)"><td style="padding:3px 6px">${fmtDate(c.fecha)||"—"}</td><td style="padding:3px 6px">${esc(c.proveedor||"—")}</td><td style="padding:3px 6px;font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.rfc||"—")}</td><td style="padding:3px 6px;text-align:right;font-family:'JetBrains Mono',monospace">${fmt(c.total)}</td></tr>`).join("")}</tbody>
+  </table>`;
+}
+function onMesGuardadoChange(){
+  const mes=document.getElementById("satMesGuardado")?.value||"";
+  if(mes){
+    const [y,mm]=mes.split("-").map(Number);
+    document.getElementById("satFechaIni").value=`${mes}-01`;
+    document.getElementById("satFechaFin").value=`${mes}-${String(new Date(y,mm,0).getDate()).padStart(2,"0")}`;   // último día del mes
+  }
+  renderTablaMesCfdi();
+}
+async function conciliarDesdeStore(){
+  await cargarCfdisStore();
+  if(!_cfdisStore.length){ setStatus("satStatus","⚠ No hay CFDIs guardados todavía. Sube los XML primero.","err"); return; }
+  const fechaIni=document.getElementById("satFechaIni").value, fechaFin=document.getElementById("satFechaFin").value;
+  const enRango=filtrarCfdisPorRango(_cfdisStore, fechaIni, fechaFin);
+  if(!enRango.length){ setStatus("satStatus","⚠ No hay CFDIs guardados dentro de ese periodo. Ajusta las fechas o el mes.","err"); return; }
+  satCFDIs=enRango;
+  const resultado=conciliarSAT(enRango,fechaIni,fechaFin); satResultado=resultado; renderConciliacion(resultado);
+  document.getElementById("btnSatExport").style.display="flex";
+  guardarSatEstado();
+  setStatus("satStatus",`✅ Conciliado desde la nube — ${enRango.length} CFDI del periodo.`,"ok");
+}
+
 // Lee un atributo de la ETIQUETA de apertura cuyo nombre local sea `tagLocal` (ignora el prefijo
 // de namespace: cfdi:, tfd:, etc.). Case-insensitive en el nombre del atributo para cubrir CFDI
 // 3.2 (minúsculas) y 3.3/4.0 (PascalCase). El \b evita falsos positivos (Total vs SubTotal,
@@ -3686,24 +3788,26 @@ async function procesarSATXml(){
   if(!files.length){ alert("Selecciona uno o más archivos XML de CFDI."); return; }
   const fechaIni=document.getElementById("satFechaIni").value, fechaFin=document.getElementById("satFechaFin").value;
   setStatus("satStatus",`Leyendo ${files.length} XML…`,"loading");
+  // Se guarda TODO lo que traiga el archivo (mes completo), no solo el rango — así queda en la
+  // nube para consultar/re-conciliar cualquier periodo después sin volver a subir.
   const cfdis=[]; let errores=0;
   for(const f of files){
-    try{
-      const c=parseCFDIXML(await f.text());
-      if(!c){ errores++; continue; }
-      if(fechaIni && c.fecha && c.fecha<fechaIni) continue;
-      if(fechaFin && c.fecha && c.fecha>fechaFin) continue;
-      cfdis.push(c);
-    }catch(e){ errores++; }
+    try{ const c=parseCFDIXML(await f.text()); if(c) cfdis.push(c); else errores++; }
+    catch(e){ errores++; }
   }
-  // dedupe por UUID (por si el mismo CFDI viene repetido)
   const vistos=new Set(), unicos=cfdis.filter(c=>{ const k=(c.uuid||c.folio||"").toUpperCase(); if(!k) return true; if(vistos.has(k)) return false; vistos.add(k); return true; });
-  if(!unicos.length){ setStatus("satStatus",`⚠ No se pudo leer ningún CFDI${errores?` (${errores} archivo(s) con error o fuera del periodo)`:""}.`,"err"); return; }
-  satCFDIs=unicos;
-  setStatus("satStatus",`✅ ${unicos.length} CFDI leídos${errores?` · ${errores} archivo(s) omitido(s)`:""}. Conciliando…`,"ok");
-  const resultado=conciliarSAT(unicos,fechaIni,fechaFin); satResultado=resultado; renderConciliacion(resultado);
+  if(!unicos.length){ setStatus("satStatus",`⚠ No se pudo leer ningún CFDI${errores?` (${errores} archivo(s) con error)`:""}.`,"err"); return; }
+  setStatus("satStatus",`Guardando ${unicos.length} CFDI en la nube…`,"loading");
+  let guardado={nuevos:unicos.length, existentes:0};
+  try{ guardado=await guardarCfdisEnStore(unicos); }catch(e){ console.warn("guardarCfdisEnStore:",e); }
+  await renderCfdisStore();
+  // Conciliación inmediata del periodo seleccionado (subconjunto en rango).
+  const enRango=filtrarCfdisPorRango(unicos, fechaIni, fechaFin);
+  satCFDIs=enRango;
+  const resultado=conciliarSAT(enRango,fechaIni,fechaFin); satResultado=resultado; renderConciliacion(resultado);
   document.getElementById("btnSatExport").style.display="flex";
   guardarSatEstado();
+  setStatus("satStatus",`✅ ${unicos.length} CFDI leídos (${guardado.nuevos} nuevos · ${guardado.existentes} ya estaban) · ${enRango.length} dentro del periodo${errores?` · ${errores} archivo(s) con error`:""}.`,"ok");
 }
 
 async function procesarSAT(){
