@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-k</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-l</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1001,22 +1001,29 @@ tr:hover td { background:var(--claro); }
 <div class="container page" id="page-sat">
   <div class="card">
     <div class="card-title">🏛 Conciliación SAT vs CICSA</div>
-    <p style="font-size:13px;color:var(--txt2);margin-bottom:18px">Sube el PDF de <strong>Consulta CFDI</strong> del portal del SAT. La IA extrae todos los CFDIs y compara contra los gastos registrados en CICSA.</p>
+    <p style="font-size:13px;color:var(--txt2);margin-bottom:18px">Sube los <strong>XML de CFDI</strong> del periodo (o el Excel de la Consulta SAT) y se comparan contra los gastos registrados en CICSA para detectar facturas omitidas. El XML y el Excel <strong>no gastan tokens</strong>.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
       <div class="field"><label>Período — Fecha inicio</label><input type="date" id="satFechaIni"></div>
       <div class="field"><label>Período — Fecha fin</label><input type="date" id="satFechaFin"></div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px">
       <div style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
-        <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:6px">⭐ Opción recomendada — Sin costo de IA</div>
-        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Convierte el PDF a Excel con Adobe Acrobat Online (gratis) y súbelo aquí. No gasta tokens.</div>
+        <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:6px">⭐ Mejor opción — XML de CFDI · Sin IA</div>
+        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Sube los archivos XML de los CFDIs (puedes seleccionar varios a la vez). Se leen directo del comprobante, sin gastar tokens.</div>
+        <label style="font-size:12px;font-weight:600;color:var(--vd)">XML de CFDI (.xml — varios)</label>
+        <input type="file" id="satXmlFiles" accept=".xml,text/xml,application/xml" multiple style="font-size:12px;padding:6px 0;display:block;margin-top:4px">
+        <button class="btn btn-green" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSATXml()">🧾 Leer XML y Conciliar</button>
+      </div>
+      <div style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
+        <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:6px">Opción — Excel de la Consulta · Sin IA</div>
+        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Descarga la Consulta SAT como Excel/CSV (o convierte el PDF con Adobe Acrobat Online) y súbela aquí. No gasta tokens.</div>
         <label style="font-size:12px;font-weight:600;color:var(--vd)">Excel del SAT (.xlsx / .xls)</label>
         <input type="file" id="satExcelFile" accept=".xlsx,.xls" style="font-size:12px;padding:6px 0;display:block;margin-top:4px">
         <button class="btn btn-green" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSATExcel()">📊 Analizar Excel y Conciliar</button>
       </div>
       <div style="background:var(--claro);border:1.5px solid var(--border);border-radius:10px;padding:14px">
-        <div style="font-size:13px;font-weight:700;color:var(--txt2);margin-bottom:6px">Opción alternativa — Usa IA (gasta tokens)</div>
-        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Sube el PDF original. La IA extrae los CFDIs en 2 llamadas (~60 seg).</div>
+        <div style="font-size:13px;font-weight:700;color:var(--txt2);margin-bottom:6px">Alternativa — PDF · Usa IA (gasta tokens)</div>
+        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Solo si no tienes XML ni Excel. La IA extrae los CFDIs del PDF en 2 llamadas (~60 seg).</div>
         <label style="font-size:12px;font-weight:600;color:var(--txt2)">PDF del SAT (Consulta CFDI)</label>
         <input type="file" id="satPdfFile" accept=".pdf" style="font-size:12px;padding:6px 0;display:block;margin-top:4px">
         <button class="btn btn-light" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSAT()">🤖 Analizar PDF con IA</button>
@@ -3648,6 +3655,55 @@ async function procesarSATExcel(){
     document.getElementById("btnSatExport").style.display="flex";
     guardarSatEstado();
   } catch(err){ setStatus("satStatus","❌ "+err.message,"err"); }
+}
+
+// Lee un atributo de la ETIQUETA de apertura cuyo nombre local sea `tagLocal` (ignora el prefijo
+// de namespace: cfdi:, tfd:, etc.). Case-insensitive en el nombre del atributo para cubrir CFDI
+// 3.2 (minúsculas) y 3.3/4.0 (PascalCase). El \b evita falsos positivos (Total vs SubTotal,
+// Emisor vs Receptor).
+function _cfdiAttr(xml, tagLocal, attr){
+  const tag = xml.match(new RegExp("<(?:[\\w.-]+:)?"+tagLocal+"\\b[^>]*>", "i"));
+  if(!tag) return "";
+  const a = tag[0].match(new RegExp("\\b"+attr+"\\s*=\\s*\"([^\"]*)\"", "i"));
+  return a ? a[1] : "";
+}
+// Convierte el XML de un CFDI en el mismo formato que consume conciliarSAT: folio (UUID/Folio
+// Fiscal), rfc y nombre del emisor, fecha y total del comprobante. Cero tokens: todo sale del XML.
+function parseCFDIXML(xml){
+  if(!xml || xml.indexOf("Comprobante")===-1) return null;
+  const total  = parseFloat(_cfdiAttr(xml,"Comprobante","Total")||"0")||0;
+  const fecha  = (_cfdiAttr(xml,"Comprobante","Fecha")||"").slice(0,10);
+  const serie  = _cfdiAttr(xml,"Comprobante","Serie");
+  const folioC = _cfdiAttr(xml,"Comprobante","Folio");
+  const rfc    = _cfdiAttr(xml,"Emisor","Rfc");
+  const nombre = _cfdiAttr(xml,"Emisor","Nombre");
+  const uuid   = _cfdiAttr(xml,"TimbreFiscalDigital","UUID");
+  if(!uuid && !total) return null;                 // no parece un CFDI válido
+  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, total };
+}
+async function procesarSATXml(){
+  const files=[...(document.getElementById("satXmlFiles").files||[])];
+  if(!files.length){ alert("Selecciona uno o más archivos XML de CFDI."); return; }
+  const fechaIni=document.getElementById("satFechaIni").value, fechaFin=document.getElementById("satFechaFin").value;
+  setStatus("satStatus",`Leyendo ${files.length} XML…`,"loading");
+  const cfdis=[]; let errores=0;
+  for(const f of files){
+    try{
+      const c=parseCFDIXML(await f.text());
+      if(!c){ errores++; continue; }
+      if(fechaIni && c.fecha && c.fecha<fechaIni) continue;
+      if(fechaFin && c.fecha && c.fecha>fechaFin) continue;
+      cfdis.push(c);
+    }catch(e){ errores++; }
+  }
+  // dedupe por UUID (por si el mismo CFDI viene repetido)
+  const vistos=new Set(), unicos=cfdis.filter(c=>{ const k=(c.uuid||c.folio||"").toUpperCase(); if(!k) return true; if(vistos.has(k)) return false; vistos.add(k); return true; });
+  if(!unicos.length){ setStatus("satStatus",`⚠ No se pudo leer ningún CFDI${errores?` (${errores} archivo(s) con error o fuera del periodo)`:""}.`,"err"); return; }
+  satCFDIs=unicos;
+  setStatus("satStatus",`✅ ${unicos.length} CFDI leídos${errores?` · ${errores} archivo(s) omitido(s)`:""}. Conciliando…`,"ok");
+  const resultado=conciliarSAT(unicos,fechaIni,fechaFin); satResultado=resultado; renderConciliacion(resultado);
+  document.getElementById("btnSatExport").style.display="flex";
+  guardarSatEstado();
 }
 
 async function procesarSAT(){

@@ -47,7 +47,7 @@ const FUNCS = [
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "migrarCategorias", "consolidarFacturaDividida",
-  "_unionPorId", "mergeEstados",
+  "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
 ];
 
 const sandbox = {
@@ -315,6 +315,38 @@ t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
     { id: "b", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
   ]);
   assert.equal(r.length, 0);
+});
+
+console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
+t("CFDI 4.0: extrae UUID, total (no SubTotal), fecha, RFC/nombre del EMISOR (no receptor)", () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" Serie="A" Folio="123" Fecha="2026-07-15T10:30:00" SubTotal="13967.33" Total="16201.10" Moneda="MXN">
+  <cfdi:Emisor Rfc="CACX7605101P8" Nombre="ASAEL CRUZ"/>
+  <cfdi:Receptor Rfc="XAXX010101000" Nombre="CICSA"/>
+  <cfdi:Complemento>
+    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" UUID="A1B2C3D4-1234-5678-9ABC-DEF012345678"/>
+  </cfdi:Complemento>
+</cfdi:Comprobante>`;
+  const c = S.parseCFDIXML(xml);
+  assert.ok(c, "debe parsear");
+  close(c.total, 16201.10);                                  // Total, NO SubTotal
+  assert.equal(c.fecha, "2026-07-15");                        // se recorta a YYYY-MM-DD
+  assert.equal(c.rfc, "CACX7605101P8");                       // RFC del emisor, no del receptor
+  assert.equal(c.proveedor, "ASAEL CRUZ");
+  assert.equal(c.uuid, "A1B2C3D4-1234-5678-9ABC-DEF012345678");
+  assert.equal(c.folio, c.uuid, "el folio de conciliación es el UUID");
+});
+t("CFDI 3.2 (atributos en minúscula) también se lee", () => {
+  const xml = `<Comprobante total="500.00" fecha="2026-06-01T09:00:00" serie="B" folio="7"><Emisor rfc="AAA010101AAA" nombre="PROV UNO"/><Complemento><tfd:TimbreFiscalDigital UUID="U-2"/></Complemento></Comprobante>`;
+  const c = S.parseCFDIXML(xml);
+  assert.ok(c);
+  close(c.total, 500.00);
+  assert.equal(c.rfc, "AAA010101AAA");
+  assert.equal(c.proveedor, "PROV UNO");
+  assert.equal(c.uuid, "U-2");
+});
+t("un XML que no es CFDI regresa null", () => {
+  assert.equal(S.parseCFDIXML(`<root><foo bar="1"/></root>`), null);
 });
 
 console.log("\n== migración de categorías ==");
