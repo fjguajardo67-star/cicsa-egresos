@@ -29,10 +29,14 @@ service cloud.firestore {
     // rol "admin" en usuarios/{uid}. Los get() dentro de reglas son lecturas
     // privilegiadas: no vuelven a pasar por estas reglas, así que no hay
     // recursión aunque 'usuarios' esté restringida.
+    // El exists() NO es adorno: get() sobre un documento inexistente truena y
+    // la regla deniega. Sin él, un usuario cuyo registro fue eliminado (el caso
+    // de "dar de alta otra vez a alguien que borré") no podría recrearlo.
     function esAdmin() {
       return conSesion() && (
         request.auth.uid == 'NVapfgY8pshXwYbMq7Wz28ry3pC3' ||
-        get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.rol == 'admin'
+        (exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.rol == 'admin')
       );
     }
 
