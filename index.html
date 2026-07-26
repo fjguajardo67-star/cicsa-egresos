@@ -12,9 +12,13 @@
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
 <style>
+/* Paleta tomada del logo oficial CICSA (SVG vectorizado):
+   verde bosque #275B26 · verde claro #92BF5B · amarillo #F9CD1D
+   naranja #F57814 · dorado #BE8910 */
 :root {
-  --vd: #2D5E1E; --vm: #4A8C2A; --do: #D4A017; --naranja: #E8651A;
-  --claro: #F0F7EC; --bg: #F7F9F7; --white: #fff;
+  --vd: #275B26; --vm: #4A8C2A; --vclaro: #92BF5B;
+  --do: #BE8910; --amarillo: #F9CD1D; --naranja: #F57814;
+  --claro: #F0F7EC; --bg: #F7F7EF; --white: #fff;
   --txt: #1A2E14; --txt2: #4A5E42; --border: #D4E8CC;
   --red: #C0392B; --red-bg: #FEF2F2;
   --shadow: 0 2px 16px rgba(45,94,30,.10);
@@ -23,31 +27,78 @@
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: var(--bg); color: var(--txt); min-height: 100vh; }
-.topbar {
-  background: var(--vd); padding: 0 16px;
-  display: flex; align-items: center; gap: 0;
-  border-bottom: 3px solid var(--do); position: sticky; top:0; z-index:100;
+/* ── Sidebar (rediseño 2026: reemplaza a la barra superior de pestañas) ── */
+.sidebar {
+  position:fixed; left:0; top:0; bottom:0; width:230px; z-index:120;
+  background:var(--white); border-right:1px solid var(--border);
+  display:flex; flex-direction:column; transition:width .18s ease, transform .2s ease;
 }
-.topbar-brand { display:flex; align-items:center; gap:10px; padding: 8px 0; }
-.topbar-logo { width:72px; height:44px; background: white; border-radius:8px; padding:4px;
-               display:flex; align-items:center; justify-content:center; }
-.topbar-title { color: var(--do); font-family:'DM Serif Display',serif; font-size:22px; line-height:1; }
-.topbar-sub   { color: #AADDAA; font-size:11px; font-weight:300; }
-.topbar-nav   { display:flex; gap:4px; margin-left:40px; }
+body { padding-left:230px; }
+body.snav-min { padding-left:64px; }
+body.snav-min .sidebar { width:64px; }
+.side-brand { display:flex; align-items:center; gap:10px; padding:14px 14px 12px;
+  border-bottom:1px solid var(--border); min-height:62px; }
+.side-logo { width:36px; height:36px; flex:0 0 auto; }
+.side-logo svg { width:36px; height:36px; display:block; }
+.side-word { line-height:1.15; overflow:hidden; white-space:nowrap; }
+.side-word b { font-family:'DM Serif Display',serif; font-size:19px; color:var(--vd);
+  font-weight:400; letter-spacing:.01em; display:block; }
+.side-word small { font-size:10.5px; color:var(--do); font-weight:600; letter-spacing:.03em; }
+body.snav-min .side-word { display:none; }
+.side-nav { flex:1; overflow-y:auto; overflow-x:hidden; padding:10px 8px; }
+.sn-group h4 { font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+  color:#9DAA90; margin:12px 10px 4px; font-weight:600; white-space:nowrap; }
+body.snav-min .sn-group h4 { visibility:hidden; margin:6px 0 0; height:6px; }
 .nav-btn {
-  padding: 8px 18px; border:none; background:transparent; color:#AADDAA;
-  font-size:13px; font-weight:500; cursor:pointer; border-radius:6px;
-  transition:.2s; font-family:'DM Sans',sans-serif;
+  display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+  padding:8px 10px; border:none; background:transparent; color:var(--txt2);
+  font-size:13px; font-weight:500; cursor:pointer; border-radius:8px;
+  transition:.15s; font-family:'DM Sans',sans-serif; white-space:nowrap; position:relative;
 }
-.nav-btn:hover   { background: rgba(255,255,255,.08); color:white; }
-.nav-btn.active  { background: var(--do); color: var(--vd); font-weight:600; }
-.topbar-right { margin-left:auto; }
+.nav-btn svg { width:17px; height:17px; flex:0 0 auto; stroke-width:1.7; }
+.nav-btn:hover  { background:var(--claro); color:var(--vd); }
+.nav-btn.active { background:var(--claro); color:var(--vd); font-weight:600; }
+.nav-btn.active::before { content:""; position:absolute; left:-8px; top:6px; bottom:6px;
+  width:3px; border-radius:0 3px 3px 0; background:var(--vd); }
+body.snav-min .nav-btn { justify-content:center; padding:9px 0; }
+body.snav-min .nav-btn .nb-lbl { display:none; }
+.side-foot { border-top:1px solid var(--border); padding:10px 8px; display:flex;
+  flex-direction:column; gap:8px; }
 .week-badge {
-  background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.2);
-  color: white; padding: 6px 14px; border-radius: 20px; font-size: 12px;
-  font-family: 'JetBrains Mono', monospace; cursor:pointer;
+  background:var(--claro); border:1px solid var(--border); color:var(--vd);
+  padding:7px 12px; border-radius:9px; font-size:11.5px;
+  font-family:'JetBrains Mono',monospace; cursor:pointer; text-align:center;
+  overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
 }
-.week-badge:hover { background: rgba(255,255,255,.2); }
+.week-badge:hover { background:#E4EEDC; }
+body.snav-min .week-badge { padding:7px 4px; font-size:10px; }
+.side-collapse { position:absolute; right:-13px; top:70px; width:26px; height:26px;
+  border-radius:50%; border:1px solid var(--border); background:var(--white);
+  color:var(--txt2); cursor:pointer; font-size:12px; line-height:1;
+  box-shadow:0 1px 4px rgba(45,94,30,.15); z-index:2; }
+.side-collapse:hover { color:var(--vd); background:var(--claro); }
+/* Móvil: sidebar oculto fuera de pantalla + barrita superior con hamburguesa */
+.m-topbar { display:none; }
+.side-backdrop { display:none; }
+@media (max-width: 900px) {
+  body { padding-left:0; padding-top:52px; }
+  body.snav-min { padding-left:0; }
+  .sidebar, body.snav-min .sidebar { width:240px; transform:translateX(-105%); }
+  body.snav-open .sidebar { transform:translateX(0); box-shadow:0 0 40px rgba(0,0,0,.25); }
+  body.snav-min .side-word { display:block; }
+  body.snav-min .sn-group h4 { visibility:visible; margin:12px 10px 4px; height:auto; }
+  body.snav-min .nav-btn { justify-content:flex-start; padding:8px 10px; }
+  body.snav-min .nav-btn .nb-lbl { display:inline; }
+  .side-collapse { display:none; }
+  .m-topbar { display:flex; position:fixed; top:0; left:0; right:0; height:52px; z-index:110;
+    background:var(--vd); color:white; align-items:center; gap:10px; padding:0 12px; }
+  .m-topbar .mt-burger { background:transparent; border:none; color:white; font-size:22px;
+    cursor:pointer; padding:4px 8px; }
+  .m-topbar .mt-title { font-family:'DM Serif Display',serif; font-size:17px; color:var(--amarillo); }
+  .m-topbar .mt-sub { font-size:10px; color:#CFE8B8; }
+  body.snav-open .side-backdrop { display:block; position:fixed; inset:0;
+    background:rgba(20,30,15,.45); z-index:115; }
+}
 .container { max-width:1100px; margin:0 auto; padding:28px 20px; }
 .page { display:none; } .page.active { display:block; }
 .card {
@@ -369,14 +420,16 @@ tr:hover td { background:var(--claro); }
 
 /* ── User menu ───────────────────────────────────────────────────── */
 .user-chip {
-  display:flex; align-items:center; gap:8px; padding:6px 12px;
-  background:rgba(255,255,255,0.15); border-radius:20px; cursor:pointer;
-  color:white; font-size:13px; border:none; margin-left:auto;
-  font-family:'DM Sans',sans-serif;
+  display:flex; align-items:center; gap:8px; padding:6px 10px;
+  background:var(--white); border-radius:9px; cursor:pointer;
+  color:var(--txt); font-size:13px; border:1px solid var(--border);
+  font-family:'DM Sans',sans-serif; width:100%;
 }
-.user-chip:hover { background:rgba(255,255,255,0.25); }
+.user-chip:hover { background:var(--claro); }
+body.snav-min .user-chip { justify-content:center; padding:6px 4px; }
+body.snav-min .user-chip span { display:none; }
 .user-avatar {
-  width:28px; height:28px; background:#D4A017; border-radius:50%;
+  width:28px; height:28px; background:var(--vd); border-radius:50%; flex:0 0 auto;
   display:flex; align-items:center; justify-content:center;
   font-size:13px; font-weight:700; color:white;
 }
@@ -439,6 +492,39 @@ tr:hover td { background:var(--claro); }
 }
 .role-admin { background:#FFF3CD; color:#856404; }
 .role-operativo { background:#D4EDDA; color:#155724; }
+
+/* ── Resumen (portada, rediseño F2) ─────────────────────────────── */
+.rs-head { display:flex; align-items:center; justify-content:space-between; gap:12px;
+  margin-bottom:18px; flex-wrap:wrap; }
+.rs-title { font-family:'DM Serif Display',serif; font-size:24px; color:var(--vd); }
+.rs-sub { font-size:13px; color:var(--txt2); margin-top:2px; }
+.rs-bar-wrap { height:16px; background:var(--claro); border:1px solid var(--border);
+  border-radius:9px; overflow:hidden; }
+.rs-bar { height:100%; background:linear-gradient(90deg,var(--vclaro),var(--vd));
+  border-radius:9px 0 0 9px; transition:width .4s; }
+.rs-bar.over { background:linear-gradient(90deg,#F0A868,var(--naranja)); }
+.rs-stats { display:flex; gap:30px; margin-top:12px; flex-wrap:wrap; }
+.rs-stat small { display:block; font-size:11px; color:var(--txt2); text-transform:uppercase; letter-spacing:.4px; }
+.rs-stat b { font-size:16px; color:var(--txt); font-family:'JetBrains Mono',monospace; }
+.rs-grid2 { display:grid; grid-template-columns:1.4fr 1fr; gap:20px; }
+@media (max-width:900px){ .rs-grid2 { grid-template-columns:1fr; } }
+.rs-catrow { display:grid; grid-template-columns:minmax(90px,160px) 1fr auto; gap:10px;
+  align-items:center; padding:7px 0; border-top:1px solid var(--claro); font-size:13px; }
+.rs-catrow:first-child { border-top:none; }
+.rs-catname { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.rs-cattrack { height:8px; background:var(--claro); border-radius:5px; overflow:hidden; }
+.rs-catfill { height:100%; background:linear-gradient(90deg,var(--vclaro),var(--vd)); border-radius:5px; }
+.rs-catfill.over { background:linear-gradient(90deg,#F0A868,var(--naranja)); }
+.rs-catval { font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--txt2); }
+.rs-alert { display:flex; gap:10px; align-items:center; border:1px solid var(--border);
+  border-left:4px solid var(--vm); border-radius:9px; padding:11px 13px; margin-bottom:9px;
+  font-size:13px; background:var(--white); }
+.rs-alert:last-child { margin-bottom:0; }
+.rs-alert.warn { border-left-color:var(--do); background:#FFFDF2; }
+.rs-alert.crit { border-left-color:var(--red); background:var(--red-bg); }
+.rs-alert .go { margin-left:auto; flex:0 0 auto; background:none; border:none; color:var(--vd);
+  font-weight:600; cursor:pointer; font-size:12.5px; font-family:'DM Sans',sans-serif; }
+.rs-alert .go:hover { text-decoration:underline; }
 
 </style>
 </head>
@@ -539,38 +625,66 @@ tr:hover td { background:var(--claro); }
 
 
 
-<!-- TOPBAR -->
-<div class="topbar">
-  <div class="topbar-brand">
-    <div class="topbar-logo"><img src="" data-logo-copy="1" style="width:64px;height:36px;object-fit:contain;"></div>
-    <div>
-      <div class="topbar-title">CICSA</div>
-      <div class="topbar-sub">Control de Egresos</div>
-    </div>
+<!-- BARRITA MÓVIL (hamburguesa) -->
+<div class="m-topbar">
+  <button class="mt-burger" onclick="toggleSidebar()" aria-label="Abrir menú">☰</button>
+  <div>
+    <div class="mt-title">CICSA</div>
+    <div class="mt-sub">Control de Egresos</div>
   </div>
-  <nav class="topbar-nav">
-    <button class="nav-btn active" onclick="showPage('captura',this)">➕ Capturar</button>
-    <button class="nav-btn" onclick="showPage('gastos',this)">📋 Gastos</button>
-    <button class="nav-btn" onclick="showPage('presupuesto',this)">🎯 Presupuesto</button>
-    <button class="nav-btn" onclick="showPage('reporte',this)">📊 Seguimiento</button>
-    <button class="nav-btn" id="navGmail" onclick="showPage('gmail',this)">📧 Gmail</button>
-    <button class="nav-btn" id="navPagos" onclick="showPage('pagos',this)">💳 Pagos</button>
-    <button class="nav-btn" id="navReportes" onclick="showPage('reportes',this)">📈 Auditoría</button>
-    <button class="nav-btn" id="navCatalogo" onclick="showPage('catalogo',this)">🏪 Proveedores</button>
-    <button class="nav-btn" id="navCatalogoProductos" onclick="showPage('catalogo-productos',this)">📦 Productos</button>
-    <button class="nav-btn" id="navCaja" onclick="showPage('caja',this)">💰 Caja</button>
+</div>
+<div class="side-backdrop" onclick="toggleSidebar()"></div>
+
+<!-- SIDEBAR -->
+<aside class="sidebar" id="sidebar">
+  <button class="side-collapse" onclick="toggleSidebarMin()" title="Contraer/expandir menú" id="sideCollapseBtn">‹</button>
+  <div class="side-brand">
+    <div class="side-logo" aria-hidden="true">
+      <!-- Emblema oficial CICSA (recorte del SVG vectorizado, sin el texto) -->
+      <svg viewBox="15 15 430 390" fill-rule="evenodd" clip-rule="evenodd">
+        <path fill="#92BF5B" d="M 483 308 L 480 309 L 480 313 L 481 313 L 481 311 L 483 310 Z M 457 259 L 457 260 L 493 260 L 493 259 Z M 401 253 L 400 253 L 399 256 L 400 256 Z M 286 196 L 284 196 L 284 201 L 287 200 Z M 258 165 L 260 166 L 260 170 L 263 176 L 263 178 L 266 182 L 266 185 L 267 186 L 270 186 L 275 190 L 280 192 L 280 189 L 279 188 L 279 181 L 280 180 L 280 178 L 281 177 L 288 177 L 289 178 L 292 178 L 294 175 L 294 173 L 298 169 L 298 168 L 303 163 L 306 161 L 308 161 L 310 166 L 302 176 L 298 184 L 298 186 L 295 193 L 295 196 L 298 196 L 299 194 L 307 193 L 309 191 L 314 189 L 321 182 L 322 182 L 327 175 L 331 167 L 331 165 L 333 161 L 334 152 L 333 151 L 330 151 L 329 153 L 320 153 L 319 154 L 314 153 L 313 155 L 311 155 L 306 158 L 304 158 L 297 163 L 291 172 L 289 172 L 290 174 L 289 176 L 286 176 L 285 175 L 284 170 L 281 168 L 278 162 L 277 162 L 276 160 L 269 156 L 267 153 L 263 153 L 262 151 L 258 152 L 258 161 L 259 162 Z M 278 172 L 279 171 L 281 171 L 282 172 L 282 175 L 280 176 L 278 174 Z M 308 142 L 267 120 L 228 113 L 179 116 L 136 129 L 98 153 L 73 180 L 53 217 L 44 260 L 75 266 L 170 263 L 170 275 L 180 275 L 183 265 L 184 213 L 170 200 L 165 189 L 170 131 L 175 127 L 180 130 L 178 172 L 183 175 L 188 129 L 191 126 L 196 128 L 198 173 L 205 175 L 205 127 L 212 124 L 215 128 L 221 186 L 215 200 L 199 215 L 201 258 L 206 240 L 216 222 L 237 203 L 261 193 L 252 173 L 251 144 L 265 145 L 288 155 Z M 151 139 L 152 140 L 151 142 L 136 150 L 134 152 L 130 154 L 126 158 L 125 158 L 111 172 L 111 173 L 105 180 L 104 183 L 100 188 L 92 205 L 92 207 L 89 214 L 88 222 L 87 223 L 86 228 L 84 230 L 72 230 L 71 229 L 71 224 L 72 223 L 75 212 L 77 209 L 77 207 L 83 195 L 87 190 L 88 187 L 92 183 L 94 179 L 99 174 L 99 173 L 116 157 L 117 157 L 121 153 L 122 153 L 127 149 L 130 148 L 133 145 L 141 141 L 143 141 L 147 139 Z M 186 94 L 186 107 L 187 108 L 192 108 L 193 107 L 202 107 L 203 106 L 222 106 L 223 107 L 233 107 L 234 106 L 234 95 L 233 94 L 232 89 L 225 81 L 217 77 L 209 76 L 208 77 L 204 77 L 197 80 L 192 84 Z"/>
+        <path fill="#F9CD1D" d="M 46 312 L 46 315 L 54 327 L 60 332 L 60 334 L 71 345 L 74 346 L 74 348 L 89 359 L 92 359 L 99 365 L 102 365 L 106 369 L 109 369 L 110 371 L 113 371 L 114 373 L 118 375 L 122 375 L 123 377 L 127 377 L 130 380 L 137 381 L 138 383 L 147 385 L 150 387 L 158 387 L 159 389 L 171 392 L 174 391 L 175 393 L 180 394 L 186 393 L 187 395 L 193 396 L 202 395 L 203 397 L 213 397 L 214 398 L 243 398 L 243 396 L 240 396 L 239 394 L 225 388 L 213 380 L 208 379 L 205 375 L 190 365 L 186 364 L 183 360 L 176 355 L 172 354 L 165 348 L 159 346 L 155 342 L 151 342 L 150 340 L 147 340 L 146 338 L 142 338 L 141 336 L 134 336 L 133 334 L 128 333 L 125 334 L 124 332 L 119 331 L 115 332 L 114 330 L 109 329 L 105 330 L 104 328 L 99 327 L 95 328 L 94 326 L 86 324 L 79 324 L 78 322 L 68 320 L 65 318 L 61 318 L 60 316 L 56 316 L 55 314 Z M 484 291 L 483 291 L 482 295 L 483 295 Z M 286 178 L 282 178 L 282 193 L 284 193 L 285 192 L 285 181 L 286 180 Z M 338 174 L 334 182 L 320 197 L 320 199 L 328 204 L 332 208 L 333 208 L 340 215 L 341 217 L 345 217 L 345 193 L 344 192 L 343 181 L 341 178 L 341 175 L 340 174 Z M 394 166 L 392 166 L 387 171 L 386 171 L 376 180 L 375 180 L 365 190 L 365 191 L 361 195 L 360 198 L 358 200 L 358 202 L 356 204 L 356 207 L 354 210 L 354 215 L 353 216 L 353 230 L 354 231 L 354 234 L 356 237 L 359 238 L 365 235 L 367 233 L 369 233 L 371 231 L 372 231 L 387 217 L 387 216 L 391 211 L 391 209 L 395 201 L 395 198 L 396 197 L 396 192 L 397 191 L 397 174 L 396 173 L 396 169 Z M 308 164 L 304 165 L 297 173 L 291 187 L 291 196 L 292 196 L 292 194 L 293 193 L 295 185 L 297 182 L 297 180 L 299 178 L 302 172 L 306 168 Z M 212 125 L 208 125 L 206 127 L 208 172 L 205 176 L 200 176 L 197 173 L 195 128 L 191 127 L 189 129 L 188 158 L 186 173 L 183 176 L 177 172 L 177 142 L 179 130 L 175 128 L 170 133 L 168 163 L 166 170 L 166 189 L 171 200 L 185 213 L 184 265 L 181 313 L 183 314 L 191 313 L 192 311 L 198 312 L 213 309 L 213 304 L 209 298 L 205 285 L 203 284 L 204 280 L 199 256 L 198 215 L 214 200 L 219 192 L 220 186 L 219 166 L 215 145 L 214 128 Z M 383 124 L 382 124 L 362 144 L 362 145 L 358 149 L 358 150 L 354 155 L 354 157 L 352 160 L 352 163 L 351 164 L 351 176 L 352 177 L 352 181 L 355 184 L 361 183 L 363 181 L 369 178 L 379 168 L 379 167 L 383 162 L 383 160 L 385 157 L 385 154 L 387 150 L 387 134 L 386 133 L 385 127 L 383 125 Z M 368 90 L 365 90 L 356 100 L 356 101 L 353 104 L 352 107 L 348 112 L 346 119 L 344 121 L 344 127 L 343 128 L 343 131 L 344 132 L 344 139 L 346 143 L 349 146 L 353 145 L 355 143 L 356 143 L 367 132 L 367 131 L 371 126 L 371 124 L 373 121 L 374 115 L 375 114 L 375 106 L 373 102 L 373 98 L 371 96 L 371 94 Z M 294 90 L 292 93 L 292 96 L 293 97 L 293 102 L 294 103 L 294 108 L 295 109 L 296 114 L 298 117 L 298 119 L 303 127 L 311 135 L 312 135 L 314 137 L 316 137 L 318 139 L 320 139 L 323 141 L 329 141 L 330 142 L 335 141 L 335 127 L 333 123 L 333 120 L 331 118 L 331 116 L 329 114 L 327 110 L 319 102 L 315 100 L 312 97 L 308 96 L 306 94 L 304 94 L 302 92 L 300 92 L 297 90 Z M 349 53 L 348 53 L 341 60 L 341 61 L 334 70 L 334 72 L 332 74 L 332 77 L 331 78 L 331 81 L 330 82 L 330 94 L 331 95 L 331 98 L 332 99 L 332 101 L 334 103 L 334 105 L 336 107 L 336 108 L 338 109 L 340 109 L 342 107 L 343 107 L 349 101 L 349 100 L 353 95 L 353 93 L 355 91 L 355 87 L 357 83 L 357 68 L 352 56 Z M 290 48 L 290 63 L 291 64 L 292 70 L 294 73 L 294 75 L 296 77 L 297 80 L 307 89 L 311 91 L 313 91 L 316 93 L 323 93 L 325 91 L 325 82 L 317 68 L 295 48 Z M 312 24 L 312 27 L 310 30 L 310 34 L 309 35 L 309 44 L 310 45 L 310 49 L 311 50 L 311 52 L 313 56 L 322 65 L 324 65 L 326 67 L 327 67 L 329 65 L 329 63 L 331 59 L 331 50 L 330 49 L 329 44 L 327 41 L 327 38 L 325 36 L 323 32 L 316 24 Z"/>
+        <path fill="#F57814" d="M 337 224 L 322 210 L 320 210 L 314 206 L 299 203 L 293 204 L 293 205 L 297 207 L 306 216 L 306 218 L 308 220 L 307 222 L 297 212 L 291 209 L 288 206 L 286 206 L 283 203 L 278 202 L 268 202 L 264 204 L 260 204 L 257 206 L 248 208 L 240 213 L 224 229 L 222 234 L 220 235 L 218 242 L 216 244 L 216 248 L 214 251 L 214 278 L 218 287 L 218 291 L 220 293 L 222 299 L 224 300 L 224 302 L 226 304 L 234 303 L 244 299 L 247 299 L 250 297 L 253 297 L 261 293 L 264 293 L 274 289 L 276 287 L 279 287 L 281 285 L 283 285 L 311 271 L 313 269 L 315 269 L 320 265 L 333 258 L 336 255 L 341 253 L 347 247 L 347 244 L 345 242 L 345 239 Z"/>
+        <path fill="#BE8910" d="M 285 202 L 285 204 L 286 205 L 292 205 L 292 204 L 290 203 L 290 201 L 286 201 Z"/>
+        <path fill="#275B26" d="M 411 320 L 409 320 L 392 333 L 371 344 L 346 353 L 330 357 L 298 362 L 266 363 L 265 364 L 226 364 L 225 363 L 213 363 L 206 361 L 205 362 L 226 377 L 242 385 L 263 391 L 295 391 L 314 388 L 344 379 L 373 363 L 381 357 L 401 337 L 408 327 Z M 22 262 L 23 273 L 25 279 L 31 289 L 38 296 L 49 303 L 71 311 L 75 311 L 85 314 L 99 315 L 100 316 L 111 316 L 112 317 L 148 317 L 149 316 L 172 315 L 173 314 L 180 313 L 181 276 L 162 276 L 161 277 L 153 277 L 152 278 L 125 279 L 124 280 L 79 279 L 78 278 L 64 277 L 63 276 L 59 276 L 58 275 L 54 275 L 53 274 L 42 272 L 30 266 L 28 266 L 25 263 Z M 296 209 L 296 210 L 298 211 L 298 210 Z M 427 213 L 420 204 L 415 203 L 388 231 L 355 258 L 318 282 L 284 299 L 208 323 L 148 330 L 199 351 L 241 351 L 275 344 L 306 333 L 346 310 L 375 285 L 401 252 L 401 257 L 388 281 L 358 314 L 327 336 L 294 352 L 331 346 L 362 336 L 403 312 L 423 287 L 432 254 L 432 235 Z M 287 183 L 286 184 L 286 194 L 288 196 L 289 196 L 289 192 L 287 191 L 287 189 L 288 188 L 290 188 L 291 184 Z"/>
+      </svg>
+    </div>
+    <div class="side-word"><b>CICSA</b><small>Control de Egresos</small></div>
+  </div>
+  <nav class="side-nav">
+    <div class="sn-group">
+      <button class="nav-btn active" onclick="showPage('resumen',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nb-lbl">Resumen</span></button>
+    </div>
+    <div class="sn-group">
+      <h4>Operación</h4>
+      <button class="nav-btn" onclick="showPage('captura',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg><span class="nb-lbl">Capturar</span></button>
+      <button class="nav-btn" onclick="showPage('gastos',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 3h9l5 5v13H6z"/><path d="M9 12h7M9 16h7M9 8h3"/></svg><span class="nb-lbl">Gastos</span></button>
+      <button class="nav-btn" id="navCaja" onclick="showPage('caja',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M17 15h.01"/></svg><span class="nb-lbl">Caja</span></button>
+      <button class="nav-btn" id="navPagos" onclick="showPage('pagos',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2.5" y="5.5" width="19" height="13" rx="2.5"/><path d="M2.5 10h19"/></svg><span class="nb-lbl">Pagos</span></button>
+    </div>
+    <div class="sn-group">
+      <h4>Análisis</h4>
+      <button class="nav-btn" onclick="showPage('presupuesto',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/></svg><span class="nb-lbl">Presupuesto</span></button>
+      <button class="nav-btn" onclick="showPage('reporte',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 17l6-6 4 4 7-8"/><path d="M17 7h4v4"/></svg><span class="nb-lbl">Seguimiento</span></button>
+      <button class="nav-btn" id="navReportes" onclick="showPage('reportes',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><span class="nb-lbl">Auditoría</span></button>
+      <button class="nav-btn" id="navSat" onclick="showPage('sat',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 10h16M5 10l7-6 7 6M6 10v9M18 10v9M4 21h16"/></svg><span class="nb-lbl">SAT</span></button>
+    </div>
+    <div class="sn-group">
+      <h4>Catálogos</h4>
+      <button class="nav-btn" id="navCatalogo" onclick="showPage('catalogo',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 7h11v10H3zM14 10h4l3 3v4h-7z"/><circle cx="7" cy="18" r="1.7"/><circle cx="17.5" cy="18" r="1.7"/></svg><span class="nb-lbl">Proveedores</span></button>
+      <button class="nav-btn" id="navCatalogoProductos" onclick="showPage('catalogo-productos',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg><span class="nb-lbl">Productos</span></button>
+      <button class="nav-btn" id="navGmail" onclick="showPage('gmail',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></svg><span class="nb-lbl">Gmail</span></button>
+    </div>
+    <div class="sn-group" id="snAdminGroup"></div>
+  </nav>
+  <div class="side-foot">
+    <div class="week-badge" onclick="openWeekModal()">📅 <span id="weekLabel">Cargando…</span></div>
     <button class="user-chip" id="userChip" onclick="toggleUserMenu()" style="display:none">
       <div class="user-avatar" id="userAvatar">?</div>
       <span id="userChipName">Usuario</span>
     </button>
-    <button class="nav-btn" id="navSat" onclick="showPage('sat',this)">🏛 SAT</button>
-  </nav>
-  <div class="topbar-right">
-    <div class="week-badge" onclick="openWeekModal()">
-      📅 <span id="weekLabel">Cargando…</span>
-    </div>
   </div>
-</div>
+</aside>
 
 <!-- WEEK MODAL -->
 <div class="modal-overlay" id="weekModal">
@@ -600,8 +714,44 @@ tr:hover td { background:var(--claro); }
   </div>
 </div>
 
+<!-- ═══════════════ PAGE: RESUMEN (portada) ═══════════════ -->
+<div class="container page active" id="page-resumen">
+  <div class="rs-head">
+    <div>
+      <div class="rs-title">Resumen</div>
+      <div class="rs-sub">Semana: <strong id="rsSemana">—</strong></div>
+    </div>
+    <button class="btn btn-green" onclick="showPage('captura')">➕ Nueva captura</button>
+  </div>
+  <div class="summary-grid" id="rsKpis"></div>
+  <div class="card">
+    <div class="card-title">🎯 Presupuesto de la semana</div>
+    <div id="rsPresup"></div>
+  </div>
+  <div class="rs-grid2">
+    <div class="card" style="margin-bottom:0">
+      <div class="card-title">📊 Gastos por categoría</div>
+      <div id="rsCats"></div>
+    </div>
+    <div class="card" style="margin-bottom:0">
+      <div class="card-title">⚠️ Requiere atención</div>
+      <div id="rsAlerts"></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:20px">
+    <div class="card-title">🕘 Últimos movimientos</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th>Forma de pago</th><th style="text-align:right">Importe</th></tr></thead>
+        <tbody id="rsMovs"></tbody>
+      </table>
+    </div>
+    <div id="rsMovsEmpty" style="display:none;color:var(--txt2);font-size:13px;padding:10px 0">Aún no hay capturas en esta semana.</div>
+  </div>
+</div>
+
 <!-- ═══════════════ PAGE: CAPTURA ═══════════════ -->
-<div class="container page active" id="page-captura">
+<div class="container page" id="page-captura">
   <div class="api-bar bad" id="apiBar">
     <div class="dot r" id="apiDot"></div>
     <span id="apiMsg">Verificando servidor…</span>
@@ -2359,6 +2509,7 @@ function showPage(name,btn){
   if(pg) pg.classList.add("active");
   if(btn) btn.classList.add("active");
   else document.querySelectorAll(".nav-btn").forEach(b=>{ if(b.getAttribute("onclick")&&b.getAttribute("onclick").includes("'"+name+"'")) b.classList.add("active"); });
+  if(name==="resumen")     renderResumen();
   if(name==="gastos")     { pintarSelectorPeriodoSP("gastosPeriodoSel","renderGastos"); renderGastos(); }
   if(name==="presupuesto"){ pintarSelectorPeriodoSP("presupPeriodoSel","renderPresupuesto"); renderPresupuesto(); }
   if(name==="reporte"){    pintarSelectorPeriodoSP("reportePeriodoSel","renderReporteActual"); renderReporteActual(); }
@@ -2369,7 +2520,18 @@ function showPage(name,btn){
   if(name==="catalogo-productos") renderCatalogoProductos();
   if(name==="sat")         initSatDates();
   try{ _actPestanaActual = _actLabelPestana(name); if(_actActivo) _actUltInteraccion = Date.now(); }catch(_){}
+  document.body.classList.remove("snav-open"); // en móvil, cierra el menú al navegar
 }
+
+// ── Sidebar: contraer en escritorio / abrir-cerrar en móvil ──────────
+function toggleSidebar(){ document.body.classList.toggle("snav-open"); }
+function toggleSidebarMin(){
+  const min = document.body.classList.toggle("snav-min");
+  try{ localStorage.setItem("cicsa_sidebar_min", min ? "1" : "0"); }catch(_){}
+  const b=document.getElementById("sideCollapseBtn"); if(b) b.textContent = min ? "›" : "‹";
+}
+try{ if(localStorage.getItem("cicsa_sidebar_min")==="1"){ document.body.classList.add("snav-min");
+  const b=document.getElementById("sideCollapseBtn"); if(b) b.textContent="›"; } }catch(_){}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FORMAT HELPERS
@@ -3540,9 +3702,127 @@ function exportarPDF(){
 // ═══════════════════════════════════════════════════════════════════════════
 // RENDER ALL
 // ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// RESUMEN (portada) — todos los números salen del estado real:
+// gastos/cortes/retiros de la SEMANA ACTIVA, presupuesto de state.budget,
+// facturas a crédito de TODAS las semanas (una deuda no caduca con la semana)
+// y la última conciliación SAT guardada en este dispositivo.
+// ═══════════════════════════════════════════════════════════
+function renderResumen(){
+  const kpis=document.getElementById("rsKpis"); if(!kpis) return;
+  const wk=getActiveWeek();
+  const sem=document.getElementById("rsSemana"); if(sem) sem.textContent=wk?.label||"Sin semana";
+  const gastosWk=gastosSemana();
+  const partidas=partidasExpandidas(gastosWk);
+  const totalGastado=partidas.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+
+  // Presupuesto: meta = objetivo global si está fijado; si no, suma de categorías
+  const meta=(typeof state.budgetObjetivo==="number"&&state.budgetObjetivo>0)
+    ? state.budgetObjetivo
+    : Object.values(state.budget||{}).reduce((s,v)=>s+(parseFloat(v)||0),0);
+  const disponible=meta-totalGastado;
+  const pct=meta>0?(totalGastado/meta*100):0;
+
+  // Caja de la semana activa (mismo cálculo que la pestaña Caja, acotado a la semana)
+  const si=(wk&&wk.ini&&state.cajaSaldoInicial)?state.cajaSaldoInicial[wk.ini]:null;
+  const cortes=(wk?.cortes||[]).reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  const retiros=(wk?.retiros||[]).reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
+  const efectivoWk=gastosWk.filter(esGastoEfectivo).reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+  const saldoCaja=(si?(parseFloat(si.valor)||0):0)+cortes-efectivoWk-retiros;
+
+  // Facturas a crédito pendientes (todas las semanas) + vencidas
+  const pend=allGastosAllWeeks().filter(g=>g.formaPago==="credito"&&g.estadoPago==="pendiente");
+  const pendTotal=pend.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+  const vencidas=pend.filter(g=>{const d=diasRestantes(g.vencimiento);return d!==null&&d<0;});
+  const vencTotal=vencidas.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+
+  // Gasto por categoría de la semana y categorías sobre su presupuesto
+  const porCat={};
+  partidas.forEach(g=>{ porCat[g.categoria]=(porCat[g.categoria]||0)+(parseFloat(g.importe)||0); });
+  const excedidas=Object.keys(porCat).filter(c=>{
+    const b=parseFloat((state.budget||{})[c])||0; return b>0&&porCat[c]>b;
+  });
+  const excedidasMonto=excedidas.reduce((s,c)=>s+(porCat[c]-(parseFloat(state.budget[c])||0)),0);
+
+  // Última conciliación SAT de este dispositivo (localStorage)
+  let satFalt=null;
+  try{
+    const d=JSON.parse(localStorage.getItem(SAT_STATE_KEY)||"null");
+    if(d&&d.resultado) satFalt={
+      n:(d.resultado.faltantes||[]).length,
+      total:(d.resultado.faltantes||[]).reduce((s,c)=>s+(parseFloat(c.total)||0),0)
+    };
+  }catch(_){}
+
+  // ── KPIs ──
+  kpis.innerHTML=`
+    <div class="scard"><div class="scard-label">💰 Caja (semana activa)</div>
+      <div class="scard-val">${fmt(saldoCaja)}</div>
+      <div class="scard-sub">${si?"Saldo fijado + cortes − efectivo − retiros":"⚠ Sin saldo inicial fijado"}</div></div>
+    <div class="scard ${vencidas.length>0?'alert':''}"><div class="scard-label">💳 Facturas por pagar</div>
+      <div class="scard-val">${fmt(pendTotal)}</div>
+      <div class="scard-sub">${pend.length} pendiente${pend.length===1?"":"s"}${vencidas.length?` · ${vencidas.length} vencida${vencidas.length===1?"":"s"}`:""}</div></div>
+    <div class="scard ${excedidas.length>0?'alert':''}"><div class="scard-label">📛 Categorías excedidas</div>
+      <div class="scard-val">${excedidas.length}</div>
+      <div class="scard-sub">${excedidas.length?esc(excedidas.slice(0,3).join(", "))+(excedidas.length>3?"…":""):"Todas dentro del presupuesto"}</div></div>
+    <div class="scard ${satFalt&&satFalt.n>0?'alert':''}"><div class="scard-label">🏛 CFDIs por conciliar</div>
+      <div class="scard-val">${satFalt?satFalt.n:"—"}</div>
+      <div class="scard-sub">${satFalt?(satFalt.n?fmt(satFalt.total)+" en SAT sin capturar":"Conciliación al corriente"):"Sin conciliación reciente"}</div></div>`;
+
+  // ── Barra de presupuesto ──
+  const pr=document.getElementById("rsPresup");
+  if(pr) pr.innerHTML= meta>0 ? `
+    <div class="rs-bar-wrap"><div class="rs-bar ${totalGastado>meta?"over":""}" style="width:${Math.min(pct,100)}%"></div></div>
+    <div class="rs-stats">
+      <div class="rs-stat"><small>Gastado</small><b>${fmt(totalGastado)}</b></div>
+      <div class="rs-stat"><small>Disponible</small><b style="color:${disponible<0?"var(--red)":"var(--vd)"}">${fmt(disponible)}</b></div>
+      <div class="rs-stat"><small>Meta semanal</small><b>${fmt(meta)}</b></div>
+      <div class="rs-stat"><small>Avance</small><b>${pct.toFixed(0)}%</b></div>
+    </div>`
+    : `<p style="font-size:13px;color:var(--txt2)">Sin presupuesto configurado. <button class="go" style="background:none;border:none;color:var(--vd);font-weight:600;cursor:pointer" onclick="showPage('presupuesto')">Configurar →</button></p>`;
+
+  // ── Categorías (top 8 por gasto) ──
+  const cats=Object.entries(porCat).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const maxCat=cats.length?cats[0][1]:0;
+  const rc=document.getElementById("rsCats");
+  if(rc) rc.innerHTML=cats.length?cats.map(([c,v])=>{
+    const b=parseFloat((state.budget||{})[c])||0, over=b>0&&v>b;
+    return `<div class="rs-catrow"><span class="rs-catname" title="${esc(c)}">${esc(c)}</span>
+      <div class="rs-cattrack"><div class="rs-catfill ${over?"over":""}" style="width:${maxCat?Math.max(v/maxCat*100,3):0}%"></div></div>
+      <span class="rs-catval">${fmt(v)}</span></div>`;
+  }).join("")
+  :`<p style="font-size:13px;color:var(--txt2)">Aún no hay gastos en esta semana.</p>`;
+
+  // ── Requiere atención ──
+  const alerts=[];
+  if(vencidas.length) alerts.push(`<div class="rs-alert crit"><div><strong>${vencidas.length} factura${vencidas.length===1?"":"s"} vencida${vencidas.length===1?"":"s"}</strong> por ${fmt(vencTotal)}</div><button class="go" onclick="showPage('pagos')">Revisar →</button></div>`);
+  if(satFalt&&satFalt.n>0) alerts.push(`<div class="rs-alert crit"><div><strong>${satFalt.n} CFDI${satFalt.n===1?"":"s"} en SAT sin capturar</strong> por ${fmt(satFalt.total)}</div><button class="go" onclick="showPage('sat')">Revisar →</button></div>`);
+  if(excedidas.length) alerts.push(`<div class="rs-alert warn"><div><strong>${excedidas.length} categoría${excedidas.length===1?"":"s"} sobre presupuesto</strong> — ${esc(excedidas.slice(0,3).join(", "))}${excedidas.length>3?"…":""} (${fmt(excedidasMonto)} de más)</div><button class="go" onclick="showPage('presupuesto')">Ver →</button></div>`);
+  if(!si) alerts.push(`<div class="rs-alert warn"><div><strong>Saldo inicial de caja sin fijar</strong> — el saldo mostrado parte de $0</div><button class="go" onclick="showPage('caja')">Fijar →</button></div>`);
+  const ra=document.getElementById("rsAlerts");
+  if(ra) ra.innerHTML=alerts.length?alerts.join(""):`<div class="rs-alert"><div>✅ Todo en orden: sin vencidas, sin excedentes y sin faltantes del SAT.</div></div>`;
+
+  // ── Últimos movimientos (todas las semanas, por fecha desc) ──
+  const movs=allGastosAllWeeks()
+    .sort((a,b)=> (b.fecha||"")<(a.fecha||"")?-1:((b.fecha||"")>(a.fecha||"")?1:(String(b.id)<String(a.id)?-1:1)))
+    .slice(0,6);
+  const tb=document.getElementById("rsMovs"), empty=document.getElementById("rsMovsEmpty");
+  if(tb){
+    tb.innerHTML=movs.map(g=>`<tr>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;white-space:nowrap">${fmtDate(g.fecha)}</td>
+      <td>${esc(g.proveedor||"—")}</td>
+      <td>${esc(g.categoria||"—")}</td>
+      <td>${formaPagoLabel(g)}</td>
+      <td style="text-align:right;font-weight:600;font-family:'JetBrains Mono',monospace">${fmt(g.importe)}</td>
+    </tr>`).join("");
+    if(empty) empty.style.display=movs.length?"none":"block";
+  }
+}
+
 function renderAll(){
   const wk=getActiveWeek();
   document.getElementById("weekLabel").textContent=wk?.label||"Sin semana";
+  renderResumen();
   const gastosWk=gastosSemana(), catsSet=new Set(gastosWk.map(g=>g.categoria));
   gastosWk.forEach(g=>(g._partidas||[]).forEach(p=>catsSet.add(p.categoria)));
   const cats=[...catsSet].sort();
@@ -5521,7 +5801,7 @@ let _actFechaHoy = "", _actMinutosHoy = 0, _actDias = {};
 let _actTimer = null, _actActivo = false, _actPestanaActual = "";
 
 function _actLabelPestana(name){
-  const M = { captura:"Capturar", gastos:"Gastos", caja:"Caja", presupuesto:"Presupuesto",
+  const M = { resumen:"Resumen", captura:"Capturar", gastos:"Gastos", caja:"Caja", presupuesto:"Presupuesto",
     reporte:"Seguimiento", reportes:"Auditoría", pagos:"Pagos", gmail:"Gmail",
     "catalogo-productos":"Productos", catalogo:"Catálogo", sat:"SAT" };
   return M[name] || (name||"");
@@ -5662,12 +5942,14 @@ auth.onAuthStateChanged(async user => {
     if(currentRole === "admin") {
       // Add admin button to nav if not exists
       if(!document.getElementById("btnAdmin")) {
+        const grp = document.getElementById("snAdminGroup");
+        grp.innerHTML = "<h4>Administración</h4>";
         const btn = document.createElement("button");
         btn.id = "btnAdmin";
         btn.className = "nav-btn";
-        btn.innerHTML = "👥 Usuarios";
+        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style="width:17px;height:17px;flex:0 0 auto;stroke-width:1.7"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.5 2.7-5.5 6-5.5s6 2 6 5.5M16 4.6a3.5 3.5 0 010 6.8M17.5 14.7c2.1.6 3.5 2.3 3.5 5.3"/></svg><span class="nb-lbl">Usuarios</span>';
         btn.onclick = () => abrirAdminModal();
-        document.querySelector(".topbar-nav").appendChild(btn);
+        grp.appendChild(btn);
       }
     }
 
@@ -5675,6 +5957,11 @@ auth.onAuthStateChanged(async user => {
     // crear una semana nueva, para no sobreescribir datos reales con un estado vacío.
     (async()=>{ await initState(); renderAll(); checkServer(); })();
     initChat();
+    // Rediseño F2: el chat arranca ABIERTO en pantallas grandes, salvo que este
+    // dispositivo lo haya cerrado antes (preferencia en localStorage).
+    try{
+      if(window.innerWidth>900 && !_chatOpen && localStorage.getItem("cicsa_chat_open")!=="0") toggleChat();
+    }catch(_){}
     iniciarActividadTracker();   // registra actividad solo si es operativo
 
   } else {
@@ -5706,7 +5993,8 @@ function toggleUserMenu() {
   const rect = chip.getBoundingClientRect();
   const div = document.createElement("div");
   div.id = "userDropdown";
-  div.style.cssText = `position:fixed;top:${rect.bottom+4}px;right:12px;background:white;
+  // El chip ahora vive abajo del sidebar: el menú se abre HACIA ARRIBA desde el chip
+  div.style.cssText = `position:fixed;bottom:${window.innerHeight-rect.top+6}px;left:${Math.max(8,rect.left)}px;background:white;
     border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.15);z-index:9998;min-width:220px;overflow:hidden;`;
 
   menu.forEach(item => {
@@ -5764,6 +6052,8 @@ function pararChat(){
 }
 function toggleChat(){
   _chatOpen = !_chatOpen;
+  // Recuerda la preferencia por dispositivo: si lo cierras, no se vuelve a abrir solo.
+  try{ localStorage.setItem("cicsa_chat_open", _chatOpen ? "1" : "0"); }catch(_){}
   document.getElementById("chatPanel").classList.toggle("open", _chatOpen);
   document.getElementById("chatFab").style.display = _chatOpen ? "none" : "flex";
   if(_chatOpen){

@@ -1,0 +1,112 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// CICSA Egresos — Reglas de seguridad de Firestore
+// ═══════════════════════════════════════════════════════════════════════════
+// ARCHIVO DE REFERENCIA. Firestore NO lo lee desde el repo: hay que pegarlo en
+// Firebase Console → Firestore Database → Reglas → Publicar. Se versiona aquí
+// para saber qué reglas están puestas y poder revisarlas como código.
+//
+// Cambio principal vs. las reglas anteriores: se elimina el comodín
+//   match /{document=**} { allow read, write: if request.auth != null; }
+// que daba a CUALQUIER usuario con sesión permiso total sobre TODAS las
+// colecciones — incluido borrar CFDIs o auto-asignarse el rol de admin.
+// Ahora cada colección declara lo que realmente necesita.
+//
+// IMPORTANTE: al quitar el comodín, cualquier colección NO listada abajo queda
+// denegada. Las colecciones que la app usa hoy están todas cubiertas:
+//   datos · estado · usuarios · chat · productos_comerciales · proveedores
+//   cfdis · actividad
+// Si más adelante se agrega una colección nueva, hay que agregarla aquí también.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+    function conSesion() {
+      return request.auth != null;
+    }
+    // El admin principal por UID (cuenta dueña) o cualquier usuario con
+    // rol "admin" en usuarios/{uid}. Los get() dentro de reglas son lecturas
+    // privilegiadas: no vuelven a pasar por estas reglas, así que no hay
+    // recursión aunque 'usuarios' esté restringida.
+    // El exists() NO es adorno: get() sobre un documento inexistente truena y
+    // la regla deniega. Sin él, un usuario cuyo registro fue eliminado (el caso
+    // de "dar de alta otra vez a alguien que borré") no podría recrearlo.
+    function esAdmin() {
+      return conSesion() && (
+        request.auth.uid == 'NVapfgY8pshXwYbMq7Wz28ry3pC3' ||
+        (exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.rol == 'admin')
+      );
+    }
+
+    // ── datos/precios — lo lee CICSA Menú SIN sesión ───────────────────────
+    // Lectura pública a propósito (el Menú consulta precios sin login);
+    // escribir sigue requiriendo sesión.
+    match /datos/{doc} {
+      allow read: if true;
+      allow write: if conSesion();
+    }
+
+    // ── estado/cicsa — el estado financiero completo ───────────────────────
+    // Todos los usuarios capturan gastos, cortes y retiros, así que todos
+    // escriben este documento. El candado de "presupuesto solo admin" vive en
+    // la interfaz: no se puede aplicar aquí porque el presupuesto viaja dentro
+    // del mismo documento que todo lo demás (habría que separarlo para poder
+    // protegerlo por reglas).
+    match /estado/{doc} {
+      allow read, write: if conSesion();
+    }
+
+    // ── usuarios — roles y nombres ─────────────────────────────────────────
+    // Cada quien lee su propio registro (para saber su rol al entrar); el
+    // admin lee todos (panel de Administración).
+    // Crear: el admin da de alta usuarios. Además cada usuario puede recrear
+    // SU PROPIO registro (auto-revinculación al volver a entrar) pero SOLO con
+    // rol "operativo" — así nadie puede auto-asignarse admin por API directa.
+    // Modificar rol/nombre y eliminar: solo admin.
+    match /usuarios/{uid} {
+      allow read:   if esAdmin() || (conSesion() && request.auth.uid == uid);
+      allow create: if esAdmin() ||
+                       (conSesion() && request.auth.uid == uid &&
+                        request.resource.data.rol == 'operativo');
+      allow update, delete: if esAdmin();
+    }
+
+    // ── chat de equipo ─────────────────────────────────────────────────────
+    // Todos leen y escriben mensajes, pero cada mensaje debe ir firmado con el
+    // uid de quien lo manda (no se puede publicar a nombre de otro). Editar o
+    // borrar mensajes ajenos: solo admin.
+    match /chat/{msg} {
+      allow read:   if conSesion();
+      allow create: if conSesion() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if esAdmin();
+    }
+
+    // ── Catálogo de productos y proveedores ────────────────────────────────
+    // Los operativos validan y editan productos como parte de su trabajo.
+    match /productos_comerciales/{doc} {
+      allow read, write: if conSesion();
+    }
+    match /proveedores/{doc} {
+      allow read, write: if conSesion();
+    }
+
+    // ── cfdis — CFDIs guardados para la conciliación SAT ───────────────────
+    // Cualquiera con sesión puede subir XML y consultarlos; BORRAR es solo del
+    // admin (igual que en la interfaz, pero ahora sí aplicado de verdad).
+    match /cfdis/{uuid} {
+      allow read, create, update: if conSesion();
+      allow delete: if esAdmin();
+    }
+
+    // ── actividad — latido de usuarios operativos ──────────────────────────
+    // Cada usuario solo puede escribir SU propio latido (no puede inflar ni
+    // falsear el de otro). Lo consulta el admin; cada quien puede ver el suyo.
+    match /actividad/{uid} {
+      allow read:          if esAdmin() || (conSesion() && request.auth.uid == uid);
+      allow create, update: if conSesion() && request.auth.uid == uid;
+      allow delete:        if esAdmin();
+    }
+  }
+}
