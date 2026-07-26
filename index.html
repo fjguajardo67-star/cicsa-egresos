@@ -1192,7 +1192,10 @@ body.snav-min .user-chip span { display:none; }
       </div>
       <div id="cfdisStoreBody" style="max-height:220px;overflow:auto;margin-top:10px"></div>
     </div>
-    <div class="btn-row"><button class="btn btn-light" id="btnSatExport" style="display:none" onclick="exportarConciliacion()">📊 Exportar Excel</button></div>
+    <div class="btn-row">
+      <button class="btn btn-light" id="btnSatExport" style="display:none" onclick="exportarConciliacion()">📊 Exportar Excel</button>
+      <button class="btn btn-red" id="btnSatLimpiar" onclick="limpiarConciliacionSat()">🗑 Limpiar conciliación</button>
+    </div>
     <div class="status" id="satStatus"></div>
   </div>
   <div class="summary-grid" id="satSummary" style="display:none;margin-bottom:16px"></div>
@@ -3904,6 +3907,23 @@ function restaurarSatEstado(){
     return true;
   }catch(e){ console.warn("restaurarSatEstado:",e); return false; }
 }
+// Borra el RESULTADO de la conciliación (memoria + localStorage). Necesario cuando se
+// concilió un periodo equivocado (p. ej. CFDIs de otro año subidos por error): el resultado
+// vive en el navegador, independiente del almacén de XMLs en la nube, así que borrar el mes
+// de la nube NO lo quitaba de la pantalla ni del Resumen.
+function limpiarConciliacionSat(){
+  if(!satResultado && !localStorage.getItem(SAT_STATE_KEY)){
+    setStatus("satStatus","No hay conciliación que limpiar.","ok"); return;
+  }
+  if(!confirm("¿Limpiar el resultado de la conciliación?\n\nNo borra los CFDIs guardados en la nube ni tus gastos capturados; solo quita este resultado de la pantalla y del Resumen.")) return;
+  satCFDIs=[]; satResultado=null;
+  try{ localStorage.removeItem(SAT_STATE_KEY); }catch(_){}
+  ["satSummary","satFaltantesCard","satDiferenciasCard","satOkCard"].forEach(id=>{ const el=document.getElementById(id); if(el) el.style.display="none"; });
+  const ex=document.getElementById("btnSatExport"); if(ex) ex.style.display="none";
+  try{ renderResumen(); }catch(_){}
+  setStatus("satStatus","✅ Conciliación limpiada. Sube o selecciona el periodo correcto y vuelve a conciliar.","ok");
+}
+
 async function initSatDates(){
   if(!satResultado) restaurarSatEstado();
   const hoy=new Date(), ini=new Date(hoy.getFullYear(),hoy.getMonth(),1);
@@ -4020,7 +4040,18 @@ async function eliminarMesCfdiSeleccionado(){
   _cfdisStore=(_cfdisStore||[]).filter(c=>(c.mes||cfdiMes(c.fecha))!==mes);
   if(btn) btn.disabled=false;
   renderCfdisStore();
-  setStatus("satStatus",`✅ ${aBorrar.length} CFDI de ${nombreMes(mes)} eliminados del almacén.`,"ok");
+  // Si la conciliación en pantalla incluía CFDIs del mes borrado, se limpia también —
+  // dejarla pintada con datos recién eliminados solo confunde (y contamina el Resumen).
+  let concLimpia=false;
+  if((satCFDIs||[]).some(c=>cfdiMes(c.fecha)===mes)){
+    satCFDIs=[]; satResultado=null;
+    try{ localStorage.removeItem(SAT_STATE_KEY); }catch(_){}
+    ["satSummary","satFaltantesCard","satDiferenciasCard","satOkCard"].forEach(id=>{ const el=document.getElementById(id); if(el) el.style.display="none"; });
+    const ex=document.getElementById("btnSatExport"); if(ex) ex.style.display="none";
+    try{ renderResumen(); }catch(_){}
+    concLimpia=true;
+  }
+  setStatus("satStatus",`✅ ${aBorrar.length} CFDI de ${nombreMes(mes)} eliminados del almacén.${concLimpia?" También se limpió la conciliación en pantalla que los usaba.":""}`,"ok");
 }
 function nombreMes(m){
   const [y,mm]=(m||"").split("-"); if(!y||!mm) return m||"—";
