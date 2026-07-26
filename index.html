@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-m</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-n</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -2904,7 +2904,7 @@ function renderGastos(){
       <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${g.factura||"—"}</td>
       <td class="amount-cell"><input style="border:none;background:transparent;font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--vm);text-align:right;width:90px" type="number" step="0.01" value="${g.importe}" onchange="editarGasto('${g.id}','importe',parseFloat(this.value)||0)" title="Editar importe"></td>
       <td style="display:flex;gap:4px;align-items:center;padding:6px 8px">
-        <button class="del-btn" onclick="eliminarGasto('${g.id}')">✕</button>
+        <button class="del-btn" onclick="eliminarGasto('${g.id}')" title="Eliminar gasto">🗑️</button>
       </td>`;
     tbody.appendChild(tr);
   });
@@ -3732,10 +3732,21 @@ function renderTablaMesCfdi(){
   const mes=sel?.value||"";
   const lista=(_cfdisStore||[]).filter(c=>(c.mes||cfdiMes(c.fecha))===mes).sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||""));
   if(!lista.length){ body.innerHTML=`<div style="font-size:12px;color:var(--txt2);padding:8px">Selecciona un mes con CFDIs guardados.</div>`; return; }
+  const esAdmin = (typeof currentRole!=="undefined" && currentRole==="admin");   // borrar solo admin
   body.innerHTML=`<table style="width:100%;border-collapse:collapse;font-size:12px">
-    <thead><tr style="text-align:left;color:var(--txt2);font-size:11px"><th style="padding:2px 6px">Fecha</th><th style="padding:2px 6px">Proveedor</th><th style="padding:2px 6px">RFC</th><th style="padding:2px 6px;text-align:right">Total</th></tr></thead>
-    <tbody>${lista.map(c=>`<tr style="border-top:1px solid var(--border)"><td style="padding:3px 6px">${fmtDate(c.fecha)||"—"}</td><td style="padding:3px 6px">${esc(c.proveedor||"—")}</td><td style="padding:3px 6px;font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.rfc||"—")}</td><td style="padding:3px 6px;text-align:right;font-family:'JetBrains Mono',monospace">${fmt(c.total)}</td></tr>`).join("")}</tbody>
+    <thead><tr style="text-align:left;color:var(--txt2);font-size:11px"><th style="padding:2px 6px">Fecha</th><th style="padding:2px 6px">Proveedor</th><th style="padding:2px 6px">RFC</th><th style="padding:2px 6px;text-align:right">Total</th>${esAdmin?'<th></th>':''}</tr></thead>
+    <tbody>${lista.map(c=>`<tr style="border-top:1px solid var(--border)"><td style="padding:3px 6px">${fmtDate(c.fecha)||"—"}</td><td style="padding:3px 6px">${esc(c.proveedor||"—")}</td><td style="padding:3px 6px;font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.rfc||"—")}</td><td style="padding:3px 6px;text-align:right;font-family:'JetBrains Mono',monospace">${fmt(c.total)}</td>${esAdmin?`<td style="padding:3px 6px;text-align:center"><button onclick="eliminarCfdiGuardado('${String(c.id).replace(/'/g,"\\'")}')" title="Eliminar este CFDI de la nube" style="border:none;background:#FFEBEE;color:var(--red);border-radius:6px;cursor:pointer;padding:2px 8px">🗑️</button></td>`:''}</tr>`).join("")}</tbody>
   </table>`;
+}
+// Borra UN CFDI mal subido del almacén de la nube (solo admin). No toca los gastos capturados;
+// solo lo quita del listado para no crear confusión.
+async function eliminarCfdiGuardado(id){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede eliminar CFDIs guardados."); return; }
+  const c=(_cfdisStore||[]).find(x=>x.id===id); if(!c) return;
+  if(!confirm(`¿Eliminar este CFDI del almacén?\n\n${c.proveedor||""} · ${fmt(c.total)} · ${fmtDate(c.fecha)}\n\nNo afecta tus gastos capturados; solo lo quita del listado de la nube.`)) return;
+  await fbDeleteDoc(CFDIS_COL, id);
+  _cfdisStore=(_cfdisStore||[]).filter(x=>x.id!==id);
+  renderCfdisStore();
 }
 function onMesGuardadoChange(){
   const mes=document.getElementById("satMesGuardado")?.value||"";
