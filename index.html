@@ -443,7 +443,7 @@ tr:hover td { background:var(--claro); }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-n</div>
+<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-o</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1038,6 +1038,7 @@ tr:hover td { background:var(--claro); }
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <select id="satMesGuardado" onchange="onMesGuardadoChange()" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;min-width:180px"></select>
         <button class="btn btn-green" style="padding:8px 12px" onclick="conciliarDesdeStore()">🔎 Conciliar el periodo seleccionado</button>
+        <button class="btn btn-light" id="btnBorrarMesCfdi" style="padding:8px 12px;display:none;color:var(--red)" onclick="eliminarMesCfdiSeleccionado()">🗑️ Eliminar este mes</button>
       </div>
       <div id="cfdisStoreBody" style="max-height:220px;overflow:auto;margin-top:10px"></div>
     </div>
@@ -3720,7 +3721,26 @@ async function renderCfdisStore(){
   const prev=sel.value;
   sel.innerHTML = meses.length ? meses.map(m=>`<option value="${m}">${nombreMes(m)} — ${grupos[m].length} CFDI</option>`).join("") : `<option value="">— sin CFDIs guardados —</option>`;
   if(prev && meses.includes(prev)) sel.value=prev; else if(meses.length) sel.value=meses[0];
+  const btnBorrar=document.getElementById("btnBorrarMesCfdi");
+  if(btnBorrar) btnBorrar.style.display = (meses.length && typeof currentRole!=="undefined" && currentRole==="admin") ? "inline-flex" : "none";
   renderTablaMesCfdi();
+}
+// Borra TODO un mes del almacén de la nube de un golpe (solo admin) — para limpieza real, ya que
+// un mes trae 150-200 CFDIs. No toca los gastos capturados; solo los quita del listado.
+async function eliminarMesCfdiSeleccionado(){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede eliminar CFDIs guardados."); return; }
+  const mes=document.getElementById("satMesGuardado")?.value||"";
+  if(!mes){ alert("Selecciona un mes primero."); return; }
+  const aBorrar=(_cfdisStore||[]).filter(c=>(c.mes||cfdiMes(c.fecha))===mes);
+  if(!aBorrar.length) return;
+  if(!confirm(`¿Eliminar los ${aBorrar.length} CFDI de ${nombreMes(mes)} del almacén de la nube?\n\nNo afecta tus gastos capturados; solo los quita de este listado.`)) return;
+  const btn=document.getElementById("btnBorrarMesCfdi"); if(btn) btn.disabled=true;
+  setStatus("satStatus",`Eliminando ${aBorrar.length} CFDI de ${nombreMes(mes)}…`,"loading");
+  for(let i=0;i<aBorrar.length;i+=25){ await Promise.all(aBorrar.slice(i,i+25).map(c=>fbDeleteDoc(CFDIS_COL, c.id))); }
+  _cfdisStore=(_cfdisStore||[]).filter(c=>(c.mes||cfdiMes(c.fecha))!==mes);
+  if(btn) btn.disabled=false;
+  renderCfdisStore();
+  setStatus("satStatus",`✅ ${aBorrar.length} CFDI de ${nombreMes(mes)} eliminados del almacén.`,"ok");
 }
 function nombreMes(m){
   const [y,mm]=(m||"").split("-"); if(!y||!mm) return m||"—";
