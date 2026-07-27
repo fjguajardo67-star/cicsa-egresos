@@ -724,14 +724,15 @@ body.snav-min .user-chip span { display:none; }
     </div>
     <button class="btn btn-green" onclick="showPage('captura')">➕ Nueva captura</button>
   </div>
+  <div id="rsAvisoSemana"></div>
   <div class="summary-grid" id="rsKpis"></div>
   <div class="card">
-    <div class="card-title">🎯 Presupuesto de la semana</div>
+    <div class="card-title" id="rsTitPresup">🎯 Presupuesto de la semana</div>
     <div id="rsPresup"></div>
   </div>
   <div class="rs-grid2">
     <div class="card" style="margin-bottom:0">
-      <div class="card-title">📊 Gastos por categoría</div>
+      <div class="card-title" id="rsTitCats">📊 Gastos por categoría</div>
       <div id="rsCats"></div>
     </div>
     <div class="card" style="margin-bottom:0">
@@ -740,14 +741,14 @@ body.snav-min .user-chip span { display:none; }
     </div>
   </div>
   <div class="card" style="margin-top:20px">
-    <div class="card-title">🕘 Últimos movimientos</div>
+    <div class="card-title" id="rsTitMovs">🕘 Últimos movimientos</div>
     <div class="tbl-wrap">
       <table>
         <thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th>Forma de pago</th><th style="text-align:right">Importe</th></tr></thead>
         <tbody id="rsMovs"></tbody>
       </table>
     </div>
-    <div id="rsMovsEmpty" style="display:none;color:var(--txt2);font-size:13px;padding:10px 0">Aún no hay capturas en esta semana.</div>
+    <div id="rsMovsEmpty" style="display:none;color:var(--txt2);font-size:13px;padding:10px 0">Aún no hay capturas en esta semana guardada.</div>
   </div>
 </div>
 
@@ -1780,7 +1781,7 @@ body.snav-min .user-chip span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-27-e";
+const APP_BUILD = "2026-07-27-f";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3751,6 +3752,32 @@ function renderResumen(){
   const kpis=document.getElementById("rsKpis"); if(!kpis) return;
   const wk=getActiveWeek();
   const sem=document.getElementById("rsSemana"); if(sem) sem.textContent=wk?.label||"Sin semana";
+  // Cada tarjeta dice de QUÉ semana habla. La app trabaja por "semana guardada" (el ciclo del
+  // negocio va detrás del calendario), así que sin decirlo se asume la semana en curso y no
+  // cuadra con lo que se ve.
+  const etiq = wk?.label ? ` — ${wk.label}` : "";
+  const tp=document.getElementById("rsTitPresup"); if(tp) tp.textContent="🎯 Presupuesto"+etiq;
+  const tc=document.getElementById("rsTitCats");   if(tc) tc.textContent="📊 Gastos por categoría"+etiq;
+  const tm=document.getElementById("rsTitMovs");   if(tm) tm.textContent="🕘 Últimos movimientos"+etiq;
+
+  // Aviso cuando la semana activa NO es la del calendario en curso: es lo normal en la
+  // operación, pero hay que decirlo para no leer estos números como los de hoy.
+  const av=document.getElementById("rsAvisoSemana");
+  if(av){
+    const hoy=todayStr(), cal=semanaCalendario(new Date());
+    const cubreHoy = wk && wk.ini && wk.fin && wk.ini<=hoy && hoy<=wk.fin;
+    if(cubreHoy || !wk){ av.innerHTML=""; }
+    else {
+      const wkHoy = state.weeks.find(w=>w.ini&&w.fin&&w.ini<=hoy&&hoy<=w.fin);
+      const accion = wkHoy
+        ? `<button class="go" onclick="switchWeek('${String(wkHoy.id).replace(/'/g,"\\'")}')" style="background:none;border:none;color:var(--vd);font-weight:600;cursor:pointer;font-size:12.5px;font-family:'DM Sans',sans-serif;white-space:nowrap">Ir a ${esc(wkHoy.label)} →</button>`
+        : `<button class="go" onclick="openWeekModal()" style="background:none;border:none;color:var(--vd);font-weight:600;cursor:pointer;font-size:12.5px;font-family:'DM Sans',sans-serif;white-space:nowrap">Crear semana en curso →</button>`;
+      av.innerHTML=`<div style="display:flex;align-items:center;gap:10px;background:var(--claro);border:1px solid var(--border);border-left:4px solid var(--do);border-radius:9px;padding:10px 13px;margin-bottom:14px;font-size:13px">
+        <div style="flex:1">Estás viendo la semana guardada <strong>${esc(wk.label||"")}</strong>. Hoy (${fmtDate(hoy)}) cae en la semana del calendario <strong>${fmtDate(cal.ini)} al ${fmtDate(cal.fin)}</strong>${wkHoy?"":", que aún no se ha creado"}.</div>
+        ${accion}
+      </div>`;
+    }
+  }
   const gastosWk=gastosSemana();
   const partidas=partidasExpandidas(gastosWk);
   const totalGastado=partidas.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
@@ -3800,7 +3827,7 @@ function renderResumen(){
       <div class="scard-sub">${si?"Saldo fijado + cortes − efectivo − retiros":"⚠ Sin saldo inicial fijado"}</div></div>
     <div class="scard ${vencidas.length>0?'alert':''}"><div class="scard-label">💳 Facturas por pagar</div>
       <div class="scard-val">${fmt(pendTotal)}</div>
-      <div class="scard-sub">${pend.length} pendiente${pend.length===1?"":"s"}${vencidas.length?` · ${vencidas.length} vencida${vencidas.length===1?"":"s"}`:""}</div></div>
+      <div class="scard-sub">${pend.length} pendiente${pend.length===1?"":"s"}${vencidas.length?` · ${vencidas.length} vencida${vencidas.length===1?"":"s"}`:""} <span style="color:var(--ink-3,#9DAA90)">· todas las semanas</span></div></div>
     <div class="scard ${excedidas.length>0?'alert':''}"><div class="scard-label">📛 Categorías excedidas</div>
       <div class="scard-val">${excedidas.length}</div>
       <div class="scard-sub">${excedidas.length?esc(excedidas.slice(0,3).join(", "))+(excedidas.length>3?"…":""):"Todas dentro del presupuesto"}</div></div>
@@ -3841,8 +3868,10 @@ function renderResumen(){
   const ra=document.getElementById("rsAlerts");
   if(ra) ra.innerHTML=alerts.length?alerts.join(""):`<div class="rs-alert"><div>✅ Todo en orden: sin vencidas, sin excedentes y sin faltantes del SAT.</div></div>`;
 
-  // ── Últimos movimientos (todas las semanas, por fecha desc) ──
-  const movs=allGastosAllWeeks()
+  // ── Últimos movimientos DE LA SEMANA ACTIVA, por fecha desc ──
+  // Antes traía todas las semanas y colaba capturas de semanas anteriores junto a tarjetas
+  // que sí son de la semana activa: parecía que los números no cuadraban.
+  const movs=gastosWk.slice()
     .sort((a,b)=> (b.fecha||"")<(a.fecha||"")?-1:((b.fecha||"")>(a.fecha||"")?1:(String(b.id)<String(a.id)?-1:1)))
     .slice(0,6);
   const tb=document.getElementById("rsMovs"), empty=document.getElementById("rsMovsEmpty");
