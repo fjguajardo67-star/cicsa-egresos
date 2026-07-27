@@ -4630,14 +4630,23 @@ function renderRevisionDuplicados(){
   cont.innerHTML = `<div style="background:#FFF3E0;border:1px solid var(--naranja);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#BF360C">
       ${grupos.length} grupo(s) sospechoso(s) — aprox. <strong>${fmt(totalExceso)}</strong> contados de más en los reportes.
     </div>` + grupos.map(gr=>{
+    // Cada fila lleva SU proveedor y SU folio tal como se capturaron: el grupo puede juntar
+    // variantes ("EVA MOTA CARDENAS" vs "…(PLÁSTICOS DE MORELIA)", "31598" vs "PBAL-31598"),
+    // y sin verlas no se sabe cuál registro se está borrando.
     const filas = gr.registros.map(g=>{
       const sug = gr.sugeridos.includes(g.id);
-      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;margin-bottom:4px;background:${sug?"#FFF3E0":"#F7F7F4"};border:1px solid ${sug?"var(--naranja)":"var(--border)"}">
-        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--txt2);flex-shrink:0">${fmtDate(g.fecha)}</span>
-        <span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.categoria||"")}${g._weekLabel?` <span style="color:#B0B0A8">· ${esc(g._weekLabel)}</span>`:""}</span>
-        <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;flex-shrink:0">${fmt(g.importe)}</span>
-        ${sug?`<span style="font-size:10px;color:#BF360C;font-weight:700;flex-shrink:0">SUGERIDO</span>`:""}
-        <button onclick="borrarGastoDuplicado('${String(g.id).replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px;flex-shrink:0">🗑️</button>
+      return `<div style="padding:7px 9px;border-radius:8px;margin-bottom:5px;background:${sug?"#FFF3E0":"#F7F7F4"};border:1px solid ${sug?"var(--naranja)":"var(--border)"}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+          <span style="font-size:12px;font-weight:600;color:var(--vd);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(g.proveedor||"")}">${esc(g.proveedor||"—")}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--txt2);flex-shrink:0">#${esc(g.factura||"sin folio")}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--txt2);flex-shrink:0">${fmtDate(g.fecha)}</span>
+          <span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.categoria||"")}${g._weekLabel?` <span style="color:#B0B0A8">· ${esc(g._weekLabel)}</span>`:""}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;flex-shrink:0">${fmt(g.importe)}</span>
+          ${sug?`<span style="font-size:10px;color:#BF360C;font-weight:700;flex-shrink:0">SUGERIDO</span>`:""}
+          <button onclick="borrarGastoDuplicado('${String(g.id).replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px;flex-shrink:0" title="Borrar este registro">🗑️</button>
+        </div>
       </div>`;
     }).join("");
     const btnConsolidar = gr.consolidable
@@ -4645,7 +4654,7 @@ function renderRevisionDuplicados(){
          <div style="font-size:10px;color:var(--txt2);margin-top:3px">Deja UN registro con el total y las categorías juntas (conserva la categoría de compra). Elimina las copias.</div>`
       : "";
     return `<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
-      <div style="font-weight:600;color:var(--vd);font-size:14px">${esc(gr.proveedor)} <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">#${esc(gr.folio)}</span></div>
+      <div style="font-weight:600;color:var(--vd);font-size:14px">${esc(gr.proveedor)} <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">#${esc(gr.folioReal||gr.folio)}</span> <span style="font-size:11px;font-weight:400;color:var(--txt2)">· ${gr.registros.length} registros</span></div>
       <div style="font-size:11px;color:var(--txt2);margin:2px 0 8px">${esc(gr.motivo)}</div>
       ${filas}
       ${btnConsolidar}
