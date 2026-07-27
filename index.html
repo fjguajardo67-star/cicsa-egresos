@@ -1778,7 +1778,7 @@ body.snav-min .user-chip span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-27";
+const APP_BUILD = "2026-07-27-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4545,7 +4545,18 @@ function duplicadosSospechosos(gastos){
     if(padres.length && hijos.length){
       const p0 = padres[0], sumaHijos = hijos.reduce((s,g)=>s+imp(g),0);
       const padreConDetalle = Array.isArray(p0._partidas) && p0._partidas.length >= 2;
-      if(Math.abs(sumaHijos - imp(p0)) <= tol(imp(p0))){
+      // Regla fuerte: si el padre trae un desglose interno COHERENTE (sus partidas suman su
+      // total), esa factura ya está contada completa con su reparto por categoría. Entonces
+      // CUALQUIER categoría suelta del mismo folio y fecha la vuelve a contar, sin importar
+      // si las sueltas suman o no el total — es el caso de una limpieza a medias, donde ya
+      // se borraron algunas y las restantes dejaron de cuadrar.
+      const sumaPartidas = padreConDetalle ? p0._partidas.reduce((s,p)=>s+(parseFloat(p.importe)||0),0) : 0;
+      const padreCoherente = padreConDetalle && Math.abs(sumaPartidas - imp(p0)) <= tol(imp(p0));
+      const mismosDatos = hijos.filter(h=>h.fecha===p0.fecha);
+      if(padreCoherente && mismosDatos.length){
+        sugeridos = mismosDatos.map(g=>g.id);
+        motivo = `El padre "Dividida" (${fmt(imp(p0))}) ya trae su desglose por categoría, así que ${mismosDatos.length===1?"la categoría suelta":`las ${mismosDatos.length} categorías sueltas`} del mismo folio vuelven a contar la misma compra.`;
+      } else if(Math.abs(sumaHijos - imp(p0)) <= tol(imp(p0))){
         // La factura está completa por los dos lados. Si el padre trae el desglose interno
         // (_partidas), es el registro más rico → se sugiere borrar las categorías sueltas;
         // si no lo trae, el desglose vive en las sueltas → se sugiere borrar el padre.
@@ -4674,6 +4685,8 @@ function renderRevisionDuplicados(){
       <div style="font-weight:600;color:var(--vd);font-size:14px">${esc(gr.proveedor)} <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">#${esc(gr.folioReal||gr.folio)}</span> <span style="font-size:11px;font-weight:400;color:var(--txt2)">· ${gr.registros.length} registros</span></div>
       <div style="font-size:11px;color:var(--txt2);margin:2px 0 8px">${esc(gr.motivo)}</div>
       ${filas}
+      <button onclick="borrarSugeridosGrupo('${gr.sugeridos.join(",")}')" style="margin-top:6px;padding:6px 14px;background:#FFEBEE;color:var(--red);border:1px solid #FECACA;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">🗑️ Borrar los ${gr.sugeridos.length} sugeridos de este grupo (${fmt(gr.exceso)})</button>
+      <div style="font-size:10px;color:var(--txt2);margin-top:3px">Recomendado: bórralos juntos. De uno en uno, los que quedan dejan de cuadrar y el revisor ya no los marca.</div>
       ${btnConsolidar}
     </div>`;
   }).join("");
@@ -4715,6 +4728,24 @@ function consolidarFacturaDividida(prov, folio){
   if(document.getElementById("gastosBody")) renderGastos();
   if(document.getElementById("rBodyDetalle")) renderReportes();
   if(document.getElementById("budgetGrid")) renderPresupuesto();
+  if(document.getElementById("reporteContent")) renderReporteActual();
+}
+// Borra DE UN GOLPE todos los registros sugeridos de un grupo. Borrarlos de uno en uno rompe
+// la detección: al quitar el primero, los que quedan ya no suman el total del padre y el
+// revisor deja de marcarlos, dejando la limpieza a medias (y el reporte inflado).
+function borrarSugeridosGrupo(idsCsv){
+  const ids = String(idsCsv||"").split(",").filter(Boolean);
+  if(!ids.length) return;
+  let total = 0;
+  const set = new Set(ids.map(String));
+  state.weeks.forEach(w => (w.gastos||[]).forEach(g => { if(set.has(String(g.id))) total += parseFloat(g.importe)||0; }));
+  if(!confirm(`¿Eliminar ${ids.length} registro(s) duplicado(s) por ${fmt(total)}?\n\nSe restan de todos los reportes y se sincroniza a todos los dispositivos.`)) return;
+  state.weeks.forEach(w => { w.gastos = (w.gastos||[]).filter(g => !set.has(String(g.id))); });
+  ids.forEach(id => marcarBorrado(id));
+  save();
+  renderRevisionDuplicados();
+  if(document.getElementById("gastosBody")) renderGastos();
+  if(document.getElementById("rBodyDetalle")) renderReportes();
   if(document.getElementById("reporteContent")) renderReporteActual();
 }
 function borrarGastoDuplicado(id){
