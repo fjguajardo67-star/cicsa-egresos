@@ -980,17 +980,19 @@ body.snav-min .user-chip span { display:none; }
     <!-- Referencia visual: objetivo semanal vs suma de categorías, actualizada en vivo al teclear -->
     <div id="presupTotalBar" style="position:sticky;top:0;z-index:5;display:grid;grid-template-columns:repeat(3,1fr);gap:12px;background:white;border:1.5px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
       <div>
-        <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">🎯 Presupuesto objetivo ($)</div>
+        <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">🎯 Presupuesto asignado ($)</div>
         <input type="number" id="presupObjetivo" class="bcard-input" min="0" step="1000" style="width:100%;font-weight:700"
           onchange="guardarObjetivoPresupuesto()" oninput="actualizarTotalPresupuesto()">
       </div>
       <div style="text-align:center">
         <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">Suma de categorías</div>
         <div id="presupSuma" style="font-size:22px;font-weight:700;color:var(--vd);font-family:'JetBrains Mono',monospace">$0.00</div>
+        <div style="font-size:10.5px;color:var(--txt2);margin-top:2px"><span id="presupDifLbl">Por asignar</span>: <span id="presupDif" style="font-family:'JetBrains Mono',monospace;font-weight:700">$0.00</span></div>
       </div>
       <div style="text-align:center">
-        <div style="font-size:11px;color:var(--txt2);margin-bottom:4px" id="presupDifLbl">Por asignar</div>
-        <div id="presupDif" style="font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace">$0.00</div>
+        <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">💸 Total gastado</div>
+        <div id="presupGastado" style="font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace">$0.00</div>
+        <div id="presupGastadoSub" style="font-size:10.5px;margin-top:2px">&nbsp;</div>
       </div>
     </div>
     <div id="presupNotaAdmin" style="display:none;font-size:13px;color:var(--txt2);background:var(--claro);border-radius:8px;padding:10px 14px;margin-bottom:14px">🔒 Solo un administrador puede modificar el presupuesto. Lo estás viendo en modo lectura.</div>
@@ -1778,7 +1780,7 @@ body.snav-min .user-chip span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-27-d";
+const APP_BUILD = "2026-07-27-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3543,10 +3545,14 @@ function renderPresupuesto(){
   if(obj) obj.value = (typeof state.budgetObjetivo === "number" && state.budgetObjetivo > 0)
     ? state.budgetObjetivo
     : Object.values(state.budget).reduce((s,v)=>s+(parseFloat(v)||0),0);
+  // Gasto real del periodo (mismas cifras que las tarjetas, sumadas). Se guarda para que la
+  // barra pueda recolorearse en vivo al mover el presupuesto asignado, sin recalcular gastos.
+  _presupGastadoPeriodo = Object.values(totals).reduce((s,v)=>s+(parseFloat(v)||0),0);
   if(esAdmin) actualizarTotalPresupuesto();
 }
 // Barra de referencia: suma EN VIVO los inputs de las tarjetas (sin guardar) y la compara
 // contra el objetivo, para repartir el presupuesto hasta cuadrar sin andar sumando a mano.
+let _presupGastadoPeriodo = 0;
 function actualizarTotalPresupuesto(){
   const sumaEl=document.getElementById("presupSuma"), difEl=document.getElementById("presupDif"), lblEl=document.getElementById("presupDifLbl");
   if(!sumaEl || !difEl) return;
@@ -3562,8 +3568,21 @@ function actualizarTotalPresupuesto(){
     lblEl.textContent="Por asignar"; difEl.textContent=fmt(dif);
     difEl.style.color="#B8860B"; lblEl.style.color="#B8860B";
   } else {
-    lblEl.textContent="⚠ Excedido del objetivo"; difEl.textContent="−"+fmt(-dif);
+    lblEl.textContent="⚠ Excedido del asignado"; difEl.textContent="−"+fmt(-dif);
     difEl.style.color="var(--red)"; lblEl.style.color="var(--red)";
+  }
+  // Total gastado del periodo contra el presupuesto ASIGNADO (no contra la suma de
+  // categorías): rojo si ya se pasó, verde mientras siga dentro.
+  const gastEl=document.getElementById("presupGastado"), gastSub=document.getElementById("presupGastadoSub");
+  if(gastEl){
+    const gastado=_presupGastadoPeriodo, excedido=objetivo>0 && gastado>objetivo;
+    gastEl.textContent=fmt(gastado);
+    gastEl.style.color = excedido ? "var(--red)" : "var(--vd)";
+    if(gastSub){
+      if(objetivo<=0){ gastSub.innerHTML="&nbsp;"; gastSub.style.color="var(--txt2)"; }
+      else if(excedido){ gastSub.textContent=`⚠ Excedido en ${fmt(gastado-objetivo)}`; gastSub.style.color="var(--red)"; }
+      else { gastSub.textContent=`Disponible: ${fmt(objetivo-gastado)} · ${(gastado/objetivo*100).toFixed(0)}% usado`; gastSub.style.color="var(--vm)"; }
+    }
   }
 }
 function _soloAdminPresup(){ if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede modificar el presupuesto."); return false; } return true; }
