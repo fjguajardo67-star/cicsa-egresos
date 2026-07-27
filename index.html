@@ -1778,7 +1778,7 @@ body.snav-min .user-chip span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-27-b";
+const APP_BUILD = "2026-07-27-d";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -6093,10 +6093,13 @@ auth.onAuthStateChanged(async user => {
       // (ej. fue eliminada del panel y volvió a entrar), se recrea como Operativo con el
       // prefijo del correo como nombre — el admin ajusta rol/nombre en Gestión de usuarios.
       if(!snap.exists){
-        try{ await db.collection("usuarios").doc(user.uid).set({ email:user.email||"", nombre:currentNombre, rol:"operativo", fechaCreacion:new Date().toISOString(), revinculado:true }); }catch(e2){}
+        // El dueño se recrea como ADMIN, no como operativo: si volviera como operativo, su
+        // propio registro quedaría mal y el panel lo mostraría con el rol equivocado.
+        const rolRecreado = user.uid === ADMIN_UID ? "admin" : "operativo";
+        try{ await db.collection("usuarios").doc(user.uid).set({ email:user.email||"", nombre:currentNombre, rol:rolRecreado, fechaCreacion:new Date().toISOString(), revinculado:true }); }catch(e2){}
       }
       // If admin UID, ensure role is admin
-      if(user.uid === ADMIN_UID) currentRole = "admin";
+      if(user.uid === ADMIN_UID){ currentRole = "admin"; ensureAdminRecord(); }
     } catch(e) {
       currentRole = user.uid === ADMIN_UID ? "admin" : "operativo";
       currentNombre = (user.email||"").split("@")[0];
@@ -6354,8 +6357,32 @@ async function cargarUsuarios() {
   const lista = document.getElementById("adminUserList");
   lista.innerHTML = "<div style='color:#9DB89D;font-size:14px'>Cargando...</div>";
   try {
-    const snap = await db.collection("usuarios").get();
-    if(snap.empty) { lista.innerHTML = "<div style='color:#9DB89D;font-size:14px'>No hay usuarios registrados.</div>"; return; }
+    // Lectura desde el SERVIDOR a propósito. Con el caché por omisión, si la conexión falla
+    // Firestore devuelve un resultado VACÍO sin lanzar error, y el panel mostraba "no hay
+    // usuarios" como si se hubieran borrado. Si el servidor no responde, se cae al caché pero
+    // el estado vacío lo advierte en vez de afirmar que no hay nadie.
+    let snap;
+    try { snap = await db.collection("usuarios").get({ source: "server" }); }
+    catch(eNet) { snap = await db.collection("usuarios").get(); }
+    if(snap.empty) {
+      // Una lista vacía NO significa que se perdieron las cuentas: viven en Firebase
+      // Authentication, no aquí. Este panel solo guarda nombre y rol.
+      const deCache = snap.metadata && snap.metadata.fromCache;
+      lista.innerHTML = deCache
+        ? `<div style="background:#FFF8E1;border:1px solid #E6A700;border-radius:10px;padding:14px;font-size:13px;color:var(--txt)">
+            <strong style="color:#B8860B">⚠ No se pudo confirmar la lista con el servidor.</strong>
+            <div style="margin-top:6px;color:var(--txt2);line-height:1.5">Esto <strong>no</strong> quiere decir que no haya usuarios — es un problema de conexión.
+            Revisa tu internet y vuelve a abrir este panel.</div>
+            <button onclick="cargarUsuarios()" style="margin-top:10px;padding:6px 14px;background:var(--vd);color:white;border:none;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">🔄 Reintentar</button>
+          </div>`
+        : `<div style="background:#FFF8E1;border:1px solid #E6A700;border-radius:10px;padding:14px;font-size:13px;color:var(--txt)">
+            <strong style="color:#B8860B">No hay usuarios en el panel.</strong>
+            <div style="margin-top:6px;color:var(--txt2);line-height:1.5">Las cuentas de acceso <strong>no se perdieron</strong>: viven en Firebase Authentication y este panel solo guarda el nombre y el rol.
+            Pide a cada persona que <strong>inicie sesión</strong> con su correo y contraseña de siempre — su registro reaparece aquí automáticamente como <em>Operativo</em>, y tú le pones el nombre y el rol que le toca.</div>
+            <button onclick="cargarUsuarios()" style="margin-top:10px;padding:6px 14px;background:var(--vd);color:white;border:none;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">🔄 Reintentar</button>
+          </div>`;
+      return;
+    }
     lista.innerHTML = "";
     snap.forEach(doc => {
       const u = doc.data();
@@ -6490,13 +6517,20 @@ async function ensureAdminRecord() {
     if(!snap.exists) {
       await db.collection("usuarios").doc(ADMIN_UID).set({
         email: "fjguajardo67@gmail.com",
+        nombre: "Francisco",
         rol: "admin",
         fechaCreacion: new Date().toISOString()
       });
+    } else if((snap.data()||{}).rol !== "admin") {
+      // Repara un registro que quedó con el rol equivocado (p. ej. recreado como operativo
+      // por una versión anterior). merge para no borrar nombre ni fecha de creación.
+      await db.collection("usuarios").doc(ADMIN_UID).set({ rol: "admin" }, { merge: true });
     }
   } catch(e) { console.warn("ensureAdminRecord:", e); }
 }
-ensureAdminRecord();
+// NO se llama al cargar el script: en ese momento Firebase Auth todavia no restauro la sesion,
+// asi que request.auth es null y las reglas rechazan la escritura (fallaba en silencio, y por eso
+// el registro del admin no se recreaba solo). Se llama desde onAuthStateChanged, ya con sesion.
 
 
 // ══════════════════════════════════════════════════════════════
