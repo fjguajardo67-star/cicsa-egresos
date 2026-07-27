@@ -311,6 +311,40 @@ t("mismo folio con importes distintos que no cuadran (partidas viejas sin padre)
   ]);
   assert.equal(r.length, 0, "categorías sueltas legítimas del formato viejo no son duplicado");
 });
+t("padre con desglose coherente → TODA suelta del mismo folio sobra (limpieza a medias)", () => {
+  // Caso real ICAJG466113: se borraron algunas sueltas de una en una y las restantes dejaron
+  // de sumar el total del padre, así que el detector viejo ya no las marcaba.
+  const sueltas = [11611.25, 1457.00, 11499.35, 2517.98, 3819.33, 19667.70, 3909.33,
+                   11900.33, 1447.00, 11598.69, 1378.41];
+  const r = S.duplicadosSospechosos([
+    { id: "900", proveedor: "NUEVA WAL MART DE MEXICO", factura: "ICAJG466113", fecha: "2026-07-06",
+      categoria: "Dividida", importe: 24946.02, _dividida: true,
+      _partidas: [{ categoria: "Abarrotes / Secos", importe: 11611.25 }, { categoria: "Frutas y Verduras", importe: 1457.00 },
+                  { categoria: "Lácteos / Cremería", importe: 11499.35 }, { categoria: "Artículos de limpieza", importe: 378.42 }] },
+    ...sueltas.map((imp, i) => ({ id: String(910 + i), proveedor: "NUEVA WAL MART DE MEXICO",
+      factura: "ICAJG466113", fecha: "2026-07-06", categoria: "Abarrotes / Secos", importe: imp })),
+  ]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].sugeridos.length, 11, "las 11 sueltas sobran aunque ya no sumen el total");
+  assert.ok(!r[0].sugeridos.includes("900"), "el padre con el desglose se conserva");
+  close(r[0].exceso, 80806.37);
+});
+t("padre con desglose NO cuadrado no dispara la regla fuerte (no borra sin base)", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "p1", proveedor: "PROV", factura: "A1", fecha: "2026-07-06", categoria: "Dividida", importe: 1000, _dividida: true,
+      _partidas: [{ categoria: "Cárnicos", importe: 100 }, { categoria: "Hielo", importe: 200 }] },   // suman 300 ≠ 1000
+    { id: "h1", proveedor: "PROV", factura: "A1", fecha: "2026-07-06", categoria: "Cárnicos", importe: 640 },
+  ]);
+  assert.equal(r.length, 0, "desglose incompleto: no se sugiere borrar nada por esta regla");
+});
+t("suelta de OTRA fecha con el mismo folio no se marca por la regla fuerte", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "p1", proveedor: "PROV", factura: "B2", fecha: "2026-07-06", categoria: "Dividida", importe: 300, _dividida: true,
+      _partidas: [{ categoria: "Cárnicos", importe: 100 }, { categoria: "Hielo", importe: 200 }] },
+    { id: "h1", proveedor: "PROV", factura: "B2", fecha: "2026-07-09", categoria: "Cárnicos", importe: 55 },
+  ]);
+  assert.equal(r.length, 0, "otra fecha = otro documento, no duplicado");
+});
 t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
   const r = S.duplicadosSospechosos([
     { id: "a", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
