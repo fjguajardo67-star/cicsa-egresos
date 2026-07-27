@@ -1781,7 +1781,7 @@ body.snav-min .user-chip span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-27-f";
+const APP_BUILD = "2026-07-27-g";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3778,7 +3778,17 @@ function renderResumen(){
       </div>`;
     }
   }
-  const gastosWk=gastosSemana();
+  // El periodo se define por FECHA de factura (ini..fin de la semana), igual que Gastos,
+  // Presupuesto, Seguimiento y Auditoría. Usar la "bolsa de captura" de la semana metía aquí
+  // facturas con fecha de otras semanas —capturadas mientras esta estaba abierta— y por eso
+  // el Resumen no cuadraba con las demás pantallas. Las semanas viejas sin rango sí usan su
+  // bolsa, que es lo único que tienen (mismo criterio que gastosDelPeriodoSP).
+  const porFecha = (arr) => (wk && wk.ini && wk.fin)
+    ? arr.filter(x => x.fecha && x.fecha >= wk.ini && x.fecha <= wk.fin)
+    : arr;
+  const gastosWk = (wk && wk.ini && wk.fin)
+    ? allGastosAllWeeks().filter(g => g.fecha && g.fecha >= wk.ini && g.fecha <= wk.fin)
+    : ((wk?.gastos)||[]);
   const partidas=partidasExpandidas(gastosWk);
   const totalGastado=partidas.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
 
@@ -3791,8 +3801,8 @@ function renderResumen(){
 
   // Caja de la semana activa (mismo cálculo que la pestaña Caja, acotado a la semana)
   const si=(wk&&wk.ini&&state.cajaSaldoInicial)?state.cajaSaldoInicial[wk.ini]:null;
-  const cortes=(wk?.cortes||[]).reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
-  const retiros=(wk?.retiros||[]).reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
+  const cortes=porFecha(wk&&wk.ini&&wk.fin?todosLosCortes():(wk?.cortes||[])).reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  const retiros=porFecha(wk&&wk.ini&&wk.fin?todosLosRetiros():(wk?.retiros||[])).reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
   const efectivoWk=gastosWk.filter(esGastoEfectivo).reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
   const saldoCaja=(si?(parseFloat(si.valor)||0):0)+cortes-efectivoWk-retiros;
 
