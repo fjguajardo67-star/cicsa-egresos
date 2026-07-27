@@ -529,7 +529,8 @@ body.snav-min .user-chip span { display:none; }
 </style>
 </head>
 <body>
-<div style="position:fixed;bottom:2px;right:6px;font-size:9px;color:#bbb;z-index:99999;pointer-events:none;font-family:monospace">build 2026-07-24-o</div>
+<div id="buildBadge" onclick="recargarSinCache()" title="Versión instalada — toca para recargar la última versión"
+  style="position:fixed;bottom:3px;right:7px;font-size:10px;color:var(--txt2);background:rgba(255,255,255,.85);border:1px solid var(--border);border-radius:6px;padding:2px 7px;z-index:99999;cursor:pointer;font-family:'JetBrains Mono',monospace">v…</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
 <div id="loginScreen">
   <div class="login-card">
@@ -547,7 +548,7 @@ body.snav-min .user-chip span { display:none; }
     </div>
     <button class="login-btn" id="loginBtn" onclick="doLogin()">Ingresar</button>
     <div class="login-error" id="loginError"></div>
-    <div class="login-version">v3.0 — 2026</div>
+    <div class="login-version" id="loginVersion">v3.0</div>
   </div>
 </div>
 
@@ -1773,6 +1774,22 @@ body.snav-min .user-chip span { display:none; }
 // STATE & STORAGE
 // ═══════════════════════════════════════════════════════════════════════════
 // Auto-detect server: Railway en producción, localhost en desarrollo
+// VERSIÓN — subir esta fecha en CADA cambio que se publique. Es la única forma de saber si
+// todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
+// caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
+// pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
+const APP_BUILD = "2026-07-27";
+// Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
+(function(){
+  const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
+  const l=document.getElementById("loginVersion"); if(l) l.textContent="v3.0 — "+APP_BUILD;
+})();
+// Recarga saltándose la caché del navegador y de GitHub Pages: el parámetro ?v= hace que
+// la petición se vea como una dirección distinta, así siempre baja el index.html más nuevo.
+function recargarSinCache(){
+  if(!confirm(`Versión instalada: ${APP_BUILD}\n\n¿Recargar para traer la última versión publicada?`)) return;
+  location.replace(location.pathname + "?v=" + Date.now());
+}
 const IS_LOCAL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 const SERVER = IS_LOCAL
   ? "http://localhost:7432"
@@ -6107,6 +6124,7 @@ auth.onAuthStateChanged(async user => {
 function toggleUserMenu() {
   const menu = [
     { label: "👤 " + (currentUser?.email || ""), action: null },
+    { label: "🏷 Versión " + APP_BUILD, action: recargarSinCache },
     { label: "🔑 Cambiar contraseña", action: cambiarPassword },
     currentRole === "admin" ? { label: "👥 Gestión de usuarios", action: abrirAdminModal } : null,
     { label: "🚪 Cerrar sesión", action: () => auth.signOut() },
