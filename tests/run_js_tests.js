@@ -47,6 +47,7 @@ const FUNCS = [
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "migrarCategorias", "consolidarFacturaDividida",
+  "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
 ];
@@ -314,6 +315,104 @@ t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
   const r = S.duplicadosSospechosos([
     { id: "a", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
     { id: "b", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
+  ]);
+  assert.equal(r.length, 0);
+});
+
+console.log("\n== duplicados v2: casos reales de la semana 06-12 jul 2026 ==");
+t("folio con y sin prefijo (PBAL-31598 ≡ 31598) → duplicado", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "1", proveedor: "POLLO BAL", factura: "PBAL-31598", fecha: "2026-07-07", categoria: "Cárnicos", importe: 26484.00 },
+    { id: "2", proveedor: "POLLO BAL", factura: "31598", fecha: "2026-07-07", categoria: "Cárnicos", importe: 26484.00 },
+  ]);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r[0].sugeridos, ["2"]);
+  close(r[0].exceso, 26484.00);
+});
+t("proveedor escrito distinto, mismo folio (Eva Mota (Plásticos) ≡ Plásticos de Morelia) → duplicado", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "1", proveedor: "EVA MOTA CARDENAS (PLÁSTICOS DE MORELIA)", factura: "12493", fecha: "2026-07-06", categoria: "Artículos de limpieza", importe: 11023.20 },
+    { id: "2", proveedor: "PLASTICOS DE MORELIA", factura: "12493", fecha: "2026-07-06", categoria: "Desechables", importe: 11023.20 },
+  ]);
+  assert.equal(r.length, 1, "el paréntesis y el acento no deben impedir el agrupamiento");
+  close(r[0].exceso, 11023.20);
+});
+t("mismo folio y proveedor, capturado dos veces igual (12524) → duplicado", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "1", proveedor: "EVA MOTA CARDENAS (PLÁSTICOS DE MORELIA)", factura: "12524", fecha: "2026-07-09", categoria: "Deschables", importe: 23488.64 },
+    { id: "2", proveedor: "EVA MOTA CARDENAS", factura: "12524", fecha: "2026-07-09", categoria: "Deschables", importe: 23488.64 },
+  ]);
+  assert.equal(r.length, 1);
+  close(r[0].exceso, 23488.64);
+});
+t("Walmart ICAJG466113: padre Dividida + DOS tripletas que suman el padre → sugiere las 6 sueltas", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "10", proveedor: "NUEVA WAL MART DE MEXICO", factura: "ICAJG466113", fecha: "2026-07-06", categoria: "Dividida", importe: 24946.02 },
+    { id: "11", proveedor: "NUEVA WAL MART DE MEXICO", factura: "ICAJG466113", fecha: "2026-07-06", categoria: "Abarrotes / Secos", importe: 18608.71 },
+    { id: "12", proveedor: "NUEVA WAL MART DE MEXICO", factura: "ICAJG466113", fecha: "2026-07-06", categoria: "Frutas y Verduras", importe: 2517.98 },
+    { id: "13", proveedor: "NUEVA WAL MART DE MEXICO", factura: "ICAJG466113", fecha: "2026-07-06", categoria: "Lácteos / Cremería", importe: 3819.33 },
+    { id: "14", proveedor: "NUEVA WAL MART DE MEXICO", factura: "ICAJG466113", fecha: "2026-07-06", categoria: "Abarrotes / Secos", importe: 19667.70 },
+    { id: "15", proveedor: "NUEVA WAL MART DE MEXICO", factura: "ICAJG466113", fecha: "2026-07-06", categoria: "Frutas y Verduras", importe: 1368.99 },
+    { id: "16", proveedor: "NUEVA WAL MART DE MEXICO", factura: "ICAJG466113", fecha: "2026-07-06", categoria: "Lácteos / Cremería", importe: 3909.33 },
+  ]);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r[0].sugeridos.sort(), ["11", "12", "13", "14", "15", "16"], "las 6 sueltas sobran; se conserva el padre");
+  close(r[0].exceso, 49892.04, 0.05);
+  assert.ok(/no trae desglose/.test(r[0].motivo), "avisa que hay que capturar el desglose antes de borrar");
+});
+t("padre con desglose + UNA tripleta: solo sobra la tripleta", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "10", proveedor: "WALMART", factura: "F900", fecha: "2026-07-06", categoria: "Dividida", importe: 300.00,
+      _dividida: true, _partidas: [{ categoria: "Abarrotes / Secos", importe: 200 }, { categoria: "Cárnicos", importe: 100 }] },
+    { id: "11", proveedor: "WALMART", factura: "F900", fecha: "2026-07-06", categoria: "Abarrotes / Secos", importe: 150.00 },
+    { id: "12", proveedor: "WALMART", factura: "F900", fecha: "2026-07-06", categoria: "Cárnicos", importe: 100.00 },
+    { id: "13", proveedor: "WALMART", factura: "F900", fecha: "2026-07-06", categoria: "Lácteos / Cremería", importe: 50.00 },
+  ]);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r[0].sugeridos.sort(), ["11", "12", "13"]);
+  assert.ok(!/no trae desglose/.test(r[0].motivo), "el padre ya trae partidas: no hace falta el aviso");
+});
+t("divisiones manuales legítimas (mismo folio, importes distintos, sin padre) → NO se marcan", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "1", proveedor: "ONUS COMERCIAL, SA DE CV", factura: "FCPF4010508626", fecha: "2026-07-06", categoria: "Cárnicos", importe: 29038.36 },
+    { id: "2", proveedor: "ONUS COMERCIAL, SA DE CV", factura: "FCPF4010508626", fecha: "2026-07-06", categoria: "Frutas y Verduras", importe: 4996.00 },
+    { id: "3", proveedor: "NUEVA WAL MART DE MEXICO", factura: "IBAGY272188", fecha: "2026-07-07", categoria: "Artículos de limpieza", importe: 193.10 },
+    { id: "4", proveedor: "NUEVA WAL MART DE MEXICO", factura: "IBAGY272188", fecha: "2026-07-07", categoria: "Lácteos / Cremería", importe: 2310.90 },
+  ]);
+  assert.equal(r.length, 0, "partidas de una misma factura con montos distintos son legítimas");
+});
+t("el grupo conserva el folio tal cual se capturó (para que 'Consolidar' lo encuentre)", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "p1", proveedor: "ASAEL CRUZ", factura: "F-5863", fecha: "2026-07-01", categoria: "Dividida", importe: 300.00 },
+    { id: "h1", proveedor: "ASAEL CRUZ", factura: "F-5863", fecha: "2026-07-01", categoria: "Cárnicos", importe: 100.00 },
+    { id: "h2", proveedor: "ASAEL CRUZ", factura: "F-5863", fecha: "2026-07-01", categoria: "Lácteos / Cremería", importe: 200.00 },
+  ]);
+  assert.equal(r[0].consolidable, true);
+  assert.equal(r[0].folioReal, "F-5863", "el guion debe conservarse; el canónico solo se usa para mostrar");
+  assert.equal(r[0].folio, "F5863");
+});
+t("folios cortos distintos NO se confunden (5891 vs 891)", () => {
+  assert.equal(S._dupFoliosEquivalentes("5891", "891"), false, "folios de <4 dígitos: solo igualdad exacta");
+  assert.equal(S._dupFoliosEquivalentes("PBAL31598", "31598"), true);
+  assert.equal(S._dupFoliosEquivalentes("12493", "12524"), false);
+});
+t("proveedores realmente distintos no se agrupan aunque compartan folio corto", () => {
+  assert.equal(S._dupProvParecidos("POLLO BAL", "GAS EXPRESS NIETO"), false);
+  assert.equal(S._dupProvParecidos("EVA MOTA CARDENAS (PLÁSTICOS DE MORELIA)", "PLASTICOS DE MORELIA"), true);
+  assert.equal(S._dupProvParecidos("NUEVA WAL MART DE MEXICO", "NUEVA WAL MART DE MEXICO "), true);
+});
+t("mismo día e importe con folios totalmente distintos → se marca como posible repetición", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "1", proveedor: "BEBIDAS PURIFICADAS", factura: "A-100", fecha: "2026-07-11", categoria: "Refrescos / Pepsi", importe: 32639.33 },
+    { id: "2", proveedor: "BEBIDAS PURIFICADAS", factura: "MOJBE550120", fecha: "2026-07-11", categoria: "Refrescos / Pepsi", importe: 32639.33 },
+  ]);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r[0].sugeridos, ["2"]);
+});
+t("mismo día e importe SIN folio (compras reales repetidas) → NO se marca", () => {
+  const r = S.duplicadosSospechosos([
+    { id: "1", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-06", categoria: "Tortilla", importe: 1200.00 },
+    { id: "2", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-06", categoria: "Tortilla", importe: 1200.00 },
   ]);
   assert.equal(r.length, 0);
 });
