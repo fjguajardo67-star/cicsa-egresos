@@ -4474,39 +4474,98 @@ async function quitarAliasProducto(id, alias){
 // hace, pero los registros dobles de esa época siguen en los datos. También detecta capturas
 // repetidas exactas (mismo folio, fecha e importe). Devuelve GRUPOS con una sugerencia de qué
 // borrar; la decisión final siempre es del usuario.
+// ── Normalizadores del detector de duplicados ─────────────────────────────────
+// La vida real captura el MISMO documento con variantes: "PBAL-31598" vs "31598",
+// "EVA MOTA CARDENAS (PLÁSTICOS DE MORELIA)" vs "PLASTICOS DE MORELIA". Estas
+// funciones deciden si dos folios/proveedores son "el mismo" pese a esas variantes.
+function _dupFolioCanon(s){ return String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,""); }
+function _dupFoliosEquivalentes(a,b){
+  if(!a||!b) return false;
+  if(a===b) return true;
+  if(Math.min(a.length,b.length)<4) return false;   // folios cortos: solo igualdad exacta
+  return a.endsWith(b)||b.endsWith(a);              // "PBAL31598" ≡ "31598"
+}
+function _dupNormProv(s){
+  return String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .toUpperCase().replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim();
+}
+function _dupProvParecidos(a,b){
+  const na=_dupNormProv(a), nb=_dupNormProv(b);
+  if(!na&&!nb) return true;
+  if(!na||!nb) return false;
+  if(na===nb||na.includes(nb)||nb.includes(na)) return true;
+  const pa=na.split(" ").filter(w=>w.length>=5), pb=new Set(nb.split(" ").filter(w=>w.length>=5));
+  return pa.some(w=>pb.has(w));
+}
 function duplicadosSospechosos(gastos){
   gastos = gastos || allGastosAllWeeks();
   const norm = s => String(s||"").trim().toUpperCase();
-  const porFolio = {};
+  const imp = g => parseFloat(g.importe)||0;
+  const grupos = [], reportados = new Set();
+
+  // 1) Agrupa por folio EQUIVALENTE (tolera prefijos: 31598 ≡ PBAL-31598) y proveedor
+  //    parecido (tolera nombres a medias o con paréntesis). Sin folio no hay cómo
+  //    agrupar con confianza.
+  const gruposFolio = [], grupoDe = new Map();      // id → índice de grupo (para el pase 3)
   gastos.forEach(g=>{
-    const folio = norm(g.factura);
-    if(!folio) return;                                   // sin folio no hay cómo agrupar con confianza
-    const key = norm(g.proveedor)+"|"+folio;
-    (porFolio[key] = porFolio[key]||[]).push(g);
+    const canon=_dupFolioCanon(g.factura);
+    if(!canon) return;
+    let gr=gruposFolio.find(x=>_dupFoliosEquivalentes(x.canon,canon)
+      && x.regs.some(r=>_dupProvParecidos(r.proveedor,g.proveedor)));
+    if(!gr){ gr={canon, regs:[]}; gruposFolio.push(gr); }
+    if(canon.length>gr.canon.length) gr.canon=canon; // se queda el folio más completo
+    gr.regs.push(g); grupoDe.set(g.id, gruposFolio.indexOf(gr));
   });
-  const grupos = [];
-  Object.values(porFolio).forEach(regs=>{
-    if(regs.length < 2) return;
+
+  gruposFolio.forEach(({canon, regs})=>{
+    if(regs.length<2) return;
     const esPadre = g => g.categoria==="Dividida" || g._dividida===true;
-    const imp = g => parseFloat(g.importe)||0;
     const padres = regs.filter(esPadre), hijos = regs.filter(g=>!esPadre(g));
-    const tol = t => Math.max(2.01, t*0.01);             // centavos de redondeo entre padre y partidas
+    const tol = t => Math.max(2.01, t*0.01);         // centavos de redondeo entre padre y partidas
+    // "Consolidar" fusiona por proveedor+folio EXACTOS; solo se ofrece si el grupo es uniforme.
+    const uniforme = regs.every(g=>norm(g.proveedor)===norm(regs[0].proveedor) && norm(g.factura)===norm(regs[0].factura));
     let sugeridos = [], motivo = "", consolidable = false;
     if(padres.length && hijos.length){
       const p0 = padres[0], sumaHijos = hijos.reduce((s,g)=>s+imp(g),0);
+      const padreConDetalle = Array.isArray(p0._partidas) && p0._partidas.length >= 2;
       if(Math.abs(sumaHijos - imp(p0)) <= tol(imp(p0))){
         // La factura está completa por los dos lados. Si el padre trae el desglose interno
         // (_partidas), es el registro más rico → se sugiere borrar las categorías sueltas;
         // si no lo trae, el desglose vive en las sueltas → se sugiere borrar el padre.
-        const padreConDetalle = Array.isArray(p0._partidas) && p0._partidas.length >= 2;
         sugeridos = padreConDetalle ? hijos.map(g=>g.id) : [p0.id];
         motivo = `El padre "Dividida" (${fmt(imp(p0))}) y ${hijos.length===1?"la categoría suelta":"las categorías sueltas"} suman lo mismo — la factura está contada DOS veces.`;
         // Cuando el padre NO trae desglose interno, borrar las sueltas pierde la categoría de
         // compra. "Consolidar" fusiona total + categorías en UN solo registro dividido.
-        consolidable = !padreConDetalle && hijos.some(h=>h.categoria && h.categoria!=="Dividida");
+        consolidable = uniforme && !padreConDetalle && hijos.some(h=>h.categoria && h.categoria!=="Dividida");
       } else if(hijos.some(h=>Math.abs(imp(h)-imp(p0)) <= 0.005)){
         sugeridos = [p0.id];
         motivo = `El padre "Dividida" repite el importe de otro registro del mismo folio.`;
+      } else {
+        // Corridas de categorías sueltas (capturadas en secuencia) que suman EXACTO el
+        // padre: la misma compra dividida capturada a mano — una o varias veces — ADEMÁS
+        // del padre "Dividida". Cada corrida completa es una copia de más.
+        const orden=[...hijos].sort((a,b)=>String(a.id)<String(b.id)?-1:1);
+        const marcados=new Set(); let corridas=0;
+        padres.forEach(p=>{
+          const objetivo=imp(p);
+          for(let i=0;i<orden.length;i++){
+            let s=0; const corrida=[];
+            for(let j=i;j<orden.length;j++){
+              const h=orden[j];
+              if(marcados.has(h.id)) break;
+              s+=imp(h); corrida.push(h);
+              if(corrida.length>=2 && Math.abs(s-objetivo)<=2.01){
+                corrida.forEach(x=>{ marcados.add(x.id); sugeridos.push(x.id); });
+                corridas++; break;
+              }
+              if(s>objetivo+2.01) break;
+            }
+          }
+        });
+        if(sugeridos.length){
+          motivo = `${corridas} grupo(s) de categorías sueltas suman EXACTAMENTE lo mismo que el padre "Dividida" — la misma compra está capturada ${corridas+1} veces.`
+            + (padreConDetalle ? "" : ' ⚠ El padre no trae desglose interno: ábrelo con ✏️ y captura sus categorías ANTES de borrar las sueltas.');
+        }
       }
     }
     if(!sugeridos.length){
@@ -4518,16 +4577,44 @@ function duplicadosSospechosos(gastos){
         if(vistos[k]) sugeridos.push(String(vistos[k].id) < String(g.id) ? g.id : vistos[k].id);
         else vistos[k] = g;
       });
-      if(sugeridos.length) motivo = "Captura repetida: mismo folio, fecha e importe.";
+      if(sugeridos.length) motivo = "Captura repetida: mismo folio (o equivalente), fecha e importe.";
     }
     if(sugeridos.length){
+      regs.forEach(g=>reportados.add(g.id));
       grupos.push({
-        proveedor: regs[0].proveedor, folio: norm(regs[0].factura),
+        // `folio` es el canónico (solo para mostrar); `folioReal` conserva el texto tal cual se
+        // capturó, que es lo que consolidarFacturaDividida necesita para encontrar los registros.
+        proveedor: regs[0].proveedor, folio: canon, folioReal: regs[0].factura,
         registros: regs, sugeridos, motivo, consolidable,
         exceso: sugeridos.reduce((s,id)=>{ const g=regs.find(r=>r.id===id); return s+(g?imp(g):0); },0)
       });
     }
   });
+
+  // 3) Mismo DÍA + mismo IMPORTE al centavo + proveedor parecido, con folios escritos
+  //    totalmente distinto (los equivalentes ya se atraparon arriba). Sin folio NO se
+  //    marca: dos compras reales iguales el mismo día (p. ej. tortillas) no son duplicado.
+  const porDiaImp = {};
+  gastos.forEach(g=>{
+    if(reportados.has(g.id) || imp(g)<=0 || !_dupFolioCanon(g.factura)) return;
+    const k = (g.fecha||"")+"|"+imp(g).toFixed(2);
+    (porDiaImp[k] = porDiaImp[k]||[]).push(g);
+  });
+  Object.values(porDiaImp).forEach(regs=>{
+    if(regs.length<2) return;
+    const parecidos = regs.filter((g,i)=>i===0||_dupProvParecidos(g.proveedor,regs[0].proveedor));
+    if(parecidos.length<2) return;
+    if(new Set(parecidos.map(g=>grupoDe.get(g.id))).size<2) return;   // mismo folio: ya evaluado
+    const orden=[...parecidos].sort((a,b)=>String(a.id)<String(b.id)?-1:1);
+    grupos.push({
+      proveedor: orden[0].proveedor, folio: _dupFolioCanon(orden[0].factura),
+      registros: orden, sugeridos: orden.slice(1).map(g=>g.id),
+      motivo: "Mismo día y mismo importe exacto con el folio escrito distinto — posible captura repetida.",
+      consolidable: false,
+      exceso: orden.slice(1).reduce((s,g)=>s+imp(g),0)
+    });
+  });
+
   return grupos.sort((a,b)=>b.exceso-a.exceso);
 }
 function abrirRevisionDuplicados(){
@@ -4554,7 +4641,7 @@ function renderRevisionDuplicados(){
       </div>`;
     }).join("");
     const btnConsolidar = gr.consolidable
-      ? `<button onclick="consolidarFacturaDividida('${String(gr.proveedor).replace(/'/g,"\\'")}','${String(gr.folio).replace(/'/g,"\\'")}')" style="padding:5px 12px;background:#E8F5E9;color:var(--vm);border:1px solid var(--vm);border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;margin-top:8px">⚙ Consolidar en 1 factura dividida</button>
+      ? `<button onclick="consolidarFacturaDividida('${String(gr.proveedor).replace(/'/g,"\\'")}','${String(gr.folioReal||gr.folio).replace(/'/g,"\\'")}')" style="padding:5px 12px;background:#E8F5E9;color:var(--vm);border:1px solid var(--vm);border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;margin-top:8px">⚙ Consolidar en 1 factura dividida</button>
          <div style="font-size:10px;color:var(--txt2);margin-top:3px">Deja UN registro con el total y las categorías juntas (conserva la categoría de compra). Elimina las copias.</div>`
       : "";
     return `<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
