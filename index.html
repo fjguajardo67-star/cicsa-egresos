@@ -1781,7 +1781,7 @@ body.snav-min .user-chip span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-27-g";
+const APP_BUILD = "2026-07-28";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3800,11 +3800,12 @@ function renderResumen(){
   const pct=meta>0?(totalGastado/meta*100):0;
 
   // Caja de la semana activa (mismo cálculo que la pestaña Caja, acotado a la semana)
-  const si=(wk&&wk.ini&&state.cajaSaldoInicial)?state.cajaSaldoInicial[wk.ini]:null;
-  const cortes=porFecha(wk&&wk.ini&&wk.fin?todosLosCortes():(wk?.cortes||[])).reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
-  const retiros=porFecha(wk&&wk.ini&&wk.fin?todosLosRetiros():(wk?.retiros||[])).reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
-  const efectivoWk=gastosWk.filter(esGastoEfectivo).reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
-  const saldoCaja=(si?(parseFloat(si.valor)||0):0)+cortes-efectivoWk-retiros;
+  // Caja es ESPEJO de la pestaña Caja: mismo periodo y misma funcion de calculo, para que
+  // el numero de aqui y el "Saldo del periodo" de alla sean siempre identicos.
+  const pCaja=periodoCajaActual();
+  const caja=calcularSaldoCajaPeriodo(pCaja.ini, pCaja.fin) || {saldo:0, saldoInicialManual:null};
+  const si=caja.saldoInicialManual!=null;
+  const saldoCaja=caja.saldo;
 
   // Facturas a crédito pendientes (todas las semanas) + vencidas
   const pend=allGastosAllWeeks().filter(g=>g.formaPago==="credito"&&g.estadoPago==="pendiente");
@@ -3832,9 +3833,9 @@ function renderResumen(){
 
   // ── KPIs ──
   kpis.innerHTML=`
-    <div class="scard"><div class="scard-label">💰 Caja (semana activa)</div>
+    <div class="scard"><div class="scard-label">💰 Saldo de caja</div>
       <div class="scard-val">${fmt(saldoCaja)}</div>
-      <div class="scard-sub">${si?"Saldo fijado + cortes − efectivo − retiros":"⚠ Sin saldo inicial fijado"}</div></div>
+      <div class="scard-sub">${si?`Periodo ${fmtDate(pCaja.ini)} al ${fmtDate(pCaja.fin)}`:"⚠ Sin saldo inicial fijado"} <span style="color:#9DAA90">· igual que Caja</span></div></div>
     <div class="scard ${vencidas.length>0?'alert':''}"><div class="scard-label">💳 Facturas por pagar</div>
       <div class="scard-val">${fmt(pendTotal)}</div>
       <div class="scard-sub">${pend.length} pendiente${pend.length===1?"":"s"}${vencidas.length?` · ${vencidas.length} vencida${vencidas.length===1?"":"s"}`:""} <span style="color:var(--ink-3,#9DAA90)">· todas las semanas</span></div></div>
@@ -6640,6 +6641,34 @@ async function sha256Hex(s){
 // Clave del ajuste = fecha inicio del periodo consultado (los registros viejos por weekId
 // quedan huérfanos pero inofensivos — un id-timestamp nunca coincide con una fecha).
 function cajaPeriodoIni(){ return document.getElementById("cajaRangoIni")?.value || ""; }
+// ── Fuente ÚNICA del saldo de caja de un periodo ────────────────────────────────
+// La usan la pestaña Caja, su reporte PDF y el indicador del Resumen. Antes cada una
+// repetía la fórmula por su cuenta y podían mostrar cifras distintas del mismo periodo.
+// Regla (igual que en Caja): solo un saldo inicial FIJADO entra al cálculo; sin fijar el
+// periodo parte de $0 y el arrastre histórico se muestra aparte.
+function calcularSaldoCajaPeriodo(ini, fin){
+  if(!ini || !fin) return null;
+  const rec = (state.cajaSaldoInicial||{})[ini];
+  const saldoInicialManual = (rec && typeof rec.valor === "number") ? rec.valor : null;
+  const cortes  = todosLosCortes().filter(c=>c.fecha>=ini && c.fecha<=fin);
+  const gastos  = allGastosAllWeeks().filter(esGastoEfectivo).filter(g=>g.fecha>=ini && g.fecha<=fin);
+  const retiros = todosLosRetiros().filter(r=>r.fecha>=ini && r.fecha<=fin);
+  const totalCortes  = cortes .reduce((s,c)=>s+(parseFloat(c.monto  )||0),0);
+  const totalGastos  = gastos .reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+  const totalRetiros = retiros.reduce((s,r)=>s+(parseFloat(r.monto  )||0),0);
+  const baseInicial  = saldoInicialManual!=null ? saldoInicialManual : 0;
+  return { ini, fin, saldoInicialManual, baseInicial, totalCortes, totalGastos, totalRetiros,
+           saldo: baseInicial + totalCortes - totalGastos - totalRetiros };
+}
+// Periodo que tiene puesto la pestaña Caja, aunque no se haya abierto todavía en esta
+// sesión (se guarda por dispositivo). Así el Resumen refleja EL MISMO periodo que Caja.
+function periodoCajaActual(){
+  const ini=document.getElementById("cajaRangoIni")?.value, fin=document.getElementById("cajaRangoFin")?.value;
+  if(ini && fin) return { ini, fin };
+  let per=null; try{ per=JSON.parse(localStorage.getItem(CAJA_PERIODO_KEY)||"null"); }catch(e){}
+  if(per && per.ini && per.fin) return per;
+  const s=semanaCalendario(new Date()); return { ini:s.ini, fin:s.fin };
+}
 function cajaSaldoAjusteActual(){
   const ini = cajaPeriodoIni();
   if(!ini) return null;
@@ -6974,7 +7003,8 @@ function renderCaja() {
   // Solo un saldo inicial fijado (conteo real, como en Cortes) entra al cálculo; sin fijar,
   // el periodo parte de $0 y el arrastre histórico se muestra aparte, colapsado.
   const baseInicial = usaManual ? saldoInicialManual : 0;
-  const saldoFinal = baseInicial + totalCortes - totalGastos - totalRetiros;
+  // Mismo numero que muestra el Resumen: ambos salen de calcularSaldoCajaPeriodo.
+  const saldoFinal = calcularSaldoCajaPeriodo(datos.ini, datos.fin).saldo;
 
   // 1. Saldo inicial del periodo
   const btnAjuste = esAdmin
@@ -7074,7 +7104,7 @@ function exportarCajaPDF(){
   // Consistente con renderCaja: solo un saldo inicial capturado entra al cálculo; sin capturar
   // (rango o semana) parte de 0 y el saldo anterior se muestra aparte, no incluido.
   const baseInicial = usaManual ? datos.saldoInicialManual : 0;
-  const saldoFinal = baseInicial + totalCortes - totalGastos - totalRetiros;
+  const saldoFinal = calcularSaldoCajaPeriodo(datos.ini, datos.fin).saldo;
 
   const doc=new jsPDF({unit:"mm",format:"letter"});
   const PW=215.9,MAR=15,W=PW-MAR*2; let Y=MAR;
