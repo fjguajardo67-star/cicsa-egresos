@@ -44,7 +44,7 @@ const FUNCS = [
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "todosLosCortes", "todosLosRetiros",
-  "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe",
+  "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "migrarCategorias", "consolidarFacturaDividida",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
@@ -240,6 +240,45 @@ t("marca aliases de otro producto (Queso americano bajo Queso crema), respeta le
   assert.ok(!q.sospechosos.includes("Queso crema BC 1.36kg"), "no debe marcar alias legítimo con palabras compartidas");
   assert.ok(!r.find(x => x.id === "2"), "queso panela sin sospechosos");
   assert.ok(!r.find(x => x.id === "3"), "sinónimo sin palabra en común (Alitas/Alas) no se marca");
+});
+
+console.log("\n== saldo de caja del periodo (fuente única: Caja, su PDF y el Resumen) ==");
+t("cifras reales 06-12 jul: 1,653 + 122,274 − 91,935.66 − 0 = 31,991.34", () => {
+  const ef = (id, fecha, imp) => ({ id, fecha, importe: imp, formaPago: "efectivo", estadoPago: "pagado" });
+  S.state = { activeWeek: "w1", budget: {},
+    cajaSaldoInicial: { "2026-07-06": { valor: 1653.00 } },
+    weeks: [{ id: "w1", label: "06 al 12 jul 2026", ini: "2026-07-06", fin: "2026-07-12",
+      cortes: [{ id: "c1", fecha: "2026-07-10", monto: 53066.00 }, { id: "c2", fecha: "2026-07-07", monto: 69208.00 }],
+      retiros: [],
+      gastos: [ef("1","2026-07-10",8200.00), ef("2","2026-07-10",36827.63), ef("3","2026-07-10",10380.00),
+               ef("4","2026-07-10",459.00), ef("5","2026-07-07",2619.00), ef("6","2026-07-07",193.10),
+               ef("7","2026-07-07",2310.90), ef("8","2026-07-06",24946.02), ef("9","2026-07-06",6000.01)] }] };
+  const r = S.calcularSaldoCajaPeriodo("2026-07-06", "2026-07-12");
+  close(r.totalCortes, 122274.00);
+  close(r.totalGastos, 91935.66);
+  close(r.saldo, 31991.34);
+});
+t("solo cuenta lo que cae DENTRO del periodo, venga de la semana que venga", () => {
+  const ef = (id, fecha, imp) => ({ id, fecha, importe: imp, formaPago: "efectivo", estadoPago: "pagado" });
+  S.state = { activeWeek: "w2", budget: {},
+    cajaSaldoInicial: { "2026-07-06": { valor: 1000 } },
+    weeks: [
+      { id: "w1", label: "sem previa", ini: "2026-06-29", fin: "2026-07-05", cortes: [{ id:"cx", fecha:"2026-07-01", monto: 99999 }], retiros: [], gastos: [ef("x","2026-07-01",5000)] },
+      // Un gasto FECHADO dentro del periodo pero guardado en la bolsa de otra semana sí cuenta.
+      { id: "w2", label: "06-12", ini: "2026-07-06", fin: "2026-07-12", cortes: [{ id:"c1", fecha:"2026-07-07", monto: 500 }],
+        retiros: [{ id:"r1", fecha:"2026-07-08", monto: 100 }], gastos: [ef("a","2026-07-07",200)] },
+    ] };
+  const r = S.calcularSaldoCajaPeriodo("2026-07-06", "2026-07-12");
+  close(r.totalCortes, 500, 0.001);
+  close(r.totalGastos, 200, 0.001);
+  close(r.saldo, 1000 + 500 - 200 - 100);
+});
+t("sin saldo inicial fijado el periodo parte de $0 (no arrastra en silencio)", () => {
+  S.state = { activeWeek: "w1", budget: {}, cajaSaldoInicial: {},
+    weeks: [{ id: "w1", ini: "2026-07-06", fin: "2026-07-12", cortes: [{ id:"c", fecha:"2026-07-07", monto: 700 }], retiros: [], gastos: [] }] };
+  const r = S.calcularSaldoCajaPeriodo("2026-07-06", "2026-07-12");
+  assert.equal(r.saldoInicialManual, null);
+  close(r.saldo, 700);
 });
 
 console.log("\n== duplicados sospechosos (facturas contadas dos veces) ==");
