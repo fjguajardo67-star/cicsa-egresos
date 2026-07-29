@@ -540,7 +540,15 @@ body.snav-min .user-chip span { display:none; }
   --dk-border:#2C3521; --dk-brand:#92BF5B; --dk-gold:#E7C04A;
   --dk-orange:#F79350; --dk-red:#E58A7C; --dk-red-bg:#2C1A17; --dk-warn-bg:#2A2113;
 }
-:root[data-theme="dark"] body { background:var(--dk-bg); color:var(--dk-ink); }
+:root[data-theme="dark"] body { background:var(--dk-bg); }   /* SOLO el fondo: poner aquí el
+   color claro lo heredaba TODA la app, y las pantallas que siguen con tarjetas blancas
+   quedaban con texto crema sobre blanco (ilegible). El color va acotado abajo. */
+:root[data-theme="dark"] .sidebar,
+:root[data-theme="dark"] #page-resumen { color:var(--dk-ink); }
+/* Pantallas de trabajo: hoja clara sobre la cáscara oscura. Así conservan su texto oscuro
+   original y no dependen de heredar un color que no les corresponde. */
+:root[data-theme="dark"] .container.page:not(#page-resumen) {
+  background:var(--bg); color:var(--txt); border-radius:14px; margin-top:10px; margin-bottom:10px; }
 
 /* Cáscara: barra lateral y barrita móvil */
 :root[data-theme="dark"] .sidebar { background:var(--dk-surface); border-right-color:var(--dk-border); }
@@ -1864,7 +1872,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-28-e";
+const APP_BUILD = "2026-07-28-f";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
