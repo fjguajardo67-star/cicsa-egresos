@@ -1781,7 +1781,7 @@ body.snav-min .user-chip span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-28-b";
+const APP_BUILD = "2026-07-28-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2824,6 +2824,7 @@ async function asegurarProveedor(nombre){
 async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
   if(!productos || !productos.length) return { nuevos:0, actualizados:0 };
   let nuevos = 0, actualizados = 0;
+  const ignorados = [];   // hacen match pero estan en la papelera: se actualizan y siguen ocultos
   try {
     await cargarCatalogo();
     if(proveedorNombre) await asegurarProveedor(proveedorNombre);
@@ -2850,6 +2851,9 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
         if(!yaEsAlias) match.alias_factura = [...(match.alias_factura||[]), nombre];
         const { id, ...datos } = match;
         await fbUpdateDoc(CATALOGO_COL, id, datos);
+        // El borrado suave es a proposito (no se recrea solo), pero hay que DECIRLO: si no,
+        // la factura parece no haber clasificado nada.
+        if(match.estado === "ignorado") ignorados.push(match.nombre_comercial || nombre);
         actualizados++;
       } else {
         // Producto nuevo sin match: NUNCA asumimos unidad_base ni contenido — se queda
@@ -2885,7 +2889,7 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
       }
     }
   } catch(e){ console.warn("sincronizarConCatalogo error:", e); throw e; }
-  return { nuevos, actualizados };
+  return { nuevos, actualizados, ignorados };
 }
 
 function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
@@ -2924,8 +2928,11 @@ function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
       const primerGasto = encontrarGastoPorId(ids[0]);
       try{
         const r = await sincronizarConCatalogo(productos, primerGasto?.proveedor, primerGasto?.factura);
-        const n = r?.nuevos||0, a = r?.actualizados||0;
-        setStatus("statusLectura", `✅ Catálogo actualizado — ${n} producto(s) nuevo(s), ${a} actualizado(s) (revisa la pestaña Productos).`, "ok");
+        const n = r?.nuevos||0, a = r?.actualizados||0, ign = r?.ignorados||[];
+        const avisoIgn = ign.length
+          ? `<br><span style="color:#B8860B">🚫 ${ign.length} de estos productos están en la papelera, por eso NO se ven en la lista: ${esc(ign.slice(0,4).join(", "))}${ign.length>4?"…":""}. Restáuralos desde el filtro “🚫 Ignorado”.</span>`
+          : "";
+        setStatus("statusLectura", `✅ Catálogo actualizado — ${n} producto(s) nuevo(s), ${a} actualizado(s) (revisa la pestaña Productos).${avisoIgn}`, "ok");
       }catch(e){
         console.warn("sincronizarConCatalogo error:", e);
         marcarError("no se pudo escribir al catálogo (" + (e.message||"error") + ")");
@@ -4291,7 +4298,7 @@ function renderConciliacion(r){
 }
 
 function preLlenarCaptura(proveedor,fecha,folio,importe){
-  showPage("captura",document.querySelector(".nav-btn"));
+  showPage("captura");   // sin btn: showPage marca sola la pestana correcta (con el sidebar, el primer .nav-btn ya no es Capturar sino Resumen)
   document.getElementById("fProv").value=proveedor; document.getElementById("fFecha").value=fecha;
   document.getElementById("fFactura").value=folio; document.getElementById("fImporte").value=importe;
   document.getElementById("extractedCard").style.display="block"; checkDuplicateForm(); window.scrollTo(0,0);
@@ -5809,7 +5816,7 @@ async function gmailProcessItem(idx){
   gmailItems[idx]._done=true;
   guardarGmailItemsLocal();
   const el=document.getElementById(`gmail-item-${idx}`);if(el){el.style.opacity="0.4";el.innerHTML=`<div style="padding:8px;color:var(--vm);font-size:13px">✅ Procesando…</div>`;}
-  showPage("captura",document.querySelector(".nav-btn"));
+  showPage("captura");   // sin btn: showPage marca sola la pestana correcta (con el sidebar, el primer .nav-btn ya no es Capturar sino Resumen)
   const preview=document.getElementById("imgPreview");
   if(item.mime_type.startsWith("image/")){preview.src=capturedDataURL;preview.style.display="block";}else preview.style.display="none";
   document.getElementById("btnLeer").disabled=false;document.getElementById("btnDividir").style.display="none";
