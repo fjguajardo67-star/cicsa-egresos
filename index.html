@@ -526,6 +526,84 @@ body.snav-min .user-chip span { display:none; }
   font-weight:600; cursor:pointer; font-size:12.5px; font-family:'DM Sans',sans-serif; }
 .rs-alert .go:hover { text-decoration:underline; }
 
+/* ── Tema oscuro — ALCANCE ACOTADO: barra lateral + pantalla Resumen ──────────
+   El resto de la app tiene ~83 colores escritos a mano dentro del HTML; oscurecerla
+   entera exige convertirlos uno por uno y revisar las 12 pantallas. Aquí solo se
+   oscurece la cáscara (sidebar + fondo) y el Resumen, que se escribieron con
+   variables. Las pantallas de trabajo quedan claras a propósito: se leen como
+   contenido claro sobre cáscara oscura, no como algo a medio terminar.
+   Los tokens llevan prefijo --dk- y NO redefinen los globales, así ninguna otra
+   pantalla cambia de color por accidente. */
+:root[data-theme="dark"] {
+  --dk-bg:#12160E; --dk-surface:#1B2115; --dk-surface2:#232B1B;
+  --dk-ink:#EBEEDF; --dk-ink2:#ACB59A; --dk-ink3:#78826A;
+  --dk-border:#2C3521; --dk-brand:#92BF5B; --dk-gold:#E7C04A;
+  --dk-orange:#F79350; --dk-red:#E58A7C; --dk-red-bg:#2C1A17; --dk-warn-bg:#2A2113;
+}
+:root[data-theme="dark"] body { background:var(--dk-bg); color:var(--dk-ink); }
+
+/* Cáscara: barra lateral y barrita móvil */
+:root[data-theme="dark"] .sidebar { background:var(--dk-surface); border-right-color:var(--dk-border); }
+:root[data-theme="dark"] .side-brand { border-bottom-color:var(--dk-border); }
+:root[data-theme="dark"] .side-word b { color:var(--dk-brand); }
+:root[data-theme="dark"] .side-word small { color:var(--dk-gold); }
+:root[data-theme="dark"] .sn-group h4 { color:var(--dk-ink3); }
+:root[data-theme="dark"] .nav-btn { color:var(--dk-ink2); }
+:root[data-theme="dark"] .nav-btn:hover,
+:root[data-theme="dark"] .nav-btn.active { background:var(--dk-surface2); color:var(--dk-brand); }
+:root[data-theme="dark"] .nav-btn.active::before { background:var(--dk-brand); }
+:root[data-theme="dark"] .side-foot { border-top-color:var(--dk-border); }
+:root[data-theme="dark"] .week-badge { background:var(--dk-surface2); border-color:var(--dk-border); color:var(--dk-brand); }
+:root[data-theme="dark"] .week-badge:hover { background:var(--dk-border); }
+:root[data-theme="dark"] .user-chip { background:var(--dk-surface2); border-color:var(--dk-border); color:var(--dk-ink); }
+:root[data-theme="dark"] .user-chip:hover { background:var(--dk-border); }
+:root[data-theme="dark"] .side-collapse { background:var(--dk-surface); border-color:var(--dk-border); color:var(--dk-ink2); }
+:root[data-theme="dark"] .side-collapse:hover { background:var(--dk-surface2); color:var(--dk-brand); }
+
+/* Botón de tema (pie del sidebar) */
+.side-theme { display:flex; align-items:center; gap:9px; width:100%; padding:7px 10px;
+  border:1px solid var(--border); border-radius:9px; background:var(--white);
+  color:var(--txt2); font-size:12.5px; font-weight:500; cursor:pointer;
+  font-family:'DM Sans',sans-serif; white-space:nowrap; }
+.side-theme:hover { background:var(--claro); color:var(--vd); }
+.side-theme svg { width:16px; height:16px; flex:0 0 auto; stroke-width:1.8; }
+.side-theme .ic-sol { display:none; }
+body.snav-min .side-theme { justify-content:center; padding:7px 0; }
+body.snav-min .side-theme span { display:none; }
+:root[data-theme="dark"] .side-theme { background:var(--dk-surface2); border-color:var(--dk-border); color:var(--dk-ink2); }
+:root[data-theme="dark"] .side-theme:hover { background:var(--dk-border); color:var(--dk-gold); }
+:root[data-theme="dark"] .side-theme .ic-luna { display:none; }
+:root[data-theme="dark"] .side-theme .ic-sol { display:block; }
+
+/* Pantalla Resumen */
+:root[data-theme="dark"] #page-resumen .card { background:var(--dk-surface); border-color:var(--dk-border); box-shadow:0 2px 14px rgba(0,0,0,.35); }
+:root[data-theme="dark"] #page-resumen .card-title { color:var(--dk-brand); border-bottom-color:var(--dk-gold); }
+:root[data-theme="dark"] #page-resumen .rs-title { color:var(--dk-brand); }
+:root[data-theme="dark"] #page-resumen .rs-sub,
+:root[data-theme="dark"] #page-resumen .rs-catval { color:var(--dk-ink2); }
+:root[data-theme="dark"] #page-resumen .scard { background:var(--dk-surface); border-color:var(--dk-border); }
+:root[data-theme="dark"] #page-resumen .scard-label { color:var(--dk-ink2); }
+:root[data-theme="dark"] #page-resumen .scard-val { color:var(--dk-brand); }
+:root[data-theme="dark"] #page-resumen .scard-sub { color:var(--dk-ink3); }
+:root[data-theme="dark"] #page-resumen .scard.alert { background:var(--dk-red-bg); border-color:#4A2A24; }
+:root[data-theme="dark"] #page-resumen .scard.alert .scard-val { color:var(--dk-red); }
+:root[data-theme="dark"] #page-resumen .rs-bar-wrap,
+:root[data-theme="dark"] #page-resumen .rs-cattrack { background:var(--dk-surface2); border-color:var(--dk-border); }
+:root[data-theme="dark"] #page-resumen .rs-stat small { color:var(--dk-ink3); }
+:root[data-theme="dark"] #page-resumen .rs-stat b { color:var(--dk-ink); }
+:root[data-theme="dark"] #page-resumen .rs-catrow { border-top-color:var(--dk-border); }
+:root[data-theme="dark"] #page-resumen .rs-catname { color:var(--dk-ink); }
+:root[data-theme="dark"] #page-resumen .rs-alert { background:var(--dk-surface2); border-color:var(--dk-border); color:var(--dk-ink); }
+:root[data-theme="dark"] #page-resumen .rs-alert.warn { background:var(--dk-warn-bg); border-left-color:var(--dk-gold); }
+:root[data-theme="dark"] #page-resumen .rs-alert.crit { background:var(--dk-red-bg); border-left-color:var(--dk-red); }
+:root[data-theme="dark"] #page-resumen .rs-alert .go { color:var(--dk-brand); }
+:root[data-theme="dark"] #page-resumen th { color:var(--dk-ink); background:var(--dk-surface2); }
+:root[data-theme="dark"] #page-resumen td { color:var(--dk-ink); border-top-color:var(--dk-border); }
+:root[data-theme="dark"] #page-resumen tbody tr:hover { background:var(--dk-surface2); }
+:root[data-theme="dark"] #page-resumen .btn-green { background:var(--dk-brand); color:#16210F; }
+:root[data-theme="dark"] #page-resumen #rsAvisoSemana > div { background:var(--dk-warn-bg) !important; border-color:var(--dk-border) !important; color:var(--dk-ink) !important; }
+:root[data-theme="dark"] #page-resumen #rsAvisoSemana .go { color:var(--dk-gold) !important; }
+:root[data-theme="dark"] #buildBadge { background:var(--dk-surface2); border-color:var(--dk-border); color:var(--dk-ink2); }
 </style>
 </head>
 <body>
@@ -680,6 +758,11 @@ body.snav-min .user-chip span { display:none; }
   </nav>
   <div class="side-foot">
     <div class="week-badge" onclick="openWeekModal()">📅 <span id="weekLabel">Cargando…</span></div>
+    <button class="side-theme" onclick="toggleTema()" title="Cambiar entre tema claro y oscuro">
+      <svg class="ic-luna" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 12.8A8.5 8.5 0 1111.2 3a6.6 6.6 0 009.8 9.8z"/></svg>
+      <svg class="ic-sol" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
+      <span id="temaLabel">Tema oscuro</span>
+    </button>
     <button class="user-chip" id="userChip" onclick="toggleUserMenu()" style="display:none">
       <div class="user-avatar" id="userAvatar">?</div>
       <span id="userChipName">Usuario</span>
@@ -1781,7 +1864,7 @@ body.snav-min .user-chip span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-28-d";
+const APP_BUILD = "2026-07-28-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2545,6 +2628,25 @@ function showPage(name,btn){
   try{ _actPestanaActual = _actLabelPestana(name); if(_actActivo) _actUltInteraccion = Date.now(); }catch(_){}
   document.body.classList.remove("snav-open"); // en móvil, cierra el menú al navegar
 }
+
+// ── Tema claro / oscuro ─────────────────────────────────────────────
+// Alcance: barra lateral + Resumen (ver el CSS). Arranca en CLARO incluso si el sistema
+// está en oscuro: es una app compartida y el equipo captura dinero en pantallas muy
+// distintas — que cambie sola sorprende. Se activa a mano y se recuerda por dispositivo.
+const TEMA_KEY = "cicsa_tema";
+function aplicarTema(t){
+  const oscuro = t === "dark";
+  document.documentElement.setAttribute("data-theme", oscuro ? "dark" : "light");
+  const l = document.getElementById("temaLabel");
+  if(l) l.textContent = oscuro ? "Tema claro" : "Tema oscuro";
+}
+function toggleTema(){
+  const oscuro = document.documentElement.getAttribute("data-theme") === "dark";
+  const nuevo = oscuro ? "light" : "dark";
+  try{ localStorage.setItem(TEMA_KEY, nuevo); }catch(_){}
+  aplicarTema(nuevo);
+}
+try{ aplicarTema(localStorage.getItem(TEMA_KEY) === "dark" ? "dark" : "light"); }catch(_){ aplicarTema("light"); }
 
 // ── Sidebar: contraer en escritorio / abrir-cerrar en móvil ──────────
 function toggleSidebar(){ document.body.classList.toggle("snav-open"); }
