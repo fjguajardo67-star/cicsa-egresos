@@ -46,7 +46,7 @@ const FUNCS = [
   "allGastosAllWeeks", "todosLosCortes", "todosLosRetiros",
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
-  "fmt", "duplicadosSospechosos", "migrarCategorias", "consolidarFacturaDividida",
+  "fmt", "duplicadosSospechosos", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -240,6 +240,47 @@ t("marca aliases de otro producto (Queso americano bajo Queso crema), respeta le
   assert.ok(!q.sospechosos.includes("Queso crema BC 1.36kg"), "no debe marcar alias legítimo con palabras compartidas");
   assert.ok(!r.find(x => x.id === "2"), "queso panela sin sospechosos");
   assert.ok(!r.find(x => x.id === "3"), "sinónimo sin palabra en común (Alitas/Alas) no se marca");
+});
+
+console.log("\n== sincronización a CICSA Menú (reemplaza, no acumula) ==");
+const filaSync = (nombre, precio, fecha, incluir = true, ok = true) => ({
+  producto: { fecha_precio: fecha }, nombreSync: nombre, incluir,
+  calc: { ok, precio, unidadBase: "kg" },
+});
+t("los productos que ya no están validados desaparecen del documento", () => {
+  // Caso real: el documento traía 37 entradas viejas (01/06) de productos ya borrados.
+  const previos = {
+    "Papa lisa europea": { precio: 119.90, unidad_base: "pz", fecha: "01/06/2026" },
+    "Jamón super pavo loyval": { precio: 80, unidad_base: "kg", fecha: "01/06/2026" },
+    "Cebolla": { precio: 20, unidad_base: "kg", fecha: "01/06/2026" },
+  };
+  const nuevo = S.construirMapaPreciosMenu(
+    [filaSync("Papa a la francesa, papa frita", 54.69, "2026-07-28"), filaSync("Cebolla", 22.5, "2026-07-28")],
+    previos, "28/07/2026");
+  assert.deepEqual(Object.keys(nuevo).sort(), ["Cebolla", "Papa a la francesa, papa frita"]);
+  assert.ok(!("Papa lisa europea" in nuevo), "el producto borrado ya no cotiza en Menú");
+  assert.ok(!("Jamón super pavo loyval" in nuevo), "el duplicado mal escrito se va");
+  close(nuevo["Cebolla"].precio, 22.5);
+  assert.equal(nuevo["Cebolla"].fecha, "28/07/2026", "el que sí sigue validado se actualiza");
+});
+t("destildar una fila CONSERVA su precio anterior (no lo borra de Menú)", () => {
+  const previos = { "Cebolla": { precio: 20, unidad_base: "kg", fecha: "01/06/2026" } };
+  const nuevo = S.construirMapaPreciosMenu([filaSync("Cebolla", 99, "2026-07-28", false)], previos, "28/07/2026");
+  assert.deepEqual(nuevo["Cebolla"], previos["Cebolla"], "queda intacto: ni se actualiza ni se pierde");
+});
+t("fila excluida que nunca estuvo en Menú no se inventa", () => {
+  const nuevo = S.construirMapaPreciosMenu([filaSync("Nuevo", 10, "2026-07-28", false)], {}, "28/07/2026");
+  assert.deepEqual(nuevo, {});
+});
+t("productos que no se pueden costear (calc.ok=false) no entran", () => {
+  const nuevo = S.construirMapaPreciosMenu([filaSync("Sin unidad", 0, "2026-07-28", true, false)], {}, "28/07/2026");
+  assert.deepEqual(nuevo, {});
+});
+t("mismo nombre en dos filas: gana la factura más reciente", () => {
+  const nuevo = S.construirMapaPreciosMenu(
+    [filaSync("Elote", 30, "2026-07-28"), filaSync("Elote", 10, "2026-06-01")], {}, "28/07/2026");
+  assert.equal(Object.keys(nuevo).length, 1);
+  close(nuevo["Elote"].precio, 30);
 });
 
 console.log("\n== saldo de caja del periodo (fuente única: Caja, su PDF y el Resumen) ==");

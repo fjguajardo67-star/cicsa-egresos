@@ -1781,7 +1781,7 @@ body.snav-min .user-chip span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-28";
+const APP_BUILD = "2026-07-28-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4972,6 +4972,30 @@ function renderSyncMenuRows(){
   body.innerHTML = html;
 }
 
+// Arma el mapa COMPLETO de precios para Menú a partir del catálogo (una llave por producto
+// validado que se puede costear). Es el reemplazo del documento entero, así que lo que no
+// salga de aquí desaparece de Menú — que es justo el punto: un producto borrado o ignorado
+// debe dejar de costear recetas.
+//  · fila incluida  → se escribe con el precio calculado hoy.
+//  · fila excluida  → se CONSERVA su entrada anterior si existía (no se actualiza ni se borra):
+//                     destildar significa "hoy no lo toques", no "bórralo de Menú".
+// Si dos filas comparten nombre, la de factura más reciente gana (se escribe al final).
+// Pura: sin DOM ni red, para poder probarla.
+function construirMapaPreciosMenu(rows, preciosActuales, fechaHoy){
+  const nuevo = {};
+  (rows||[])
+    .filter(r => r && r.calc && r.calc.ok && String(r.nombreSync||"").trim())
+    .slice()
+    .sort((a,b)=> ((a.producto&&a.producto.fecha_precio)||"") < ((b.producto&&b.producto.fecha_precio)||"") ? -1 : 1)
+    .forEach(r=>{
+      // La llave se escribe TAL CUAL la tecleó el usuario (solo trim). Un "Title Case" rompía
+      // acentos ("Atún"→"AtúN") y Menú matchea la llave EXACTA contra el ingrediente.
+      const key = String(r.nombreSync).trim();
+      if(r.incluir) nuevo[key] = { precio: Math.round(r.calc.precio*100)/100, unidad_base: r.calc.unidadBase, fecha: fechaHoy };
+      else if(preciosActuales && Object.prototype.hasOwnProperty.call(preciosActuales, key)) nuevo[key] = preciosActuales[key];
+    });
+  return nuevo;
+}
 async function confirmarSyncMenu(){
   let seleccionados = _syncMenuRows.filter(r=>r.calc.ok && r.incluir);
   if(seleccionados.length===0){
@@ -4988,17 +5012,23 @@ async function confirmarSyncMenu(){
   try {
     const preciosActuales = await fetchMenuPrecios();
     const fechaHoy = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
-    // Si dos filas comparten nombreSync, la de factura MÁS RECIENTE debe ganar — se escribe
-    // al final para que su valor sea el que quede en el mapa (última escritura gana).
-    seleccionados = seleccionados.slice().sort((a,b)=>(a.producto.fecha_precio||"") < (b.producto.fecha_precio||"") ? -1 : 1);
-    seleccionados.forEach(r=>{
-      // La llave se escribe TAL CUAL la tecleó el usuario (solo trim). Antes se aplicaba un
-      // "Title Case" que rompía acentos ("Atún"→"AtúN", "norteño"→"NorteñO") y modificaba la
-      // palabra clave — y Menú matchea la llave EXACTA contra el ingrediente de la receta.
-      preciosActuales[r.nombreSync.trim()] = { precio: Math.round(r.calc.precio*100)/100, unidad_base: r.calc.unidadBase, fecha: fechaHoy };
-    });
+    // El documento se RECONSTRUYE desde el catálogo, no se fusiona sobre lo que ya había.
+    // Fusionar dejaba huérfanas para siempre las entradas de productos borrados o marcados
+    // como ignorados: nunca se volvían a mencionar, pero tampoco se iban, y Menú seguía
+    // costeando recetas con esos precios viejos.
+    const nuevoMapa = construirMapaPreciosMenu(_syncMenuRows, preciosActuales, fechaHoy);
+    const eliminadas = Object.keys(preciosActuales).filter(k => !(k in nuevoMapa));
+    if(eliminadas.length){
+      const muestra = eliminadas.slice(0,12).map(k=>"  • "+k).join("\n");
+      const resto = eliminadas.length>12 ? `\n  …y ${eliminadas.length-12} más` : "";
+      if(!confirm(`Se van a QUITAR ${eliminadas.length} ingrediente(s) de CICSA Menú porque ya no están validados en el catálogo:\n\n${muestra}${resto}\n\nLas recetas que los usen se quedarán sin ese precio hasta que los vuelvas a validar.\n\n¿Continuar?`)){
+        document.getElementById("syncMenuStatus").style.display="none";
+        document.getElementById("syncMenuBtnConfirmar").disabled = false;
+        return;
+      }
+    }
     // Doble escritura: cicsa-egresos (nuevo hogar, protegido) + sistema-menu-cicsa (transición)
-    await escribirPreciosDual(preciosActuales);
+    await escribirPreciosDual(nuevoMapa);
     document.getElementById("syncMenuStatus").className="menu-sync-status ok";
     document.getElementById("syncMenuStatus").innerHTML =
       `✅ ${seleccionados.length} precio(s) sincronizados a CICSA Menú. Los costos de receta se recalculan solos la próxima vez que se abra Menú.`;
