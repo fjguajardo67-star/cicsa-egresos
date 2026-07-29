@@ -1781,7 +1781,7 @@ body.snav-min .user-chip span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-28-c";
+const APP_BUILD = "2026-07-28-d";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2983,12 +2983,18 @@ function guardarGasto(){
     } else {
       const _msg=`⚠ DUPLICADO DETECTADO\n\n${_dup.reason}\n\nGasto existente:\n${_dup.gasto.proveedor} · ${fmt(_dup.gasto.importe)} · ${fmtDate(_dup.gasto.fecha)}\n\n¿Guardar de todas formas?`;
       if(!confirm(_msg)){ setStatus("statusGuardar",`🚫 No guardado — ${_dup.reason}`,"err"); return; }
-      _saltarExtraccion=true;   // es duplicado a propósito: sus productos ya están en el catálogo
+      _saltarExtraccion=true;   // duplicado a propósito: no vale una 2ª lectura de IA solo por el desglose
     }
   }
   getActiveWeek().gastos.push(gasto);
   save();
-  if(!_saltarExtraccion) extraerProductosEnSegundoPlano(gasto.id, capturedB64, capturedFile?.type||"image/jpeg");
+  // El desglose NO se salta si los productos ya vinieron en la MISMA lectura (_productosPreleidos):
+  // usarlos no cuesta otra llamada a la IA y evita que el catálogo se quede sin los renglones.
+  // Saltarlos daba por hecho que "sus productos ya están en el catálogo", y no siempre era cierto:
+  // el gasto original pudo capturarse a mano (p. ej. desde la conciliación SAT, que solo trae
+  // folio/monto/fecha) o con la extracción fallida — y entonces nadie alimentaba el catálogo.
+  const _hayPreleidos = Array.isArray(_productosPreleidos) && _productosPreleidos.length > 0;
+  if(!_saltarExtraccion || _hayPreleidos) extraerProductosEnSegundoPlano(gasto.id, capturedB64, capturedFile?.type||"image/jpeg");
   subirRespaldoAStorage(gasto.id, capturedB64, capturedFile?.type||"image/jpeg", gasto.factura);
   const conRespaldo=gasto.respaldo?" 📎 con respaldo":"";
   setStatus("statusGuardar",`✅ Gasto guardado — ${gasto.proveedor} ${fmt(gasto.importe)}${conRespaldo}. Puedes capturar otro.`,"ok");
