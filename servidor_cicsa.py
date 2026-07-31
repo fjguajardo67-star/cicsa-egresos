@@ -159,7 +159,13 @@ def call_claude(client, b64, mime, prompt, max_tokens=2000):
                     if depth == 0:
                         candidate = raw[start:i+1]
                         return json.loads(candidate)
-        # Si no se pudo extraer, relanzar para que el endpoint responda 422
+        # Si no se pudo extraer Y la respuesta se CORTÓ por max_tokens, decirlo claro: el JSON
+        # truncado no es reparable, y "no pude leer" esconde que la factura simplemente es muy
+        # larga (2+ hojas con muchos renglones).
+        if getattr(resp, "stop_reason", "") == "max_tokens":
+            raise ValueError("La factura es muy larga y la lectura se cortó a la mitad. "
+                             "Sube las hojas por separado o captura manualmente.")
+        # Si no, relanzar para que el endpoint responda 422
         raise
 
 # ── Serve HTML files ───────────────────────────────────────────────────────────
@@ -268,7 +274,7 @@ REGLAS:
 - Si no muestra precio unitario, calcula precio_unitario = importe / cantidad.
 - Incluye TODOS los productos del documento sin omitir ninguno (facturas grandes pueden traer
   20-30+). Si es un ticket simple sin detalle de productos, devuelve "productos": [].''',
-            max_tokens=5000)
+            max_tokens=8000)   # facturas de 2+ hojas: 30-40 renglones no caben en 5000
         return jsonify(data)
     except (json.JSONDecodeError, KeyError):
         return jsonify({"error":"No pude leer el documento. Captura manualmente."}), 422
