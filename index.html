@@ -1872,7 +1872,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-28-f";
+const APP_BUILD = "2026-07-30";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2956,7 +2956,14 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
         match.precio_actual = p.precio;
         match.fecha_precio = fecha;
         if(facturaId) match.factura_origen = facturaId;
-        if(!match.proveedor_nombre && proveedorNombre) match.proveedor_nombre = proveedorNombre;
+        // El proveedor debe corresponder AL PRECIO que se guarda: precio_actual, fecha_precio,
+        // factura_origen y proveedor salen todos de la MISMA factura. Antes el nombre solo se
+        // llenaba si estaba vacío, así que un producto visto primero con otro proveedor
+        // conservaba ese nombre aunque el precio viniera de la factura nueva: el registro
+        // quedaba mezclado (nombre de un proveedor, precio de otro) y al filtrar el catálogo
+        // por el proveedor de la factura el producto no aparecía, aunque sí se había
+        // actualizado. Los nombres anteriores no se pierden: siguen en alias_factura.
+        if(proveedorNombre) match.proveedor_nombre = proveedorNombre;
         const yaEsAlias = (match.alias_factura||[]).some(a=>normalizarParaComparar(a)===normalizarParaComparar(nombre));
         if(!yaEsAlias) match.alias_factura = [...(match.alias_factura||[]), nombre];
         const { id, ...datos } = match;
