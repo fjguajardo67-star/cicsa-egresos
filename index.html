@@ -1872,7 +1872,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-30-b";
+const APP_BUILD = "2026-07-30-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2935,6 +2935,7 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
   if(!productos || !productos.length) return { nuevos:0, actualizados:0 };
   let nuevos = 0, actualizados = 0;
   const ignorados = [];   // hacen match pero estan en la papelera: se actualizan y siguen ocultos
+  const detalle = [];     // a dónde fue cada renglón: nuevo, actualizó «X», o absorbido por alias
   try {
     await cargarCatalogo();
     if(proveedorNombre) await asegurarProveedor(proveedorNombre);
@@ -2948,10 +2949,14 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
       // aparecía como producto propio. Los parecidos NO se fusionan solos: se crean como
       // producto nuevo y la vista de Catálogo los marca "⚠ ¿es lo mismo?" para que TÚ decidas
       // fusionarlos a mano si de verdad lo son.
-      let match = _catalogoProductos.find(c =>
-        normalizarParaComparar(c.nombre_normalizado||c.nombre_comercial)===normalizarParaComparar(nombre) ||
-        (c.alias_factura||[]).some(a=>normalizarParaComparar(a)===normalizarParaComparar(nombre))
-      );
+      // Se registra CÓMO hizo match cada renglón (nombre exacto o alias): es la única forma
+      // de ver desde fuera cuando un alias absorbe un ingrediente ("Zanahoria" cayendo dentro
+      // de la mezcla congelada) en lugar de crear su producto.
+      let match = null, viaAlias = false;
+      for(const c of _catalogoProductos){
+        if(normalizarParaComparar(c.nombre_normalizado||c.nombre_comercial)===normalizarParaComparar(nombre)){ match=c; viaAlias=false; break; }
+        if((c.alias_factura||[]).some(a=>normalizarParaComparar(a)===normalizarParaComparar(nombre))){ match=c; viaAlias=true; break; }
+      }
       if(match){
         match.precio_actual = p.precio;
         match.fecha_precio = fecha;
@@ -2971,6 +2976,7 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
         // El borrado suave es a proposito (no se recrea solo), pero hay que DECIRLO: si no,
         // la factura parece no haber clasificado nada.
         if(match.estado === "ignorado") ignorados.push(match.nombre_comercial || nombre);
+        detalle.push({ nombre, destino: match.nombre_comercial||nombre, viaAlias });
         actualizados++;
       } else {
         // Producto nuevo sin match: NUNCA asumimos unidad_base ni contenido — se queda
@@ -3002,11 +3008,11 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
           notas: ""
         };
         const id = await fbCreateDoc(CATALOGO_COL, nuevo);
-        if(id){ _catalogoProductos.push({ id, ...nuevo }); nuevos++; }
+        if(id){ _catalogoProductos.push({ id, ...nuevo }); nuevos++; detalle.push({ nombre, destino:null, viaAlias:false }); }
       }
     }
   } catch(e){ console.warn("sincronizarConCatalogo error:", e); throw e; }
-  return { nuevos, actualizados, ignorados };
+  return { nuevos, actualizados, ignorados, detalle };
 }
 
 function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
@@ -3049,7 +3055,19 @@ function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
         const avisoIgn = ign.length
           ? `<br><span style="color:#B8860B">🚫 ${ign.length} de estos productos están en la papelera, por eso NO se ven en la lista: ${esc(ign.slice(0,4).join(", "))}${ign.length>4?"…":""}. Restáuralos desde el filtro “🚫 Ignorado”.</span>`
           : "";
-        setStatus("statusLectura", `✅ Catálogo actualizado — ${n} producto(s) nuevo(s), ${a} actualizado(s) (revisa la pestaña Productos).${avisoIgn}`, "ok");
+        const det = r?.detalle||[];
+        const absorbidos = det.filter(d=>d.viaAlias && d.destino && normalizarParaComparar(d.nombre)!==normalizarParaComparar(d.destino));
+        const avisoAlias = absorbidos.length
+          ? `<br><span style="color:#B8860B">⚠ ${absorbidos.length} renglón(es) se guardaron DENTRO de otro producto por un alias: ${absorbidos.slice(0,3).map(d=>`«${esc(d.nombre)}» → «${esc(d.destino)}»`).join(" · ")}${absorbidos.length>3?"…":""}. Si deben ser productos propios, sepáralos en 🧹 Revisar alias.</span>`
+          : "";
+        const detalleHtml = det.length
+          ? `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px;color:var(--txt2)">Ver a dónde fue cada uno de los ${det.length} renglones</summary><div style="font-size:12px;margin-top:4px;line-height:1.6">${det.map(d=>{
+              if(!d.destino) return `➕ ${esc(d.nombre)} — nuevo (pendiente de clasificar)`;
+              if(normalizarParaComparar(d.nombre)===normalizarParaComparar(d.destino)) return `✔ ${esc(d.nombre)} — precio actualizado`;
+              return `⚠ ${esc(d.nombre)} → guardado dentro de «${esc(d.destino)}»${d.viaAlias?" (alias)":""}`;
+            }).join("<br>")}</div></details>`
+          : "";
+        setStatus("statusLectura", `✅ Catálogo actualizado — ${n} producto(s) nuevo(s), ${a} actualizado(s) (revisa la pestaña Productos).${avisoIgn}${avisoAlias}${detalleHtml}`, "ok");
       }catch(e){
         console.warn("sincronizarConCatalogo error:", e);
         marcarError("no se pudo escribir al catálogo (" + (e.message||"error") + ")");
