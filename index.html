@@ -1872,7 +1872,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-30";
+const APP_BUILD = "2026-07-30-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4624,11 +4624,19 @@ function aliasSospechosos(){
       if(!a) return false;
       const na = normalizarParaComparar(a);
       if(na === nombreNorm) return false;                    // el propio nombre
-      if(posibleMismoIngrediente(nombre, a)) return false;   // suficientemente parecido → ok
-      // Solo sospechoso si comparte ≥1 palabra con el nombre: misma familia, palabra clave
+      // Alias de UNA sola palabra que aparece dentro de un nombre compuesto ("Zanahoria"
+      // bajo "Mezcla zanahoria y chícharo congelada", "Papa" bajo "Puré de papa instantáneo").
+      // Es el caso MÁS dañino: el match exacto lo encuentra y absorbe para siempre cada
+      // captura del ingrediente genérico — el producto propio nunca nace y el precio del
+      // genérico pisa al del producto específico. "Parecerse" aquí no lo salva: parecerse es
+      // exactamente el problema.
+      const pa = na.split(/\s+/).filter(Boolean);
+      if(pa.length === 1 && palabrasNombre.size > 1 && palabrasNombre.has(pa[0])) return true;
+      if(posibleMismoIngrediente(nombre, a)) return false;   // parecido y NO subconjunto → ok
+      // Sospechoso si comparte ≥1 palabra con el nombre: misma familia, palabra clave
       // distinta (ej. "Queso americano" bajo "Queso crema"). Un sinónimo sin palabras en común
       // (ej. "Alitas" bajo "Alas Naturales") NO se marca — casi seguro es un alias legítimo.
-      return na.split(/\s+/).filter(Boolean).some(w=>palabrasNombre.has(w));
+      return pa.some(w=>palabrasNombre.has(w));
     });
     if(sosp.length) out.push({ id:p.id, nombre, sospechosos:sosp });
   });
@@ -4667,6 +4675,21 @@ async function quitarAliasProducto(id, alias){
     const { id:_id, ...datos } = p;
     await fbUpdateDoc(CATALOGO_COL, id, datos);
   }catch(e){ alert("No se pudo guardar: "+(e.message||e)); return; }
+  // Si el alias era un ingrediente absorbido (no una simple variante de escritura), lo natural
+  // es que exista como producto PROPIO: se ofrece crearlo pendiente ahí mismo, para que la
+  // siguiente lectura de factura le ponga precio en lugar de volver a perderse.
+  const yaExiste = _catalogoProductos.some(c =>
+    normalizarParaComparar(c.nombre_normalizado||c.nombre_comercial)===normalizarParaComparar(alias) ||
+    (c.alias_factura||[]).some(x=>normalizarParaComparar(x)===normalizarParaComparar(alias)));
+  if(!yaExiste && confirm(`Alias quitado de "${p.nombre_comercial}".\n\n¿Crear "${alias}" como producto PROPIO del catálogo (pendiente)?\n\nAsí la próxima factura que lo traiga le pondrá su precio, en vez de perderse otra vez.`)){
+    const nuevo = { proveedor_id:null, proveedor_nombre:"", nombre_comercial:alias, alias_factura:[alias],
+      nombre_normalizado:alias, marca:"", familia:"", categoria:"", presentacion:"", unidad_factura:"",
+      contenido_cantidad:null, contenido_unidad:null, piezas_por_presentacion:null, peso_pieza_valor:null,
+      peso_pieza_unidad:null, unidad_base:null, porcion_valor:null, porcion_unidad:null, merma_pct:null,
+      estado:"pendiente", precio_actual:null, fecha_precio:"", factura_origen:"", notas:"" };
+    const nid = await fbCreateDoc(CATALOGO_COL, nuevo);
+    if(nid) _catalogoProductos.push({ id:nid, ...nuevo });
+  }
   renderRevisionAlias();
   renderCatalogoProductos();
 }

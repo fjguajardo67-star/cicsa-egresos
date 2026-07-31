@@ -242,6 +242,23 @@ t("marca aliases de otro producto (Queso americano bajo Queso crema), respeta le
   assert.ok(!r.find(x => x.id === "3"), "sinónimo sin palabra en común (Alitas/Alas) no se marca");
 });
 
+t("alias GENÉRICO absorbido (caso real Zanahoria/Papa) sí se marca", () => {
+  S._catalogoProductos = [
+    { id: "10", nombre_comercial: "Mezcla zanahoria y chícharo congelada",
+      alias_factura: ["Mezcla zanahoria y chícharo congelada", "Mezcla California congelada", "Zanahoria y chicharo congelado", "Zanahoria"] },
+    { id: "11", nombre_comercial: "Puré de papa instantáneo 2.5kg",
+      alias_factura: ["Puré de papa instantáneo 2.5kg", "Papa", "Papaya"] },
+    { id: "12", nombre_comercial: "Queso panela 3kg", alias_factura: ["Queso panela 3kg", "Queso 3kg"] },
+  ];
+  const r = S.aliasSospechosos();
+  const m = r.find(x => x.id === "10");
+  assert.ok(m && m.sospechosos.includes("Zanahoria"), "'Zanahoria' bajo la mezcla congelada debe marcarse");
+  assert.ok(!m.sospechosos.includes("Zanahoria y chicharo congelado"), "la variante multi-palabra es legítima");
+  const q = r.find(x => x.id === "11");
+  assert.ok(q && q.sospechosos.includes("Papa"), "'Papa' bajo el puré debe marcarse");
+  assert.ok(!r.find(x => x.id === "12"), "'Queso 3kg' bajo 'Queso panela 3kg' NO se marca (regresión)");
+});
+
 console.log("\n== sincronización a CICSA Menú (reemplaza, no acumula) ==");
 const filaSync = (nombre, precio, fecha, incluir = true, ok = true) => ({
   producto: { fecha_precio: fecha }, nombreSync: nombre, incluir,
