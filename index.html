@@ -1886,7 +1886,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-06-b";
+const APP_BUILD = "2026-08-06-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2646,7 +2646,7 @@ function showPage(name,btn){
   if(name==="reportes")    initReporteDates();
   if(name==="catalogo")    renderCatalogo();
   if(name==="catalogo-productos") renderCatalogoProductos();
-  if(name==="sat")       { initSatDates(); initSatDropzones(); const _r=document.getElementById("satRfcPropio"); if(_r) _r.value=rfcPropio(); }
+  if(name==="sat")       { initSatDates(); initSatDropzones(); const _r=document.getElementById("satRfcPropio"); if(_r) _r.value=rfcPropio(); reconciliarSiHay(); }
   try{ _actPestanaActual = _actLabelPestana(name); if(_actActivo) _actUltInteraccion = Date.now(); }catch(_){}
   document.body.classList.remove("snav-open"); // en móvil, cierra el menú al navegar
 }
@@ -3113,7 +3113,8 @@ function guardarGasto(){
     vencimiento:document.getElementById("fFormaPago")?.value==="credito"?(document.getElementById("fVencimiento")?.value||""):"",
     estadoPago:document.getElementById("fFormaPago")?.value==="credito"?"pendiente":"pagado",
     comprobantePago:null,fechaPago:null,referenciaPago:null,
-    _gmailMsgId:capturedFile?._gmailMsgId||null, _gmailFile:capturedFile?.name||null
+    _gmailMsgId:capturedFile?._gmailMsgId||null, _gmailFile:capturedFile?.name||null,
+    cfdiUuid:_cfdiUuidDeEsteFormulario()
   };
   if(!gasto.proveedor||!(gasto.importe>0)){ setStatus("statusGuardar","⚠ Proveedor e importe (mayor que cero) son obligatorios.","err"); return; }
   let _saltarExtraccion=false;   // no gastar una 2ª lectura de IA si es duplicado ya en catálogo
@@ -3136,6 +3137,7 @@ function guardarGasto(){
     }
   }
   getActiveWeek().gastos.push(gasto);
+  _cfdiOrigen = null;            // ya se usó: que no se pegue a la siguiente captura
   save();
   // El desglose NO se salta si los productos ya vinieron en la MISMA lectura (_productosPreleidos):
   // usarlos no cuesta otra llamada a la IA y evita que el catálogo se quede sin los renglones.
@@ -4368,7 +4370,10 @@ async function guardarCfdisEnStore(cfdis){
   for(const c of cfdis){
     const uuid=(c.uuid||c.folio||"").trim(); if(!uuid) continue;
     const docId = uuid.replace(/[^A-Za-z0-9_-]/g,"_");
+    // Si ya se descartó a mano, volver a subir el XML NO debe resucitarlo.
+    const prev = _cfdisStore.find(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase());
     const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), mes:cfdiMes(c.fecha), subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
+    if(prev && prev.ignorado){ data.ignorado=true; data.ignoradoPor=prev.ignoradoPor||""; data.ignoradoTs=prev.ignoradoTs||""; }
     tareas.push({ docId, data });
     if(yaHay.has(uuid.toUpperCase())){ existentes++; const i=_cfdisStore.findIndex(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase()); if(i>=0)_cfdisStore[i]={id:docId,...data}; }
     else { nuevos++; _cfdisStore.push({ id:docId, ...data }); yaHay.add(uuid.toUpperCase()); }
@@ -4463,6 +4468,7 @@ async function conciliarDesdeStore(){
   const fechaIni=document.getElementById("satFechaIni").value, fechaFin=document.getElementById("satFechaFin").value;
   const enRango=filtrarCfdisPorRango(_cfdisStore, fechaIni, fechaFin);
   if(!enRango.length){ setStatus("satStatus","⚠ No hay CFDIs guardados dentro de ese periodo. Ajusta las fechas o el mes.","err"); return; }
+  autodetectarRfcPropio(_cfdisStore);
   satCFDIs=enRango;
   const resultado=conciliarSAT(enRango,fechaIni,fechaFin); satResultado=resultado; renderConciliacion(resultado);
   document.getElementById("btnSatExport").style.display="flex";
@@ -4580,6 +4586,7 @@ function filtrarCfdisConciliables(cfdis, rfcEmpresa){
   const utiles=[], omitidos={};
   const marcar=(k)=>{ omitidos[k]=(omitidos[k]||0)+1; };
   (cfdis||[]).forEach(c=>{
+    if(c.ignorado){ marcar("DESCARTADO"); return; }   // el usuario ya dijo que no es un gasto
     // Lo que emitió la propia empresa es un INGRESO (venta), jamás un gasto por capturar.
     if(propio && (c.rfc||"").trim().toUpperCase()===propio){ marcar("PROPIO"); return; }
     const t=(c.tipo||"").toUpperCase().slice(0,1);
@@ -4609,6 +4616,60 @@ function autodetectarRfcPropio(cfdis){
   return top;
 }
 
+// Solo enlaza si lo capturado sigue siendo el mismo comprobante: mismo importe y misma fecha.
+// Sin esta comprobación, abandonar la captura y hacer otra distinta heredaba el UUID.
+function _cfdiUuidDeEsteFormulario(){
+  if(!_cfdiOrigen || !_cfdiOrigen.uuid) return null;
+  const imp = parseFloat(document.getElementById("fImporte").value)||0;
+  const fec = document.getElementById("fFecha").value;
+  if(Math.abs(imp - _cfdiOrigen.importe) > 0.01) return null;
+  if(fec && _cfdiOrigen.fecha && fec !== _cfdiOrigen.fecha) return null;
+  return _cfdiOrigen.uuid;
+}
+
+// Descarta CFDIs que no corresponden a un gasto (facturas propias, complementos, etc.). Es un
+// borrado SUAVE: se marca el documento, no se destruye. Así el descarte sobrevive a volver a
+// subir los mismos XML — que es justo lo que hacía que reaparecieran.
+async function descartarCfdi(uuid, rfcEmisor, proveedor){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede descartar CFDIs de la conciliación."); return; }
+  const clave=String(uuid||"").toUpperCase(); if(!clave) return;
+  await cargarCfdisStore();
+  const mismoEmisor=((satResultado&&satResultado.faltantes)||[]).filter(c=>
+    (c.rfc||"").toUpperCase()===String(rfcEmisor||"").toUpperCase() &&
+    String(c.uuid||c.folio).toUpperCase()!==clave);
+  let objetivos=[clave];
+  if(mismoEmisor.length){
+    // Descartar de uno en uno es inviable cuando el mismo emisor trae 15 renglones.
+    const r=confirm(`${proveedor}\n\nHay ${mismoEmisor.length} CFDI más de este mismo emisor pendientes en el periodo.\n\nAceptar = descartar los ${mismoEmisor.length+1}\nCancelar = descartar solo este`);
+    if(r) objetivos=objetivos.concat(mismoEmisor.map(c=>String(c.uuid||c.folio).toUpperCase()));
+  } else if(!confirm(`¿Descartar este CFDI de ${proveedor}?\n\nDeja de aparecer como pendiente y no vuelve aunque se suban otra vez los XML.\nNo afecta tus gastos capturados.`)) return;
+  setStatus("satStatus",`Descartando ${objetivos.length} CFDI…`,"loading");
+  const marca={ ignorado:true, ignoradoPor:(currentNombre||currentUser?.email||""), ignoradoTs:new Date().toISOString() };
+  const enStore=(_cfdisStore||[]).filter(c=>objetivos.includes(String(c.uuid||c.id).toUpperCase()));
+  try{
+    for(let i=0;i<enStore.length;i+=25){
+      await Promise.all(enStore.slice(i,i+25).map(c=>fbUpdateDoc(CFDIS_COL, c.id, marca)));
+    }
+  }catch(e){ setStatus("satStatus","❌ No se pudieron guardar los descartes: "+e.message,"err"); return; }
+  enStore.forEach(c=>Object.assign(c, marca));
+  // Los que vinieron del Excel no viven en la nube: al menos se ocultan en esta pantalla.
+  (satCFDIs||[]).forEach(c=>{ if(objetivos.includes(String(c.uuid||c.folio).toUpperCase())) Object.assign(c, marca); });
+  reconciliarSiHay();
+  try{ renderCfdisStore(); }catch(_){}
+  const soloPantalla=objetivos.length-enStore.length;
+  setStatus("satStatus",`✅ ${objetivos.length} CFDI descartados.${soloPantalla>0?` (${soloPantalla} venían del Excel y solo se ocultan en esta pantalla)`:""}`,"ok");
+}
+
+// Al volver de capturar, la conciliación en pantalla quedaba vieja y lo recién capturado seguía
+// saliendo como pendiente. Se recalcula con los gastos actuales.
+function reconciliarSiHay(){
+  if(!satResultado || !(satCFDIs||[]).length) return;
+  try{
+    const r=conciliarSAT(satCFDIs, document.getElementById("satFechaIni").value, document.getElementById("satFechaFin").value);
+    satResultado=r; renderConciliacion(r); guardarSatEstado();
+  }catch(_){}
+}
+
 function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
   const gastosCICSA=allGastosAllWeeks().filter(g=>{ if(fechaIni&&g.fecha<fechaIni) return false; if(fechaFin&&g.fecha>fechaFin) return false; return true; });
   const rfcEmp = rfcEmpresa!==undefined ? rfcEmpresa : (typeof rfcPropio==="function" ? rfcPropio() : "");
@@ -4616,9 +4677,13 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
   const utiles = filtro.utiles;
   const faltantes=[],diferencias=[],conciliadas=[];
   utiles.forEach(cfdi=>{
+    // El gasto capturado desde este CFDI trae su UUID: es la coincidencia más confiable y no
+    // depende de que el folio o el monto se hayan tecleado igual.
+    const _u=cfdi.uuid||cfdi.folio;
+    const matchUuid=_u?gastosCICSA.find(g=>g.cfdiUuid&&g.cfdiUuid===_u):null;
     const matchFolio=gastosCICSA.find(g=>g.factura&&cfdi.folio&&(g.factura.toUpperCase().includes(cfdi.folio.toUpperCase().slice(0,8))||cfdi.folio.toUpperCase().includes((g.factura||"").toUpperCase().slice(0,8))));
     const matchMonto=gastosCICSA.find(g=>Math.abs(new Date(g.fecha)-new Date(cfdi.fecha))<=3*86400000&&Math.abs(g.importe-cfdi.total)<1);
-    const match=matchFolio||matchMonto;
+    const match=matchUuid||matchFolio||matchMonto;
     if(!match) faltantes.push(cfdi);
     else if(Math.abs(match.importe-cfdi.total)>1) diferencias.push({cfdi,gastoCICSA:match,diferencia:cfdi.total-match.importe});
     else conciliadas.push(cfdi);
@@ -4629,16 +4694,24 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
 // Deja ver POR QUÉ el número bajó: si la cuenta se reduce en silencio, nadie confía en ella.
 function pintarCfdisOmitidos(om){
   const el=document.getElementById("satOmitidos"); if(!el) return;
+  // Los CFDIs guardados antes de esta versión no traen Receptor, así que el RFC no se puede
+  // deducir solo: hay que decirlo, o las facturas propias siguen saliendo como pendientes.
+  const faltaRfc = (typeof rfcPropio==="function") && !rfcPropio();
+  const avisoRfc = faltaRfc
+    ? `<div style="margin-top:6px;color:var(--do)">⚠️ No has puesto el <strong>RFC de tu empresa</strong> (arriba): sin él no se pueden excluir las facturas que tú emites.</div>`
+    : "";
   const etiquetas=[["PROPIO","factura que emitió tu empresa (es un ingreso)","facturas que emitió tu empresa (son ingresos)"],
+                   ["DESCARTADO","CFDI que descartaste a mano","CFDI que descartaste a mano"],
                    ["P","complemento de pago","complementos de pago"],
                    ["E","nota de crédito","notas de crédito"],
                    ["N","recibo de nómina","recibos de nómina"],
                    ["T","traslado","traslados"]];
   const partes=[]; let total=0;
   etiquetas.forEach(([k,uno,varios])=>{ const n=(om||{})[k]||0; if(n){ total+=n; partes.push(`<strong>${n}</strong> ${n===1?uno:varios}`); } });
-  if(!total){ el.style.display="none"; el.innerHTML=""; return; }
+  if(!total && !avisoRfc){ el.style.display="none"; el.innerHTML=""; return; }
+  if(!total){ el.style.display="block"; el.innerHTML=avisoRfc.replace(/margin-top:6px/,"margin-top:0"); return; }
   el.style.display="block";
-  el.innerHTML=`ℹ️ Se omiti${total===1?"ó":"eron"} <strong>${total}</strong> CFDI que no ${total===1?"es un gasto":"son gastos"} por capturar: ${partes.join(" · ")}.`;
+  el.innerHTML=`ℹ️ Se omiti${total===1?"ó":"eron"} <strong>${total}</strong> CFDI que no ${total===1?"es un gasto":"son gastos"} por capturar: ${partes.join(" · ")}.${avisoRfc}`;
 }
 function renderConciliacion(r){
   const sumEl=document.getElementById("satSummary"); sumEl.style.display="grid";
@@ -4655,7 +4728,8 @@ function renderConciliacion(r){
     <td style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--txt2)">${c.folio?.slice(0,18)||"—"}…</td>
     <td><strong>${c.proveedor||"—"}</strong></td><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${c.rfc||"—"}</td>
     <td>${fmtDate(c.fecha)||"—"}</td><td class="amount-cell" style="color:var(--red)">${fmt(c.total)}</td>
-    <td><button class="btn btn-light" style="padding:4px 10px;font-size:11px" onclick="preLlenarCaptura('${(c.proveedor||'').replace(/'/g,"\\'")}','${c.fecha||''}','${c.folio||''}',${c.total||0})">➕ Capturar</button></td></tr>`).join("");
+    <td style="white-space:nowrap"><button class="btn btn-light" style="padding:4px 10px;font-size:11px" onclick="preLlenarCaptura('${(c.proveedor||'').replace(/'/g,"\\'")}','${c.fecha||''}','${c.folio||''}',${c.total||0},'${(c.uuid||c.folio||'').replace(/'/g,"\\'")}')">➕ Capturar</button>
+    <button class="btn btn-light" style="padding:4px 8px;font-size:11px;margin-left:4px;color:var(--red)" title="No es un gasto: quítalo de la conciliación para siempre" onclick="descartarCfdi('${(c.uuid||c.folio||'').replace(/'/g,"\\'")}','${(c.rfc||'').replace(/'/g,"\\'")}','${(c.proveedor||'').replace(/'/g,"\\'")}')">🚫 No es gasto</button></td></tr>`).join("");
   document.getElementById("satDiferenciasCard").style.display=r.diferencias.length>0?"block":"none";
   document.getElementById("satDifCount").textContent=r.diferencias.length;
   document.getElementById("satDiferenciasBody").innerHTML=r.diferencias.map(d=>`<tr style="background:#FFFBEB">
@@ -4670,7 +4744,12 @@ function renderConciliacion(r){
   setStatus("satStatus",`✅ Conciliación completada — ${r.conciliadas.length} ok · ${r.faltantes.length} faltantes · ${r.diferencias.length} diferencias`,"ok");
 }
 
-function preLlenarCaptura(proveedor,fecha,folio,importe){
+// Recuerda de qué CFDI vino esta captura para poder marcarlo conciliado después. Se valida
+// contra el formulario al guardar, para que no se pegue a una captura distinta si el usuario
+// abandona esta y hace otra.
+let _cfdiOrigen = null;
+function preLlenarCaptura(proveedor,fecha,folio,importe,uuid){
+  _cfdiOrigen = { uuid: uuid||folio||"", fecha: fecha||"", importe: parseFloat(importe)||0 };
   showPage("captura");   // sin btn: showPage marca sola la pestana correcta (con el sidebar, el primer .nav-btn ya no es Capturar sino Resumen)
   document.getElementById("fProv").value=proveedor; document.getElementById("fFecha").value=fecha;
   document.getElementById("fFactura").value=folio; document.getElementById("fImporte").value=importe;

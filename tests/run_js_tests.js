@@ -756,5 +756,34 @@ t("sin mayoría clara no adivina el RFC: lo deja en blanco", () => {
                                         { rfc: "E", rfcReceptor: "F" }, { rfc: "G", rfcReceptor: "H" }]), "");
 });
 
+t("un CFDI descartado a mano deja de pedirse (y se cuenta aparte)", () => {
+  const r = S.filtrarCfdisConciliables([
+    { folio: "a", rfc: "PROV1", total: 100, tipo: "I" },
+    { folio: "b", rfc: "PROV1", total: 200, tipo: "I", ignorado: true },
+  ], RFC_CICSA);
+  assert.deepEqual(r.utiles.map(c => c.folio), ["a"]);
+  assert.equal(r.omitidos.DESCARTADO, 1);
+});
+t("el gasto capturado desde un CFDI queda conciliado por UUID, aunque cambien folio y monto", () => {
+  const UUID = "PB-315-UUID";
+  S.state = { activeWeek: "w1", weeks: [{ id: "w1", cortes: [], retiros: [], gastos: [
+    // El usuario tecleó el folio del proveedor y ajustó el importe: el UUID lo salva.
+    { id: "g1", fecha: "2026-07-07", proveedor: "POLLO BAL", factura: "31598", importe: 26000, cfdiUuid: UUID },
+  ] }] };
+  const r = S.conciliarSAT([{ folio: UUID, uuid: UUID, rfc: "PBA010101BBB", proveedor: "POLLO BAL",
+                              fecha: "2026-07-07", total: 26484, tipo: "I" }], "2026-07-01", "2026-07-31", RFC_CICSA);
+  assert.equal(r.faltantes.length, 0, "quedó como faltante pese al UUID");
+  assert.equal(r.diferencias.length, 1, "la diferencia de monto sí debe reportarse");
+});
+t("sin el UUID, un folio distinto y monto distinto sí sale como faltante", () => {
+  S.state = { activeWeek: "w1", weeks: [{ id: "w1", cortes: [], retiros: [], gastos: [
+    { id: "g1", fecha: "2026-07-07", proveedor: "POLLO BAL", factura: "31598", importe: 26000 },
+  ] }] };
+  const r = S.conciliarSAT([{ folio: "OTRO-UUID", uuid: "OTRO-UUID", rfc: "PBA010101BBB",
+                              proveedor: "POLLO BAL", fecha: "2026-07-07", total: 26484, tipo: "I" }],
+                            "2026-07-01", "2026-07-31", RFC_CICSA);
+  assert.equal(r.faltantes.length, 1);
+});
+
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
 process.exit(fail ? 1 : 0);
