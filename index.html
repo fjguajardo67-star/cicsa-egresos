@@ -121,6 +121,12 @@ body.snav-min .week-badge { padding:7px 4px; font-size:10px; }
 .dropzone p { color:var(--txt2); font-size:14px; }
 .dropzone strong { color:var(--vd); }
 #fileIn { display:none; }
+/* Zonas donde se sueltan los archivos del SAT — ver initSatDropzones() */
+.sat-drop { transition:border-color .15s, box-shadow .15s, transform .15s; }
+.sat-drop.dragover { border-color:var(--naranja)!important; box-shadow:0 0 0 3px rgba(245,120,20,.22); transform:translateY(-2px); }
+#page-sat.sat-drag .sat-drop { border-style:dashed; }
+.sat-drop-hint { font-size:11px; color:var(--txt2); margin-top:6px; }
+.sat-drop-nom { font-size:11px; font-weight:600; color:var(--vd); margin-top:4px; word-break:break-word; }
 #imgPreview { max-width:100%; max-height:280px; border-radius:8px;
               border:2px solid var(--vm); display:none; margin-top:12px; }
 .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
@@ -1246,31 +1252,37 @@ body.snav-min .side-theme span { display:none; }
 <div class="container page" id="page-sat">
   <div class="card">
     <div class="card-title">🏛 Conciliación SAT vs CICSA</div>
-    <p style="font-size:13px;color:var(--txt2);margin-bottom:18px">Sube los <strong>XML de CFDI</strong> del periodo (o el Excel de la Consulta SAT) y se comparan contra los gastos registrados en CICSA para detectar facturas omitidas. El XML y el Excel <strong>no gastan tokens</strong>.</p>
+    <p style="font-size:13px;color:var(--txt2);margin-bottom:18px">Sube los <strong>XML de CFDI</strong> del periodo (o el Excel de la Consulta SAT) y se comparan contra los gastos registrados en CICSA para detectar facturas omitidas. El XML y el Excel <strong>no gastan tokens</strong>. Puedes <strong>arrastrar y soltar</strong> los archivos en cualquier parte de esta pantalla: se acomodan solos según su tipo.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
       <div class="field"><label>Período — Fecha inicio</label><input type="date" id="satFechaIni"></div>
       <div class="field"><label>Período — Fecha fin</label><input type="date" id="satFechaFin"></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px">
-      <div style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
+      <div class="sat-drop" data-satzona="xml" style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
         <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:6px">⭐ Mejor opción — XML de CFDI · Sin IA</div>
         <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Sube los archivos XML de los CFDIs (puedes seleccionar varios a la vez). Se leen directo del comprobante, sin gastar tokens.</div>
         <label style="font-size:12px;font-weight:600;color:var(--vd)">XML de CFDI (.xml — varios)</label>
         <input type="file" id="satXmlFiles" accept=".xml,text/xml,application/xml" multiple style="font-size:12px;padding:6px 0;display:block;margin-top:4px">
+        <div class="sat-drop-hint">o <strong>arrastra aquí</strong> los XML (o la carpeta completa)</div>
+        <div class="sat-drop-nom" id="satXmlNombres"></div>
         <button class="btn btn-green" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSATXml()">🧾 Leer XML y Conciliar</button>
       </div>
-      <div style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
+      <div class="sat-drop" data-satzona="excel" style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
         <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:6px">Opción — Excel de la Consulta · Sin IA</div>
         <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Descarga la Consulta SAT como Excel/CSV (o convierte el PDF con Adobe Acrobat Online) y súbela aquí. No gasta tokens.</div>
         <label style="font-size:12px;font-weight:600;color:var(--vd)">Excel del SAT (.xlsx / .xls)</label>
         <input type="file" id="satExcelFile" accept=".xlsx,.xls" style="font-size:12px;padding:6px 0;display:block;margin-top:4px">
+        <div class="sat-drop-hint">o <strong>arrastra aquí</strong> el Excel</div>
+        <div class="sat-drop-nom" id="satExcelNombres"></div>
         <button class="btn btn-green" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSATExcel()">📊 Analizar Excel y Conciliar</button>
       </div>
-      <div style="background:var(--claro);border:1.5px solid var(--border);border-radius:10px;padding:14px">
+      <div class="sat-drop" data-satzona="pdf" style="background:var(--claro);border:1.5px solid var(--border);border-radius:10px;padding:14px">
         <div style="font-size:13px;font-weight:700;color:var(--txt2);margin-bottom:6px">Alternativa — PDF · Usa IA (gasta tokens)</div>
         <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Solo si no tienes XML ni Excel. La IA extrae los CFDIs del PDF en 2 llamadas (~60 seg).</div>
         <label style="font-size:12px;font-weight:600;color:var(--txt2)">PDF del SAT (Consulta CFDI)</label>
         <input type="file" id="satPdfFile" accept=".pdf" style="font-size:12px;padding:6px 0;display:block;margin-top:4px">
+        <div class="sat-drop-hint">o <strong>arrastra aquí</strong> el PDF</div>
+        <div class="sat-drop-nom" id="satPdfNombres"></div>
         <button class="btn btn-light" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSAT()">🤖 Analizar PDF con IA</button>
       </div>
     </div>
@@ -1872,7 +1884,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-07-30-c";
+const APP_BUILD = "2026-08-06-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2632,7 +2644,7 @@ function showPage(name,btn){
   if(name==="reportes")    initReporteDates();
   if(name==="catalogo")    renderCatalogo();
   if(name==="catalogo-productos") renderCatalogoProductos();
-  if(name==="sat")         initSatDates();
+  if(name==="sat")       { initSatDates(); initSatDropzones(); }
   try{ _actPestanaActual = _actLabelPestana(name); if(_actActivo) _actUltInteraccion = Date.now(); }catch(_){}
   document.body.classList.remove("snav-open"); // en móvil, cierra el menú al navegar
 }
@@ -4146,6 +4158,133 @@ function limpiarConciliacionSat(){
   const ex=document.getElementById("btnSatExport"); if(ex) ex.style.display="none";
   try{ renderResumen(); }catch(_){}
   setStatus("satStatus","✅ Conciliación limpiada. Sube o selecciona el periodo correcto y vuelve a conciliar.","ok");
+}
+
+// ── SAT: arrastrar y soltar archivos ───────────────────────────────
+// Un periodo del SAT son decenas de XML; abrir el diálogo y buscarlos es lo lento. Los archivos
+// se enrutan por EXTENSIÓN, no por la caja donde se sueltan: da igual dónde los tire el usuario.
+function _satClasificarArchivos(files){
+  const r={xml:[],excel:[],pdf:[],zip:[],otros:[]};
+  (files||[]).forEach(f=>{
+    const n=(f.name||"").toLowerCase();
+    if(n.endsWith(".xml")) r.xml.push(f);
+    else if(n.endsWith(".xlsx")||n.endsWith(".xls")||n.endsWith(".csv")) r.excel.push(f);
+    else if(n.endsWith(".pdf")) r.pdf.push(f);
+    else if(n.endsWith(".zip")) r.zip.push(f);
+    else r.otros.push(f);
+  });
+  return r;
+}
+
+// Mete los archivos soltados dentro del <input type=file> real, para que los botones de siempre
+// (procesarSATXml, etc.) funcionen sin cambiarles nada.
+function _satPonerEnInput(inputId, arch){
+  const inp=document.getElementById(inputId);
+  if(!inp||!arch||!arch.length) return false;
+  try{ const dt=new DataTransfer(); arch.forEach(f=>dt.items.add(f)); inp.files=dt.files; }
+  catch(e){ console.warn("DataTransfer no soportado:",e); return false; }
+  return true;
+}
+
+function _satMostrarNombres(divId, arch){
+  const d=document.getElementById(divId); if(!d) return;
+  const a=[...(arch||[])];
+  if(!a.length){ d.textContent=""; return; }
+  d.textContent = a.length===1 ? ("✓ "+a[0].name) : ("✓ "+a.length+" archivos: "+a.slice(0,3).map(f=>f.name).join(", ")+(a.length>3?"…":""));
+}
+
+// Una carpeta soltada llega como entry, no como File: hay que recorrerla para sacar los XML.
+async function _satLeerEntry(entry, salida, prof){
+  if(!entry || prof>4 || salida.length>3000) return;
+  if(entry.isFile){ await new Promise(res=>entry.file(f=>{ salida.push(f); res(); }, ()=>res())); return; }
+  if(entry.isDirectory){
+    const rd=entry.createReader();
+    while(true){
+      const lote=await new Promise(res=>rd.readEntries(e=>res(e||[]), ()=>res([])));
+      if(!lote.length) break;
+      for(const e of lote) await _satLeerEntry(e, salida, prof+1);
+    }
+  }
+}
+
+async function _satArchivosDelDrop(dt){
+  if(!dt) return [];
+  // webkitGetAsEntry() debe llamarse ANTES de cualquier await: el dataTransfer se invalida.
+  let entries=[];
+  try{ entries=[...(dt.items||[])].map(it=>it.webkitGetAsEntry?it.webkitGetAsEntry():null).filter(Boolean); }catch(_){}
+  const sueltos=[...(dt.files||[])];
+  if(entries.some(e=>e.isDirectory)){
+    const salida=[];
+    for(const e of entries) await _satLeerEntry(e, salida, 0);
+    if(salida.length) return salida;
+  }
+  return sueltos;
+}
+
+async function _satSoltarArchivos(dt){
+  let arch=[];
+  try{ arch=await _satArchivosDelDrop(dt); }catch(e){ arch=[...((dt&&dt.files)||[])]; }
+  if(!arch.length){ setStatus("satStatus","No se recibió ningún archivo. Inténtalo de nuevo.","err"); return; }
+  const c=_satClasificarArchivos(arch);
+  const noSirve=(msg)=>setStatus("satStatus",msg,"err");
+  if(!c.xml.length && !c.excel.length && !c.pdf.length){
+    if(c.zip.length) return noSirve("📦 El SAT entrega un ZIP: descomprímelo y arrastra los XML (o la carpeta completa).");
+    return noSirve("Formato no reconocido. Arrastra XML de CFDI, el Excel del SAT (.xlsx/.xls) o el PDF de la consulta.");
+  }
+  if(c.xml.length){
+    if(!_satPonerEnInput("satXmlFiles", c.xml)) return noSirve("Tu navegador no permite soltar archivos aquí; usa el botón de seleccionar.");
+    _satMostrarNombres("satXmlNombres", c.xml);
+    setStatus("satStatus","Recibidos "+c.xml.length+" XML — leyendo…","loading");
+    await procesarSATXml();
+    return;
+  }
+  if(c.excel.length){
+    if(!_satPonerEnInput("satExcelFile",[c.excel[0]])) return noSirve("Tu navegador no permite soltar archivos aquí; usa el botón de seleccionar.");
+    _satMostrarNombres("satExcelNombres",[c.excel[0]]);
+    setStatus("satStatus","Recibido "+c.excel[0].name+" — analizando…","loading");
+    await procesarSATExcel();
+    return;
+  }
+  // El PDF sí gasta tokens: se deja cargado pero NO se dispara solo, para que nadie queme
+  // crédito por arrastrar un archivo por equivocación.
+  if(!_satPonerEnInput("satPdfFile",[c.pdf[0]])) return noSirve("Tu navegador no permite soltar archivos aquí; usa el botón de seleccionar.");
+  _satMostrarNombres("satPdfNombres",[c.pdf[0]]);
+  setStatus("satStatus","📄 "+c.pdf[0].name+" cargado. Presiona «🤖 Analizar PDF con IA» para leerlo (gasta tokens).","ok");
+}
+
+function initSatDropzones(){
+  const page=document.getElementById("page-sat");
+  if(!page || page.dataset.dropListo) return;
+  page.dataset.dropListo="1";
+  const zonas=[...page.querySelectorAll(".sat-drop")];
+  const conArchivos=(e)=>{ try{ return [...((e.dataTransfer&&e.dataTransfer.types)||[])].includes("Files"); }catch(_){ return false; } };
+  let dentro=0;
+  const apagar=()=>{ dentro=0; page.classList.remove("sat-drag"); zonas.forEach(z=>z.classList.remove("dragover")); };
+  page.addEventListener("dragenter",e=>{ if(!conArchivos(e)) return; e.preventDefault(); dentro++; page.classList.add("sat-drag"); });
+  page.addEventListener("dragover",e=>{
+    if(!conArchivos(e)) return;
+    e.preventDefault(); try{ e.dataTransfer.dropEffect="copy"; }catch(_){}
+    const z=e.target&&e.target.closest?e.target.closest(".sat-drop"):null;
+    zonas.forEach(x=>x.classList.toggle("dragover", x===z));
+  });
+  page.addEventListener("dragleave",e=>{ if(!conArchivos(e)) return; dentro--; if(dentro<=0) apagar(); });
+  page.addEventListener("drop",async e=>{
+    if(!conArchivos(e)) return;
+    e.preventDefault(); e.stopPropagation(); apagar();
+    await _satSoltarArchivos(e.dataTransfer);
+  });
+  // Soltar fuera de la zona hace que el navegador ABRA el archivo y se pierda la pantalla.
+  // Se bloquea solo mientras SAT está visible, para no afectar al resto de la app.
+  ["dragover","drop"].forEach(ev=>document.addEventListener(ev,e=>{
+    if(!page.classList.contains("active")) return;
+    if(e.target&&e.target.closest&&e.target.closest("#page-sat")) return;
+    if(conArchivos(e)) e.preventDefault();
+  }));
+  // Si eligen por el botón de siempre, los nombres de abajo deben reflejarlo.
+  [["satXmlFiles","satXmlNombres"],["satExcelFile","satExcelNombres"],["satPdfFile","satPdfNombres"]].forEach(([inp,div])=>{
+    const el=document.getElementById(inp);
+    if(el) el.addEventListener("change",()=>_satMostrarNombres(div, el.files));
+  });
 }
 
 async function initSatDates(){
