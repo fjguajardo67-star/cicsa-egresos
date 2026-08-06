@@ -97,6 +97,18 @@ CATEGORIAS = [
 ]
 CATS_STR = ", ".join(CATEGORIAS)
 
+
+def cats_de(d):
+    """Categorias vigentes que manda el cliente. El admin puede agregarlas o renombrarlas desde
+    la app; si el prompt siguiera con la lista fija, la IA clasificaria en categorias que ya no
+    existen. Se cae a la lista de fabrica cuando el cliente no manda nada (version vieja)."""
+    cats = (d or {}).get("categorias")
+    if isinstance(cats, list):
+        limpias = [str(c).strip() for c in cats if str(c).strip()]
+        if limpias:
+            return ", ".join(limpias)
+    return CATS_STR
+
 def get_client():
     key = os.environ.get("ANTHROPIC_API_KEY","").strip()
     if not key:
@@ -212,6 +224,7 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
 def leer_gasto():
     try:
         d = request.get_json()
+        cats = cats_de(d)
         client = get_client()
         data = call_claude(client, d["image_base64"], d.get("mime_type","image/jpeg"),
             f'''Analiza este documento (factura, recibo o ticket).
@@ -222,7 +235,7 @@ Extrae los datos y devuelve ÚNICAMENTE JSON válido, sin texto adicional:
   "factura": "número de factura, folio o ticket",
   "importe": 1234.56,
   "mixto": false,
-  "categoria": "categoría de esta lista: {CATS_STR}"
+  "categoria": "categoría de esta lista: {cats}"
 }}
 Si el documento tiene productos de VARIAS categorías distintas, pon "mixto": true
 y en "categoria" pon la categoría principal (la de mayor importe).''',
@@ -244,6 +257,7 @@ y en "categoria" pon la categoría principal (la de mayor importe).''',
 def leer_gasto_full():
     try:
         d = request.get_json()
+        cats = cats_de(d)
         client = get_client()
         data = call_claude(client, d["image_base64"], d.get("mime_type","image/jpeg"),
             f'''Analiza este documento (factura, recibo o ticket de proveedor).
@@ -254,7 +268,7 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
   "factura": "número de factura, folio o ticket",
   "importe": 1234.56,
   "mixto": false,
-  "categoria": "categoría de esta lista: {CATS_STR}",
+  "categoria": "categoría de esta lista: {cats}",
   "productos": [
     {{
       "nombre": "producto específico (ej: Pollo pechuga, Res molida, Papa blanca), no la marca ni el proveedor",
@@ -287,6 +301,7 @@ REGLAS:
 def analizar_division():
     try:
         d = request.get_json()
+        cats = cats_de(d)
         client = get_client()
         data = call_claude(client, d["image_base64"], d.get("mime_type","image/jpeg"),
             f'''Analiza este documento (factura, recibo o ticket) con productos de VARIAS categorías.
@@ -299,7 +314,7 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
   "total": 1234.56,
   "partidas": [
     {{
-      "categoria": "nombre exacto de esta lista: {CATS_STR}",
+      "categoria": "nombre exacto de esta lista: {cats}",
       "descripcion": "descripción breve de los productos",
       "importe": 456.78
     }}

@@ -39,6 +39,15 @@ function extractFunction(name) {
   throw new Error("Llaves desbalanceadas en: " + name);
 }
 
+// Constantes de nivel superior que las funciones extraídas necesitan (CATS es la lista de
+// categorías de fábrica sobre la que trabaja catsActuales).
+function extractConst(name) {
+  const m = script.match(new RegExp("const\\s+" + name + "\\s*=\\s*\\[[\\s\\S]*?\\];"));
+  if (!m) throw new Error("No encontré la constante: " + name);
+  return m[0];
+}
+const CONSTS = ["CATS"];
+
 const FUNCS = [
   "normalizarParaComparar", "posibleMismoIngrediente", "esGastoEfectivo",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
@@ -53,6 +62,7 @@ const FUNCS = [
   "_cfdiTipoDesdeTexto", "filtrarCfdisConciliables", "autodetectarRfcPropio",
   "rfcPropio", "guardarRfcPropio",
   "_gmailHuella", "filterGmailDuplicates",
+  "catsActuales", "_catsEditable", "_catExiste", "renombrarCategoriaEnEstado",
 ];
 
 const sandbox = {
@@ -65,6 +75,7 @@ const sandbox = {
     setItem: (k, v) => { m[k] = String(v); }, removeItem: k => { delete m[k]; } }; })(),
 };
 vm.createContext(sandbox);
+for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
 for (const f of FUNCS) vm.runInContext(extractFunction(f), sandbox);
 const S = sandbox;
 
@@ -827,6 +838,64 @@ t("se conserva la detección por msg_id contra los gastos ya capturados", () => 
     { id: "g1", _gmailMsgId: "m-viejo", _gmailFile: "walmart.pdf", importe: 100, fecha: "2026-07-01" } ] }] };
   assert.equal(S.filterGmailDuplicates([adj("otro.pdf", "QQQQ", "m-viejo")])[0]._dupReason, "Ya capturada");
   assert.equal(S.filterGmailDuplicates([adj("walmart.pdf", "WWWW", "m-otro")])[0]._dupReason, "Archivo ya procesado");
+});
+
+console.log("\n== Categorías editables ==");
+const CATS_FAB = ["Cárnicos","Lácteos / Cremería","Frutas y Verduras","Tortilla","Abarrotes / Secos",
+  "Refrescos / Pepsi","Hielo","Gas","Artículos de limpieza","Desechables","Mantenimiento y Equipo",
+  "Transporte / Combustible","Servicios (Basura, Agua, Luz)","Nómina / Personal","Gastos Generales","Otro"];
+t("sin lista propia se usan las categorías de fábrica", () => {
+  S.state = { weeks: [], budget: {} };
+  assert.deepEqual(S.catsActuales(), CATS_FAB);
+});
+t("con lista propia manda la del admin", () => {
+  S.state = { weeks: [], budget: {}, categorias: ["Cárnicos", "Pescados y Mariscos"] };
+  assert.deepEqual(S.catsActuales(), ["Cárnicos", "Pescados y Mariscos"]);
+});
+t("no deja duplicar una categoría aunque cambie mayúsculas o acentos", () => {
+  S.state = { weeks: [], budget: {}, categorias: ["Cárnicos", "Tortilla"] };
+  assert.equal(S._catExiste("CARNICOS"), true);
+  assert.equal(S._catExiste("cárnicos"), true);
+  assert.equal(S._catExiste("Pescados"), false);
+});
+t("renombrar arrastra gastos, partidas y presupuesto (el dinero no se pierde)", () => {
+  S.state = {
+    weeks: [{ id: "w1", cortes: [], retiros: [], gastos: [
+      { id: "g1", categoria: "Hielo", importe: 500 },
+      { id: "g2", categoria: "Tortilla", importe: 100 },
+      { id: "g3", categoria: "Mixto", importe: 300, _partidas: [{ categoria: "Hielo", importe: 300 }] },
+    ] }],
+    budget: { "Hielo": 40000, "Tortilla": 60000 },
+    categorias: ["Hielo", "Tortilla"],
+  };
+  const n = S.renombrarCategoriaEnEstado("Hielo", "Hielo y Agua");
+  assert.equal(n, 2, "debe tocar el gasto y la partida");
+  assert.equal(S.state.weeks[0].gastos[0].categoria, "Hielo y Agua");
+  assert.equal(S.state.weeks[0].gastos[2]._partidas[0].categoria, "Hielo y Agua");
+  assert.equal(S.state.budget["Hielo y Agua"], 40000);
+  assert.equal(S.state.budget["Hielo"], undefined);
+  assert.deepEqual(S.state.categorias, ["Hielo y Agua", "Tortilla"]);
+});
+t("renombrar hacia una categoría existente FUSIONA sin dejarla duplicada", () => {
+  S.state = {
+    weeks: [{ id: "w1", cortes: [], retiros: [], gastos: [{ id: "g1", categoria: "Refrescos", importe: 700 }] }],
+    budget: { "Refrescos": 1000, "Refrescos / Pepsi": 100000 },
+    categorias: ["Refrescos", "Refrescos / Pepsi"],
+  };
+  S.renombrarCategoriaEnEstado("Refrescos", "Refrescos / Pepsi");
+  assert.deepEqual(S.state.categorias, ["Refrescos / Pepsi"], "no debe quedar duplicada");
+  assert.equal(S.state.weeks[0].gastos[0].categoria, "Refrescos / Pepsi");
+  assert.equal(S.state.budget["Refrescos / Pepsi"], 100000, "no debe pisar el presupuesto del destino");
+});
+t("reasignar una categoría suelta (la tarjeta sin nombre) la mete a una real", () => {
+  // Caso real de la pantalla: gastos con categoria "" sumando $11,290.30.
+  S.state = {
+    weeks: [{ id: "w1", cortes: [], retiros: [], gastos: [{ id: "g1", categoria: "", importe: 11290.30 }] }],
+    budget: {}, categorias: ["Gastos Generales"],
+  };
+  S.renombrarCategoriaEnEstado("", "Gastos Generales");
+  assert.equal(S.state.weeks[0].gastos[0].categoria, "Gastos Generales");
+  assert.deepEqual(S.state.categorias, ["Gastos Generales"], "no debe agregar la vacía a la lista");
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
