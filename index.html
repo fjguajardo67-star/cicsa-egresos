@@ -1253,9 +1253,10 @@ body.snav-min .side-theme span { display:none; }
   <div class="card">
     <div class="card-title">🏛 Conciliación SAT vs CICSA</div>
     <p style="font-size:13px;color:var(--txt2);margin-bottom:18px">Sube los <strong>XML de CFDI</strong> del periodo (o el Excel de la Consulta SAT) y se comparan contra los gastos registrados en CICSA para detectar facturas omitidas. El XML y el Excel <strong>no gastan tokens</strong>. Puedes <strong>arrastrar y soltar</strong> los archivos en cualquier parte de esta pantalla: se acomodan solos según su tipo.</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:16px">
       <div class="field"><label>Período — Fecha inicio</label><input type="date" id="satFechaIni"></div>
       <div class="field"><label>Período — Fecha fin</label><input type="date" id="satFechaFin"></div>
+      <div class="field"><label>RFC de tu empresa</label><input type="text" id="satRfcPropio" placeholder="Ej. CIC190426SD4" oninput="onRfcPropioChange()" style="text-transform:uppercase"><div style="font-size:11px;color:var(--txt2);margin-top:4px">Excluye las facturas que <strong>tú emites</strong> (son ingresos, no gastos).</div></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px">
       <div class="sat-drop" data-satzona="xml" style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
@@ -1306,6 +1307,7 @@ body.snav-min .side-theme span { display:none; }
     <div class="status" id="satStatus"></div>
   </div>
   <div class="summary-grid" id="satSummary" style="display:none;margin-bottom:16px"></div>
+  <div id="satOmitidos" style="display:none;background:#F0F7F0;border:1.5px solid var(--vm);border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:12px;color:var(--txt2)"></div>
   <div class="card" id="satFaltantesCard" style="display:none;margin-bottom:16px">
     <div class="card-title" style="color:var(--red)">❌ En SAT pero NO en CICSA<span id="satFaltantesCount" class="dup-badge" style="background:#FFEBEE;color:var(--red);margin-left:8px"></span></div>
     <div class="tbl-wrap"><table><thead><tr><th>Folio Fiscal</th><th>Proveedor (SAT)</th><th>RFC</th><th>Fecha</th><th style="text-align:right">Total SAT</th><th>Acción</th></tr></thead><tbody id="satFaltantesBody"></tbody></table></div>
@@ -1884,7 +1886,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-06-a";
+const APP_BUILD = "2026-08-06-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2644,7 +2646,7 @@ function showPage(name,btn){
   if(name==="reportes")    initReporteDates();
   if(name==="catalogo")    renderCatalogo();
   if(name==="catalogo-productos") renderCatalogoProductos();
-  if(name==="sat")       { initSatDates(); initSatDropzones(); }
+  if(name==="sat")       { initSatDates(); initSatDropzones(); const _r=document.getElementById("satRfcPropio"); if(_r) _r.value=rfcPropio(); }
   try{ _actPestanaActual = _actLabelPestana(name); if(_actActivo) _actUltInteraccion = Date.now(); }catch(_){}
   document.body.classList.remove("snav-open"); // en móvil, cierra el menú al navegar
 }
@@ -4313,6 +4315,9 @@ async function procesarSATExcel(){
     if(headerIdx<0){ headerIdx=0; rows[0].forEach((h,j)=>{colMap[(h||"").toString().toLowerCase().trim()]=j;}); }
     const findCol=(...keys)=>{ for(const k of keys) for(const col in colMap) if(col.includes(k)) return colMap[col]; return -1; };
     const colFolio=findCol("folio","uuid"), colRfc=findCol("rfc emisor","rfc","emisor"), colNombre=findCol("nombre","razón","razon","proveedor"), colTotal=findCol("total","monto","importe"), colFecha=findCol("fecha emis","fecha","date");
+    // La Consulta del SAT trae TODO: emitidas y recibidas, de todos los tipos. Sin estas dos
+    // columnas los complementos de pago y las facturas propias entraban como gastos.
+    const colTipo=findCol("efecto","tipo de comprobante","tipo comprobante"), colRfcRec=findCol("rfc receptor");
     const cfdis=[];
     for(let i=headerIdx+1;i<rows.length;i++){
       const row=rows[i]; if(!row||row.every(c=>c===""||c===null)) continue;
@@ -4324,9 +4329,10 @@ async function procesarSATExcel(){
       else if(fecha.includes("T")) fecha=fecha.slice(0,10);
       if(fechaIni&&fecha<fechaIni) continue; if(fechaFin&&fecha>fechaFin) continue;
       if(!folio&&total===0) continue;
-      cfdis.push({folio,rfc,proveedor:nombre,fecha,total});
+      cfdis.push({folio,rfc,proveedor:nombre,fecha,total,tipo:_cfdiTipoDesdeTexto(get(colTipo)),rfcReceptor:get(colRfcRec).toUpperCase()});
     }
     if(cfdis.length===0){ setStatus("satStatus","⚠ No se encontraron CFDIs en el Excel.","err"); return; }
+    autodetectarRfcPropio(cfdis);
     satCFDIs=cfdis; setStatus("satStatus",`✅ ${cfdis.length} CFDIs leídos. Conciliando…`,"ok");
     const resultado=conciliarSAT(cfdis,fechaIni,fechaFin); satResultado=resultado; renderConciliacion(resultado);
     document.getElementById("btnSatExport").style.display="flex";
@@ -4362,7 +4368,7 @@ async function guardarCfdisEnStore(cfdis){
   for(const c of cfdis){
     const uuid=(c.uuid||c.folio||"").trim(); if(!uuid) continue;
     const docId = uuid.replace(/[^A-Za-z0-9_-]/g,"_");
-    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, mes:cfdiMes(c.fecha), subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
+    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), mes:cfdiMes(c.fecha), subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
     tareas.push({ docId, data });
     if(yaHay.has(uuid.toUpperCase())){ existentes++; const i=_cfdisStore.findIndex(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase()); if(i>=0)_cfdisStore[i]={id:docId,...data}; }
     else { nuevos++; _cfdisStore.push({ id:docId, ...data }); yaHay.add(uuid.toUpperCase()); }
@@ -4482,11 +4488,15 @@ function parseCFDIXML(xml){
   const fecha  = (_cfdiAttr(xml,"Comprobante","Fecha")||"").slice(0,10);
   const serie  = _cfdiAttr(xml,"Comprobante","Serie");
   const folioC = _cfdiAttr(xml,"Comprobante","Folio");
+  // I=Ingreso (la factura de gasto), E=Egreso/nota de crédito, P=complemento de PAGO,
+  // N=nómina, T=traslado. Sin esto un complemento de pago se contaba como si fuera factura.
+  const tipo   = (_cfdiAttr(xml,"Comprobante","TipoDeComprobante")||"").toUpperCase().slice(0,1);
   const rfc    = _cfdiAttr(xml,"Emisor","Rfc");
   const nombre = _cfdiAttr(xml,"Emisor","Nombre");
+  const rfcRec = _cfdiAttr(xml,"Receptor","Rfc");   // quién RECIBE: distingue gasto de venta propia
   const uuid   = _cfdiAttr(xml,"TimbreFiscalDigital","UUID");
   if(!uuid && !total) return null;                 // no parece un CFDI válido
-  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, total };
+  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, total, tipo, rfcReceptor: rfcRec };
 }
 async function procesarSATXml(){
   const files=[...(document.getElementById("satXmlFiles").files||[])];
@@ -4502,6 +4512,7 @@ async function procesarSATXml(){
   }
   const vistos=new Set(), unicos=cfdis.filter(c=>{ const k=(c.uuid||c.folio||"").toUpperCase(); if(!k) return true; if(vistos.has(k)) return false; vistos.add(k); return true; });
   if(!unicos.length){ setStatus("satStatus",`⚠ No se pudo leer ningún CFDI${errores?` (${errores} archivo(s) con error)`:""}.`,"err"); return; }
+  autodetectarRfcPropio(unicos);
   setStatus("satStatus",`Guardando ${unicos.length} CFDI en la nube…`,"loading");
   let guardado={nuevos:unicos.length, existentes:0};
   try{ guardado=await guardarCfdisEnStore(unicos); }catch(e){ console.warn("guardarCfdisEnStore:",e); }
@@ -4535,10 +4546,76 @@ async function procesarSAT(){
   } catch(err){ setStatus("satStatus","❌ "+err.message,"err"); }
 }
 
-function conciliarSAT(cfdis,fechaIni,fechaFin){
+// ── Qué CFDIs son realmente un gasto ────────────────────────────────
+// La descarga del SAT trae TODO lo que tocó el RFC: lo que la empresa recibió y también lo que
+// ella misma emitió, en los 5 tipos de comprobante. Solo una FACTURA DE INGRESO EMITIDA POR UN
+// TERCERO es un gasto por capturar. Sin este filtro la conciliación pedía capturar los
+// complementos de pago y las propias facturas de venta.
+const RFC_PROPIO_KEY = "cicsa_rfc_propio";
+function rfcPropio(){ try{ return (localStorage.getItem(RFC_PROPIO_KEY)||"").trim().toUpperCase(); }catch(_){ return ""; } }
+function guardarRfcPropio(v){ try{ localStorage.setItem(RFC_PROPIO_KEY,(v||"").trim().toUpperCase()); }catch(_){} }
+function onRfcPropioChange(){
+  const inp=document.getElementById("satRfcPropio"); if(!inp) return;
+  guardarRfcPropio(inp.value);
+  // Re-concilia en caliente para que el efecto del cambio se vea al momento.
+  if(satCFDIs && satCFDIs.length){
+    const resultado=conciliarSAT(satCFDIs, document.getElementById("satFechaIni").value, document.getElementById("satFechaFin").value);
+    satResultado=resultado; renderConciliacion(resultado);
+  }
+}
+// El Excel del SAT escribe el tipo como palabra ("Ingreso", "Pago"…) o como letra.
+function _cfdiTipoDesdeTexto(t){
+  const s=(t||"").toString().trim().toLowerCase();
+  if(!s) return "";
+  if(s.length===1) return s.toUpperCase();
+  if(s.includes("pago")) return "P";
+  if(s.includes("nomina")||s.includes("nómina")) return "N";
+  if(s.includes("traslado")) return "T";
+  if(s.includes("egreso")) return "E";
+  if(s.includes("ingreso")) return "I";
+  return "";
+}
+function filtrarCfdisConciliables(cfdis, rfcEmpresa){
+  const propio=(rfcEmpresa||"").trim().toUpperCase();
+  const utiles=[], omitidos={};
+  const marcar=(k)=>{ omitidos[k]=(omitidos[k]||0)+1; };
+  (cfdis||[]).forEach(c=>{
+    // Lo que emitió la propia empresa es un INGRESO (venta), jamás un gasto por capturar.
+    if(propio && (c.rfc||"").trim().toUpperCase()===propio){ marcar("PROPIO"); return; }
+    const t=(c.tipo||"").toUpperCase().slice(0,1);
+    // Sin tipo (CFDIs guardados antes de esta versión) se deja pasar: mejor de más que de menos.
+    if(t && t!=="I"){ marcar(t); return; }
+    utiles.push(c);
+  });
+  return { utiles, omitidos };
+}
+// Deduce el RFC de la empresa. La descarga del SAT es de UN contribuyente, así que su RFC es el
+// único que aparece en TODOS los comprobantes: como emisor en lo que factura y como receptor en
+// lo que le facturan. El de un cliente grande solo sale como receptor, el de un proveedor solo
+// como emisor — por eso contar ambos papeles distingue bien y contar solo receptores no.
+function autodetectarRfcPropio(cfdis){
+  if(rfcPropio()) return "";
+  const lista=(cfdis||[]).filter(c=>c && (c.rfc||c.rfcReceptor));
+  if(lista.length<3) return "";                       // muy pocos datos para deducir nada
+  const cuenta={};
+  lista.forEach(c=>{
+    const partes=new Set([(c.rfc||"").trim().toUpperCase(), (c.rfcReceptor||"").trim().toUpperCase()].filter(Boolean));
+    partes.forEach(x=>{ cuenta[x]=(cuenta[x]||0)+1; });
+  });
+  const top=Object.keys(cuenta).sort((a,b)=>cuenta[b]-cuenta[a])[0];
+  if(!top || cuenta[top] < lista.length*0.6) return "";  // sin mayoría clara, que lo escriba el usuario
+  guardarRfcPropio(top);
+  const inp=document.getElementById("satRfcPropio"); if(inp) inp.value=top;
+  return top;
+}
+
+function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
   const gastosCICSA=allGastosAllWeeks().filter(g=>{ if(fechaIni&&g.fecha<fechaIni) return false; if(fechaFin&&g.fecha>fechaFin) return false; return true; });
+  const rfcEmp = rfcEmpresa!==undefined ? rfcEmpresa : (typeof rfcPropio==="function" ? rfcPropio() : "");
+  const filtro = filtrarCfdisConciliables(cfdis, rfcEmp);
+  const utiles = filtro.utiles;
   const faltantes=[],diferencias=[],conciliadas=[];
-  cfdis.forEach(cfdi=>{
+  utiles.forEach(cfdi=>{
     const matchFolio=gastosCICSA.find(g=>g.factura&&cfdi.folio&&(g.factura.toUpperCase().includes(cfdi.folio.toUpperCase().slice(0,8))||cfdi.folio.toUpperCase().includes((g.factura||"").toUpperCase().slice(0,8))));
     const matchMonto=gastosCICSA.find(g=>Math.abs(new Date(g.fecha)-new Date(cfdi.fecha))<=3*86400000&&Math.abs(g.importe-cfdi.total)<1);
     const match=matchFolio||matchMonto;
@@ -4546,13 +4623,29 @@ function conciliarSAT(cfdis,fechaIni,fechaFin){
     else if(Math.abs(match.importe-cfdi.total)>1) diferencias.push({cfdi,gastoCICSA:match,diferencia:cfdi.total-match.importe});
     else conciliadas.push(cfdi);
   });
-  return{faltantes,diferencias,conciliadas,totalSAT:cfdis.reduce((s,c)=>s+c.total,0),totalCICSA:gastosCICSA.reduce((s,g)=>s+g.importe,0)};
+  return{faltantes,diferencias,conciliadas,cfdisUtiles:utiles,omitidos:filtro.omitidos,totalSAT:utiles.reduce((s,c)=>s+c.total,0),totalCICSA:gastosCICSA.reduce((s,g)=>s+g.importe,0)};
 }
 
+// Deja ver POR QUÉ el número bajó: si la cuenta se reduce en silencio, nadie confía en ella.
+function pintarCfdisOmitidos(om){
+  const el=document.getElementById("satOmitidos"); if(!el) return;
+  const etiquetas=[["PROPIO","factura que emitió tu empresa (es un ingreso)","facturas que emitió tu empresa (son ingresos)"],
+                   ["P","complemento de pago","complementos de pago"],
+                   ["E","nota de crédito","notas de crédito"],
+                   ["N","recibo de nómina","recibos de nómina"],
+                   ["T","traslado","traslados"]];
+  const partes=[]; let total=0;
+  etiquetas.forEach(([k,uno,varios])=>{ const n=(om||{})[k]||0; if(n){ total+=n; partes.push(`<strong>${n}</strong> ${n===1?uno:varios}`); } });
+  if(!total){ el.style.display="none"; el.innerHTML=""; return; }
+  el.style.display="block";
+  el.innerHTML=`ℹ️ Se omiti${total===1?"ó":"eron"} <strong>${total}</strong> CFDI que no ${total===1?"es un gasto":"son gastos"} por capturar: ${partes.join(" · ")}.`;
+}
 function renderConciliacion(r){
   const sumEl=document.getElementById("satSummary"); sumEl.style.display="grid";
-  const pct=satCFDIs.length>0?Math.round((r.conciliadas.length/satCFDIs.length)*100):0;
-  sumEl.innerHTML=`<div class="scard"><div class="scard-label">CFDIs en SAT</div><div class="scard-val">${satCFDIs.length}</div><div class="scard-sub">${fmt(r.totalSAT)}</div></div>
+  const utiles=r.cfdisUtiles||satCFDIs||[];
+  const pct=utiles.length>0?Math.round((r.conciliadas.length/utiles.length)*100):0;
+  pintarCfdisOmitidos(r.omitidos);
+  sumEl.innerHTML=`<div class="scard"><div class="scard-label">Facturas de gasto en SAT</div><div class="scard-val">${utiles.length}</div><div class="scard-sub">${fmt(r.totalSAT)}</div></div>
     <div class="scard ${r.faltantes.length>0?'alert':''}"><div class="scard-label">No capturados en CICSA</div><div class="scard-val" style="color:${r.faltantes.length>0?'var(--red)':'var(--vm)'}">${r.faltantes.length}</div><div class="scard-sub">${fmt(r.faltantes.reduce((s,c)=>s+c.total,0))}</div></div>
     <div class="scard"><div class="scard-label">Con diferencia de monto</div><div class="scard-val">${r.diferencias.length}</div></div>
     <div class="scard"><div class="scard-label">Conciliadas ✅</div><div class="scard-val">${r.conciliadas.length}</div><div class="scard-sub">${pct}% del total</div></div>`;
