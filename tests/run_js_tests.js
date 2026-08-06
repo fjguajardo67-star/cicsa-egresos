@@ -52,10 +52,12 @@ const FUNCS = [
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
   "_cfdiTipoDesdeTexto", "filtrarCfdisConciliables", "autodetectarRfcPropio",
   "rfcPropio", "guardarRfcPropio",
+  "_gmailHuella", "filterGmailDuplicates",
 ];
 
 const sandbox = {
   state: { weeks: [], activeWeek: null, budget: {} }, console,
+  _gmailRevisados: null,
   // Stubs para consolidarFacturaDividida (efectos de UI/persistencia fuera de alcance del test).
   confirm: () => true, alert: () => {}, save: () => {}, marcarBorrado: () => {},
   renderRevisionDuplicados: () => {}, document: { getElementById: () => null },
@@ -783,6 +785,48 @@ t("sin el UUID, un folio distinto y monto distinto sí sale como faltante", () =
                               proveedor: "POLLO BAL", fecha: "2026-07-07", total: 26484, tipo: "I" }],
                             "2026-07-01", "2026-07-31", RFC_CICSA);
   assert.equal(r.faltantes.length, 1);
+});
+
+console.log("\n== Gmail: facturas ya revisadas ==");
+const adj = (n, b64, msg) => ({ filename: n, data_b64: b64, msg_id: msg || ("m-" + n), sender: "prov@x.com", subject: "Factura" });
+t("la huella distingue archivos y repite en el mismo contenido", () => {
+  const a = S._gmailHuella("JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+Pg==");
+  assert.equal(a, S._gmailHuella("JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+Pg=="));
+  assert.notEqual(a, S._gmailHuella("JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2d+Pg=="));
+  assert.equal(S._gmailHuella(""), "");
+});
+t("el mismo PDF reenviado en OTRO correo y con OTRO nombre se detecta", () => {
+  // Es el caso que se colaba: msg_id distinto y filename distinto, mismo archivo.
+  S.state = { activeWeek: "w1", weeks: [{ id: "w1", cortes: [], retiros: [], gastos: [] }] };
+  S._gmailRevisados = [{ id: "h1", huella: S._gmailHuella("AAAA"), estado: "capturado", por: "Fernando" }];
+  const r = S.filterGmailDuplicates([adj("factura_reenviada.pdf", "AAAA", "msg-nuevo")]);
+  assert.equal(r[0]._isDup, true);
+  assert.ok(/Ya revisada por Fernando/.test(r[0]._dupReason), r[0]._dupReason);
+});
+t("lo descartado por un compañero no le reaparece a nadie", () => {
+  S._gmailRevisados = [{ id: "h1", huella: S._gmailHuella("BBBB"), estado: "descartado", por: "Ana" }];
+  const r = S.filterGmailDuplicates([adj("promo.pdf", "BBBB")]);
+  assert.ok(/Ya descartada por Ana/.test(r[0]._dupReason), r[0]._dupReason);
+});
+t("el mismo adjunto repetido dentro de una descarga se marca una sola vez", () => {
+  S._gmailRevisados = [];
+  const r = S.filterGmailDuplicates([adj("a.pdf", "CCCC", "m1"), adj("b.pdf", "CCCC", "m2")]);
+  assert.equal(r[0]._isDup, false, "el primero debe pasar");
+  assert.equal(r[1]._isDup, true, "el segundo es la repetición");
+  assert.ok(/Repetida en esta descarga/.test(r[1]._dupReason), r[1]._dupReason);
+});
+t("una factura genuinamente nueva no se marca", () => {
+  S._gmailRevisados = [{ id: "h1", huella: S._gmailHuella("AAAA"), estado: "capturado", por: "Fernando" }];
+  const r = S.filterGmailDuplicates([adj("nueva.pdf", "ZZZZ", "m9")]);
+  assert.equal(r[0]._isDup, false);
+  assert.ok(r[0]._huella);
+});
+t("se conserva la detección por msg_id contra los gastos ya capturados", () => {
+  S._gmailRevisados = [];
+  S.state = { activeWeek: "w1", weeks: [{ id: "w1", cortes: [], retiros: [], gastos: [
+    { id: "g1", _gmailMsgId: "m-viejo", _gmailFile: "walmart.pdf", importe: 100, fecha: "2026-07-01" } ] }] };
+  assert.equal(S.filterGmailDuplicates([adj("otro.pdf", "QQQQ", "m-viejo")])[0]._dupReason, "Ya capturada");
+  assert.equal(S.filterGmailDuplicates([adj("walmart.pdf", "WWWW", "m-otro")])[0]._dupReason, "Archivo ya procesado");
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
