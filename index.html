@@ -1093,7 +1093,19 @@ body.snav-min .side-theme span { display:none; }
         <div id="presupGastadoSub" style="font-size:10.5px;margin-top:2px">&nbsp;</div>
       </div>
     </div>
-    <div id="presupNotaAdmin" style="display:none;font-size:13px;color:var(--txt2);background:var(--claro);border-radius:8px;padding:10px 14px;margin-bottom:14px">🔒 Solo un administrador puede modificar el presupuesto. Lo estás viendo en modo lectura.</div>
+    <div id="presupNotaAdmin" style="display:none;font-size:13px;color:var(--txt2);background:var(--claro);border-radius:8px;padding:10px 14px;margin-bottom:14px">🔒 Solo un administrador puede modificar el presupuesto y las categorías. Lo estás viendo en modo lectura.</div>
+    <div id="presupCandado" style="display:none;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:12px 16px;margin-bottom:16px">
+      <span style="font-size:13px;color:var(--txt)">🔒 <strong>Edición bloqueada.</strong> Para cambiar presupuestos o categorías, confirma tu contraseña.</span>
+      <button class="btn btn-gold" style="padding:7px 14px" onclick="desbloquearPresupuesto()">🔓 Desbloquear edición</button>
+    </div>
+    <div id="presupAbierto" style="display:none;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:#F0F7F0;border:1.5px solid var(--vm);border-radius:10px;padding:10px 16px;margin-bottom:16px">
+      <span style="font-size:12px;color:var(--vd)">🔓 <span id="presupAbiertoTxt"></span></span>
+      <span style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-green" style="padding:6px 12px;font-size:12px" onclick="agregarCategoria()">➕ Agregar categoría</button>
+        <button class="btn btn-light" style="padding:6px 12px;font-size:12px" onclick="restaurarCategorias()">↺ Categorías de fábrica</button>
+        <button class="btn btn-light" style="padding:6px 12px;font-size:12px" onclick="bloquearPresupuesto()">🔒 Bloquear</button>
+      </span>
+    </div>
     <div class="budget-grid" id="budgetGrid"></div>
     <div class="btn-row" id="presupAcciones" style="margin-top:16px">
       <button class="btn btn-gold" onclick="guardarPresupuesto()">💾 Guardar presupuesto</button>
@@ -1886,7 +1898,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-06-d";
+const APP_BUILD = "2026-08-06-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2218,6 +2230,11 @@ const CATS = [
   "Artículos de limpieza","Desechables","Mantenimiento y Equipo","Transporte / Combustible",
   "Servicios (Basura, Agua, Luz)","Nómina / Personal","Gastos Generales","Otro"
 ];
+// Categorías vigentes. CATS es el juego de fábrica; si el admin agregó o renombró alguna,
+// state.categorias manda (y viaja a todo el equipo por el guardado normal).
+function catsActuales(){
+  return (Array.isArray(state.categorias) && state.categorias.length) ? state.categorias : CATS;
+}
 const DEFAULT_BUDGET = {
   "Cárnicos":80000,"Lácteos / Cremería":10000,"Frutas y Verduras":30000,
   "Tortilla":60000,"Abarrotes / Secos":20000,"Refrescos / Pepsi":100000,
@@ -2824,8 +2841,8 @@ async function leerDocumento(){
     _productosPreleidos=null;
     // Una sola llamada: encabezado (para el formulario) + productos (para el catálogo). Si el
     // servidor viejo aún no tiene /leer-gasto-full, cae al /leer-gasto de siempre.
-    let resp=await fetch(SERVER+"/leer-gasto-full",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:mimeToSend})});
-    if(resp.status===404) resp=await fetch(SERVER+"/leer-gasto",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:mimeToSend})});
+    let resp=await fetch(SERVER+"/leer-gasto-full",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:mimeToSend,categorias:catsActuales()})});
+    if(resp.status===404) resp=await fetch(SERVER+"/leer-gasto",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:mimeToSend,categorias:catsActuales()})});
     const data=await resp.json();
     if(!resp.ok) throw new Error(data.error||"Error desconocido");
     if(Array.isArray(data.productos)) _productosPreleidos=data.productos;   // se usan al guardar
@@ -2901,7 +2918,7 @@ async function pedirProductosConReintento(b64, mimeType){
     try{
       const r = await fetch(SERVER+"/leer-productos", {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({image_base64:b64, mime_type:mimeType})
+        body: JSON.stringify({image_base64:b64, mime_type:mimeType, categorias:catsActuales()})
       });
       const data = await r.json().catch(()=>({}));
       if(!r.ok) throw new Error(data.error || `El servidor respondió ${r.status}`);
@@ -3242,7 +3259,7 @@ function renderGastos(){
       :g._respaldoUrl
       ?`<div class="thumb-wrap" style="cursor:pointer" title="📄 Ver factura (PDF)" onclick="verFactura('${safeId}')"><span class="thumb-none">📄</span></div>`
       :`<div class="thumb-wrap" title="Sin respaldo adjunto"><span class="thumb-none">📄</span></div>`;
-    const catOpts=CATS.map(c=>`<option value="${c}" ${c===g.categoria?"selected":""}>${c}</option>`).join("");
+    const catOpts=catsActuales().map(c=>`<option value="${c}" ${c===g.categoria?"selected":""}>${c}</option>`).join("");
     const catCell=g._dividida
       ?`<span class="cat-badge" style="cursor:pointer" title="Editar división por categoría" onclick="abrirEditPartidas('${safeId}')">🔀 Dividida (${(g._partidas||[]).length}) ✏️</span>`
       :`<select style="border:none;background:transparent;font-size:12px;color:var(--vd);font-weight:600;cursor:pointer;width:100%" onchange="editarGasto('${g.id}','categoria',this.value)">${catOpts}</select>`;
@@ -3477,7 +3494,7 @@ async function analizarDivision(proveedor,fecha,factura,total){
   setStatus("statusLectura","🔍 Analizando división por categorías…","loading");
   document.getElementById("btnLeer").disabled=true;
   try {
-    const resp=await fetch(SERVER+"/analizar-division",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:capturedFile?.type||"image/jpeg"})});
+    const resp=await fetch(SERVER+"/analizar-division",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:capturedFile?.type||"image/jpeg",categorias:catsActuales()})});
     const data=await resp.json(); if(!resp.ok) throw new Error(data.error||"Error en análisis");
     splitData=data;
     setStatus("statusLectura",`✅ División lista — ${data.partidas?.length||0} categorías detectadas · Total ${fmt(data.total)}<br><span style="font-size:12px">Haz clic en <strong>"Ver división por categoría"</strong> para revisar y guardar.</span>`,"ok");
@@ -3675,17 +3692,132 @@ function partidasExpandidas(gastos){
   return out;
 }
 
+// ── Candado del presupuesto ─────────────────────────────────────────
+// El presupuesto gobierna todo el control de gastos: verlo es de todos, moverlo no. Además del
+// rol de admin se pide la contraseña de la PROPIA cuenta — no un PIN aparte, que habría que
+// guardar en algún lado y acabaría compartiéndose por chat. Firebase valida la contraseña; aquí
+// no se guarda ni se compara nada.
+const PRESUP_MIN_DESBLOQUEO = 10;
+let _presupDesbloqueadoHasta = 0, _presupTimer = null;
+function presupDesbloqueado(){ return Date.now() < _presupDesbloqueadoHasta; }
+async function desbloquearPresupuesto(){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede modificar el presupuesto."); return; }
+  const email=(currentUser&&currentUser.email)||"";
+  if(!email){ alert("No hay sesión activa. Vuelve a entrar."); return; }
+  const pass=prompt(`Confirma TU contraseña para editar el presupuesto.\n\nCuenta: ${email}\nLa edición queda abierta ${PRESUP_MIN_DESBLOQUEO} minutos.`);
+  if(pass===null) return;
+  if(!pass){ alert("Contraseña vacía."); return; }
+  try{
+    const cred=firebase.auth.EmailAuthProvider.credential(email, pass);
+    await currentUser.reauthenticateWithCredential(cred);
+  }catch(e){
+    alert("❌ Contraseña incorrecta. El presupuesto sigue bloqueado.");
+    return;
+  }
+  _presupDesbloqueadoHasta = Date.now() + PRESUP_MIN_DESBLOQUEO*60000;
+  // Se vuelve a cerrar solo: dejar la edición abierta en una pantalla compartida es el riesgo real.
+  if(_presupTimer) clearTimeout(_presupTimer);
+  _presupTimer=setTimeout(()=>{ _presupDesbloqueadoHasta=0; if(document.getElementById("budgetGrid")) renderPresupuesto(); }, PRESUP_MIN_DESBLOQUEO*60000+500);
+  renderPresupuesto();
+}
+function bloquearPresupuesto(){
+  _presupDesbloqueadoHasta=0;
+  if(_presupTimer){ clearTimeout(_presupTimer); _presupTimer=null; }
+  renderPresupuesto();
+}
+
+// ── Categorías: agregar, renombrar, eliminar ────────────────────────
+function _catsEditable(){
+  if(!Array.isArray(state.categorias) || !state.categorias.length) state.categorias=[...CATS];
+  return state.categorias;
+}
+function _catExiste(nombre){
+  const n=normalizarParaComparar(nombre);
+  return catsActuales().some(c=>normalizarParaComparar(c)===n);
+}
+function agregarCategoria(){
+  if(!_soloAdminPresup()) return;
+  const nombre=(prompt("Nombre de la nueva categoría:")||"").trim();
+  if(!nombre) return;
+  if(_catExiste(nombre)){ alert(`Ya existe una categoría «${nombre}».`); return; }
+  _catsEditable().push(nombre);
+  if(state.budget[nombre]==null) state.budget[nombre]=0;
+  save(); renderPresupuesto();
+  alert(`✅ Categoría «${nombre}» agregada. Asígnale presupuesto y guarda.`);
+}
+// Renombrar mueve TODO lo que cuelga del nombre viejo. Si solo se cambiara la lista, el gasto ya
+// capturado se quedaría colgando de una categoría fantasma y el dinero desaparecería del reporte.
+function renombrarCategoriaEnEstado(viejo, nuevo){
+  let tocados=0;
+  (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{
+    if(g.categoria===viejo){ g.categoria=nuevo; g.esOtro=(nuevo==="Otro"); tocados++; }
+    (g._partidas||[]).forEach(p=>{ if(p.categoria===viejo){ p.categoria=nuevo; tocados++; } });
+  }));
+  if(state.budget && state.budget[viejo]!=null){
+    if(state.budget[nuevo]==null) state.budget[nuevo]=state.budget[viejo];
+    delete state.budget[viejo];
+  }
+  const lista=_catsEditable();
+  const i=lista.indexOf(viejo);
+  if(i>=0){ if(lista.includes(nuevo)) lista.splice(i,1); else lista[i]=nuevo; }
+  else if(!lista.includes(nuevo)) lista.push(nuevo);
+  return tocados;
+}
+function renombrarCategoria(cat){
+  if(!_soloAdminPresup()) return;
+  const esHuerfana=!catsActuales().includes(cat);
+  const titulo=esHuerfana
+    ? `«${cat||"(sin categoría)"}» no está en tu lista de categorías: sus gastos quedaron sueltos.\n\n¿A qué categoría los mandamos?`
+    : `Nuevo nombre para «${cat}»:`;
+  const nuevo=(prompt(titulo, esHuerfana?"":cat)||"").trim();
+  if(!nuevo || nuevo===cat) return;
+  const totals=totalesPorCatPeriodo();
+  const fusiona=_catExiste(nuevo);
+  const aviso=fusiona
+    ? `«${nuevo}» ya existe: los gastos de «${cat||"(sin categoría)"}» se SUMARÁN a esa categoría.`
+    : `Se renombra «${cat||"(sin categoría)"}» a «${nuevo}».`;
+  if(!confirm(`${aviso}\n\nSe actualizan todos los gastos ya capturados (${fmt(totals[cat]||0)} en este periodo) y el presupuesto.\n\n¿Continuar?`)) return;
+  const tocados=renombrarCategoriaEnEstado(cat, nuevo);
+  save(); renderPresupuesto();
+  alert(`✅ Listo — ${tocados} registro(s) actualizados.`);
+}
+function eliminarCategoria(cat){
+  if(!_soloAdminPresup()) return;
+  const conGasto=[];
+  (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{
+    if(g.categoria===cat || (g._partidas||[]).some(p=>p.categoria===cat)) conGasto.push(g);
+  }));
+  if(conGasto.length){
+    // Borrarla a secas dejaría gastos apuntando a una categoría que ya no existe: se reasignan.
+    alert(`«${cat||"(sin categoría)"}» tiene ${conGasto.length} gasto(s) capturados.\n\nNo se puede borrar sin más: elige a qué categoría se mueven.`);
+    renombrarCategoria(cat);
+    return;
+  }
+  if(!confirm(`¿Eliminar la categoría «${cat}»?\n\nNo tiene gastos capturados. Se quita de la lista y de los presupuestos.`)) return;
+  const lista=_catsEditable();
+  const i=lista.indexOf(cat); if(i>=0) lista.splice(i,1);
+  if(state.budget) delete state.budget[cat];
+  save(); renderPresupuesto();
+}
+function restaurarCategorias(){
+  if(!_soloAdminPresup()) return;
+  if(!confirm("¿Volver a la lista de categorías de fábrica?\n\nNo toca los gastos ya capturados: si alguno usa una categoría que quites, seguirá apareciendo abajo como suelta.")) return;
+  state.categorias=[...CATS];
+  save(); renderPresupuesto();
+}
+
 function renderPresupuesto(){
   const grid=document.getElementById("budgetGrid"); grid.innerHTML="";
   const esAdmin = (typeof currentRole !== "undefined" && currentRole === "admin");
+  const puedeEditar = esAdmin && presupDesbloqueado();
   const p=getPeriodoSP();
   const lbl=document.getElementById("presupPeriodoLabel"); if(lbl) lbl.textContent=`— ${p.label}`;
-  const totals=totalesPorCatPeriodo(), allCats=[...new Set([...CATS,...Object.keys(totals)])];
+  const totals=totalesPorCatPeriodo(), allCats=[...new Set([...catsActuales(),...Object.keys(totals)])];
   allCats.forEach(cat=>{
     const presup=parseFloat(state.budget[cat])||0, gastado=totals[cat]||0, pct=presup>0?Math.min((gastado/presup)*100,100):0, over=presup>0&&gastado>presup;
     const div=document.createElement("div"); div.className="bcard";
     // Editar presupuesto: solo admin. El operativo lo ve en modo lectura.
-    const editor = esAdmin
+    const editor = puedeEditar
       ? `<div style="margin-top:8px">
           <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">Presupuesto:</div>
           <div style="display:flex;gap:6px;align-items:center">
@@ -3694,7 +3826,14 @@ function renderPresupuesto(){
           </div>
         </div>`
       : "";
-    div.innerHTML=`<div class="bcard-name">${cat}</div>
+    const controles = puedeEditar
+      ? `<span style="float:right;display:flex;gap:4px">
+          <button title="Renombrar o fusionar" onclick="renombrarCategoria('${cat.replace(/'/g,"\\'")}')" style="border:none;background:none;cursor:pointer;font-size:12px;padding:0 2px;opacity:.65">✏️</button>
+          <button title="Eliminar categoría" onclick="eliminarCategoria('${cat.replace(/'/g,"\\'")}')" style="border:none;background:none;cursor:pointer;font-size:12px;padding:0 2px;opacity:.65">🗑️</button>
+        </span>`
+      : "";
+    const suelta = !catsActuales().includes(cat);
+    div.innerHTML=`<div class="bcard-name">${controles}${cat || "(sin categoría)"}${suelta?`<span title="Esta categoría no está en tu lista: son gastos sueltos" style="font-size:10px;color:var(--do);font-weight:600;margin-left:6px">suelta</span>`:""}</div>
       <div class="bcard-nums"><span class="bcard-gastado" onclick="editarGastosCategoria('${cat.replace(/'/g,"\\'")}')" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" title="Ver y reclasificar las facturas de esta categoría en Auditoría">${fmt(gastado)}</span><span class="bcard-presup">/ ${fmt(presup)}</span></div>
       <div class="bcard-bar-wrap"><div class="bcard-bar ${over?'over':''}" style="width:${pct}%"></div></div>
       ${over?`<div style="font-size:11px;color:var(--red);font-weight:600">⚠ Excedido en ${fmt(gastado-presup)}</div>`:""}
@@ -3702,8 +3841,19 @@ function renderPresupuesto(){
     grid.appendChild(div);
   });
   // Barra superior (objetivo + botones) y la nota, solo para admin.
-  const bar=document.getElementById("presupTotalBar"); if(bar) bar.style.display = esAdmin ? "grid" : "none";
-  const acciones=document.getElementById("presupAcciones"); if(acciones) acciones.style.display = esAdmin ? "flex" : "none";
+  const bar=document.getElementById("presupTotalBar"); if(bar) bar.style.display = puedeEditar ? "grid" : "none";
+  const acciones=document.getElementById("presupAcciones"); if(acciones) acciones.style.display = puedeEditar ? "flex" : "none";
+  const candado=document.getElementById("presupCandado");
+  if(candado){
+    candado.style.display = (esAdmin && !puedeEditar) ? "flex" : "none";
+  }
+  const abierto=document.getElementById("presupAbierto");
+  if(abierto){
+    abierto.style.display = puedeEditar ? "flex" : "none";
+    const min=Math.max(0, Math.round((_presupDesbloqueadoHasta-Date.now())/60000));
+    const t=document.getElementById("presupAbiertoTxt");
+    if(t) t.textContent = `Edición abierta — se cierra sola en ${min} min.`;
+  }
   const nota=document.getElementById("presupNotaAdmin");
   if(nota) nota.style.display = esAdmin ? "none" : "block";
   const obj=document.getElementById("presupObjetivo");
@@ -3713,7 +3863,7 @@ function renderPresupuesto(){
   // Gasto real del periodo (mismas cifras que las tarjetas, sumadas). Se guarda para que la
   // barra pueda recolorearse en vivo al mover el presupuesto asignado, sin recalcular gastos.
   _presupGastadoPeriodo = Object.values(totals).reduce((s,v)=>s+(parseFloat(v)||0),0);
-  if(esAdmin) actualizarTotalPresupuesto();
+  if(puedeEditar) actualizarTotalPresupuesto();
 }
 // Barra de referencia: suma EN VIVO los inputs de las tarjetas (sin guardar) y la compara
 // contra el objetivo, para repartir el presupuesto hasta cuadrar sin andar sumando a mano.
@@ -3750,14 +3900,18 @@ function actualizarTotalPresupuesto(){
     }
   }
 }
-function _soloAdminPresup(){ if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede modificar el presupuesto."); return false; } return true; }
+function _soloAdminPresup(){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede modificar el presupuesto."); return false; }
+  if(!presupDesbloqueado()){ alert("🔒 La edición está bloqueada. Presiona «Desbloquear edición» y confirma tu contraseña."); return false; }
+  return true;
+}
 function guardarObjetivoPresupuesto(){
   if(!_soloAdminPresup()) return;
   state.budgetObjetivo=parseFloat(document.getElementById("presupObjetivo")?.value)||0;
   save(); actualizarTotalPresupuesto();
 }
 function saveSingleBudget(cat){ if(!_soloAdminPresup()) return; const val=parseFloat(document.getElementById("bp_"+cat.replace(/\W/g,'_'))?.value)||0; state.budget[cat]=val; save(); renderPresupuesto(); }
-function guardarPresupuesto(){ if(!_soloAdminPresup()) return; [...new Set([...CATS,...Object.keys(totalesPorCatPeriodo())])].forEach(cat=>{const el=document.getElementById("bp_"+cat.replace(/\W/g,'_'));if(el) state.budget[cat]=parseFloat(el.value)||0;}); save(); renderPresupuesto(); alert("✅ Presupuesto guardado."); }
+function guardarPresupuesto(){ if(!_soloAdminPresup()) return; [...new Set([...catsActuales(),...Object.keys(totalesPorCatPeriodo())])].forEach(cat=>{const el=document.getElementById("bp_"+cat.replace(/\W/g,'_'));if(el) state.budget[cat]=parseFloat(el.value)||0;}); save(); renderPresupuesto(); alert("✅ Presupuesto guardado."); }
 function resetPresupuesto(){ if(!_soloAdminPresup()) return; if(!confirm("¿Restaurar valores predeterminados?")) return; state.budget={...DEFAULT_BUDGET}; save(); renderPresupuesto(); }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3824,7 +3978,7 @@ function exportarExcel(){
   const det=[["CICSA — Control de Egresos"],[`Periodo: ${p.label}`],[],["Fecha","Proveedor","Categoría","No. Factura","Importe","Notas"],...gastos.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map(g=>[g.fecha,g.proveedor,g.categoria,g.factura,g.importe,g.notas]),[],["","","","TOTAL",gastos.reduce((s,g)=>s+g.importe,0)]];
   const ws1=XLSX.utils.aoa_to_sheet(det); ws1["!cols"]=[{wch:12},{wch:30},{wch:26},{wch:14},{wch:14},{wch:30}]; XLSX.utils.book_append_sheet(wb,ws1,"Detalle");
   const totalPresup=Object.values(state.budget).reduce((s,v)=>s+v,0), totalGast=gastos.reduce((s,g)=>s+g.importe,0);
-  const sum=[["CICSA — Resumen"],[`Periodo: ${p.label}`],[],["Categoría","Presupuesto","Gasto Real","Diferencia","Estado"],...[...new Set([...Object.keys(totals),...CATS])].map(cat=>{const pr=state.budget[cat]||0,g=totals[cat]||0;return[cat,pr,g,pr-g,pr>0&&g>pr?"EXCEDIDO":"OK"];}),[], ["","TOTAL",totalPresup,totalGast,totalPresup-totalGast]];
+  const sum=[["CICSA — Resumen"],[`Periodo: ${p.label}`],[],["Categoría","Presupuesto","Gasto Real","Diferencia","Estado"],...[...new Set([...Object.keys(totals),...catsActuales()])].map(cat=>{const pr=state.budget[cat]||0,g=totals[cat]||0;return[cat,pr,g,pr-g,pr>0&&g>pr?"EXCEDIDO":"OK"];}),[], ["","TOTAL",totalPresup,totalGast,totalPresup-totalGast]];
   const ws2=XLSX.utils.aoa_to_sheet(sum); ws2["!cols"]=[{wch:28},{wch:14},{wch:14},{wch:14},{wch:12}]; XLSX.utils.book_append_sheet(wb,ws2,"Resumen");
   XLSX.writeFile(wb,`Egresos_${(p.label||"periodo").replace(/[^A-Za-z0-9]/g,"_")}.xlsx`);
 }
@@ -6015,8 +6169,8 @@ function cerrarEditPartidas(){ document.getElementById("editPartidasModal").clas
 function renderEditPartRows(){
   const cont=document.getElementById("editPartidasRows"); cont.innerHTML="";
   _editPart.forEach((p,i)=>{
-    const extra=(p.categoria && !CATS.includes(p.categoria))?`<option value="${esc(p.categoria)}" selected>${esc(p.categoria)}</option>`:"";
-    const opts=CATS.map(c=>`<option value="${esc(c)}" ${c===p.categoria?"selected":""}>${esc(c)}</option>`).join("");
+    const extra=(p.categoria && !catsActuales().includes(p.categoria))?`<option value="${esc(p.categoria)}" selected>${esc(p.categoria)}</option>`:"";
+    const opts=catsActuales().map(c=>`<option value="${esc(c)}" ${c===p.categoria?"selected":""}>${esc(c)}</option>`).join("");
     const row=document.createElement("div");
     row.style.cssText="display:flex;gap:8px;align-items:center;margin-bottom:8px";
     row.innerHTML=`
@@ -6067,8 +6221,8 @@ function categoriaSelectHtml(g){
   if(g._dividida) return `<span class="cat-badge" style="cursor:pointer" title="Editar división por categoría" onclick="abrirEditPartidas('${String(g.id).replace(/'/g,"\\'")}')">🔀 Dividida ✏️</span>`;
   const actual=g.categoria||"";
   const extra=(actual==="")?`<option value="" selected>(sin categoría)</option>`
-    :(!CATS.includes(actual)?`<option value="${esc(actual)}" selected>${esc(actual)}</option>`:"");
-  const opts=CATS.map(c=>`<option value="${esc(c)}" ${c===actual?"selected":""}>${esc(c)}</option>`).join("");
+    :(!catsActuales().includes(actual)?`<option value="${esc(actual)}" selected>${esc(actual)}</option>`:"");
+  const opts=catsActuales().map(c=>`<option value="${esc(c)}" ${c===actual?"selected":""}>${esc(c)}</option>`).join("");
   return `<select onchange="cambiarCategoriaGasto('${String(g.id).replace(/'/g,"\\'")}', this.value)" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;max-width:160px">${extra}${opts}</select>`;
 }
 function cambiarCategoriaGasto(id, cat){
