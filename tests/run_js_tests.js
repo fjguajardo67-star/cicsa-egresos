@@ -63,6 +63,7 @@ const FUNCS = [
   "rfcPropio", "guardarRfcPropio",
   "_gmailHuella", "filterGmailDuplicates",
   "catsActuales", "_catsEditable", "_catExiste", "renombrarCategoriaEnEstado",
+  "factorPresupuestoPeriodo", "presupCatPeriodo",
 ];
 
 const sandbox = {
@@ -896,6 +897,52 @@ t("reasignar una categoría suelta (la tarjeta sin nombre) la mete a una real", 
   S.renombrarCategoriaEnEstado("", "Gastos Generales");
   assert.equal(S.state.weeks[0].gastos[0].categoria, "Gastos Generales");
   assert.deepEqual(S.state.categorias, ["Gastos Generales"], "no debe agregar la vacía a la lista");
+});
+
+console.log("\n== Presupuesto proporcional al rango ==");
+const F = (ini, fin) => S.factorPresupuestoPeriodo({ modo: "rango", ini, fin });
+t("una semana guardada vale 1, sin importar sus días", () => {
+  const r = S.factorPresupuestoPeriodo({ modo: "semana", weekId: "w1" });
+  assert.equal(r.factor, 1); assert.equal(r.esRango, false);
+});
+t("un rango de 7 días es exactamente una semana", () => {
+  const r = F("2026-07-27", "2026-08-02");
+  assert.equal(r.dias, 7); close(r.factor, 1);
+});
+t("julio completo (31 días) = 4.43 semanas", () => {
+  const r = F("2026-07-01", "2026-07-31");
+  assert.equal(r.dias, 31); close(r.factor, 31 / 7, 0.0001);
+});
+t("un solo día es un séptimo de la semana", () => {
+  const r = F("2026-07-15", "2026-07-15");
+  assert.equal(r.dias, 1); close(r.factor, 1 / 7, 0.0001);
+});
+t("una quincena escala la meta de Cárnicos de 80,000 a 171,428.57", () => {
+  S.state = { weeks: [], budget: { "Cárnicos": 80000 } };
+  const f = F("2026-07-01", "2026-07-15").factor;   // 15 días
+  close(S.presupCatPeriodo("Cárnicos", f), 80000 * 15 / 7, 0.01);
+});
+t("en modo semana la meta no se toca (cifras reales de la pantalla)", () => {
+  S.state = { weeks: [], budget: { "Cárnicos": 80000, "Tortilla": 60000 } };
+  close(S.presupCatPeriodo("Cárnicos", 1), 80000);
+  close(S.presupCatPeriodo("Tortilla", 1), 60000);
+});
+t("una categoría sin presupuesto sigue en cero por más largo que sea el rango", () => {
+  S.state = { weeks: [], budget: {} };
+  close(S.presupCatPeriodo("Hielo", F("2026-01-01", "2026-12-31").factor), 0);
+});
+t("fechas inválidas no rompen el cálculo: cae a factor 1", () => {
+  assert.equal(S.factorPresupuestoPeriodo({ modo: "rango", ini: "", fin: "" }).factor, 1);
+  assert.equal(S.factorPresupuestoPeriodo({ modo: "rango", ini: "no-es-fecha", fin: "tampoco" }).factor, 1);
+});
+t("el gasto de un mes deja de verse excedido contra la meta semanal", () => {
+  // Caso reportado: $87,824.18 gastados en el mes contra $440,000 semanal se veía
+  // bien, pero por categoría todo salía en rojo. Tortilla: 29,200 gastados en 31 días.
+  S.state = { weeks: [], budget: { "Tortilla": 60000 } };
+  const semanal = S.presupCatPeriodo("Tortilla", 1);
+  const mensual = S.presupCatPeriodo("Tortilla", F("2026-07-01", "2026-07-31").factor);
+  assert.ok(mensual > semanal * 4, "el mes debe valer más de 4 semanas");
+  close(mensual, 60000 * 31 / 7, 0.01);
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);

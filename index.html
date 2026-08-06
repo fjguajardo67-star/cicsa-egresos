@@ -1078,7 +1078,7 @@ body.snav-min .side-theme span { display:none; }
     <!-- Referencia visual: objetivo semanal vs suma de categorías, actualizada en vivo al teclear -->
     <div id="presupTotalBar" style="position:sticky;top:0;z-index:5;display:grid;grid-template-columns:repeat(3,1fr);gap:12px;background:white;border:1.5px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
       <div>
-        <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">🎯 Presupuesto asignado ($)</div>
+        <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">🎯 Presupuesto asignado semanal ($)</div>
         <input type="number" id="presupObjetivo" class="bcard-input" min="0" step="1000" style="width:100%;font-weight:700"
           onchange="guardarObjetivoPresupuesto()" oninput="actualizarTotalPresupuesto()">
       </div>
@@ -1094,6 +1094,7 @@ body.snav-min .side-theme span { display:none; }
       </div>
     </div>
     <div id="presupNotaAdmin" style="display:none;font-size:13px;color:var(--txt2);background:var(--claro);border-radius:8px;padding:10px 14px;margin-bottom:14px">🔒 Solo un administrador puede modificar el presupuesto y las categorías. Lo estás viendo en modo lectura.</div>
+    <div id="presupProporcional" style="display:none;background:#EEF4FB;border:1.5px solid #9BB8D4;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px;color:var(--txt)"></div>
     <div id="presupCandado" style="display:none;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:12px 16px;margin-bottom:16px">
       <span style="font-size:13px;color:var(--txt)">🔒 <strong>Edición bloqueada.</strong> Para cambiar presupuestos o categorías, confirma tu contraseña.</span>
       <button class="btn btn-gold" style="padding:7px 14px" onclick="desbloquearPresupuesto()">🔓 Desbloquear edición</button>
@@ -1898,7 +1899,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-06-e";
+const APP_BUILD = "2026-08-06-f";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2479,6 +2480,24 @@ function gastosDelPeriodoSP(){
   // Semana con rango → por fecha real (cuadra con Auditoría). Semana vieja sin rango → su bolsa.
   if(wk && wk.ini && wk.fin) return allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=wk.ini && g.fecha<=wk.fin);
   return (wk?.gastos)||[];
+}
+// El presupuesto se captura POR SEMANA. Al revisar un rango (una quincena, un mes) hay que
+// escalarlo: comparar el gasto de 31 días contra la meta de 7 hacía que TODO saliera excedido
+// aunque el gasto fuera normal. La semana guardada vale 1 aunque tenga 6 u 8 días: es una
+// semana de trabajo del negocio, no una medida de tiempo.
+function factorPresupuestoPeriodo(p){
+  const per = p || getPeriodoSP();
+  if(per.modo !== "rango" || !per.ini || !per.fin) return { factor:1, dias:7, esRango:false };
+  const ini=new Date(per.ini+"T12:00:00"), fin=new Date(per.fin+"T12:00:00");
+  if(isNaN(ini) || isNaN(fin)) return { factor:1, dias:7, esRango:false };
+  const dias=Math.max(1, Math.round((fin-ini)/86400000)+1);   // ambos extremos incluidos
+  return { factor: dias/7, dias, esRango:true };
+}
+// Meta de una categoría YA prorrateada al periodo que se está viendo.
+function presupCatPeriodo(cat, factor){
+  const base=parseFloat((state.budget||{})[cat])||0;
+  const f=(factor!==undefined)?factor:factorPresupuestoPeriodo().factor;
+  return base*f;
 }
 function totalesPorCatPeriodo(){
   const t={};
@@ -3812,17 +3831,22 @@ function renderPresupuesto(){
   const puedeEditar = esAdmin && presupDesbloqueado();
   const p=getPeriodoSP();
   const lbl=document.getElementById("presupPeriodoLabel"); if(lbl) lbl.textContent=`— ${p.label}`;
+  const F=factorPresupuestoPeriodo(p);
   const totals=totalesPorCatPeriodo(), allCats=[...new Set([...catsActuales(),...Object.keys(totals)])];
   allCats.forEach(cat=>{
-    const presup=parseFloat(state.budget[cat])||0, gastado=totals[cat]||0, pct=presup>0?Math.min((gastado/presup)*100,100):0, over=presup>0&&gastado>presup;
+    // presupSemanal es lo que se guarda y lo que va en el input; presup es esa misma cifra ya
+    // llevada al periodo. Meterle la prorrateada al input la guardaría como semanal y
+    // multiplicaría el presupuesto cada vez que se guardara desde un rango.
+    const presupSemanal=parseFloat(state.budget[cat])||0;
+    const presup=presupSemanal*F.factor, gastado=totals[cat]||0, pct=presup>0?Math.min((gastado/presup)*100,100):0, over=presup>0&&gastado>presup;
     const div=document.createElement("div"); div.className="bcard";
     // Editar presupuesto: solo admin. El operativo lo ve en modo lectura.
     const editor = puedeEditar
       ? `<div style="margin-top:8px">
-          <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">Presupuesto:</div>
+          <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">Presupuesto semanal:</div>
           <div style="display:flex;gap:6px;align-items:center">
             <button onclick="saveSingleBudget('${cat}')" style="flex-shrink:0;padding:5px 10px;background:var(--vd);color:white;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;line-height:1">✓</button>
-            <input class="bcard-input" id="bp_${cat.replace(/\W/g,'_')}" type="number" value="${presup||''}" placeholder="0" style="flex:1;min-width:0;width:100%" oninput="actualizarTotalPresupuesto()">
+            <input class="bcard-input" id="bp_${cat.replace(/\W/g,'_')}" type="number" value="${presupSemanal||''}" placeholder="0" style="flex:1;min-width:0;width:100%" oninput="actualizarTotalPresupuesto()">
           </div>
         </div>`
       : "";
@@ -3841,6 +3865,13 @@ function renderPresupuesto(){
     grid.appendChild(div);
   });
   // Barra superior (objetivo + botones) y la nota, solo para admin.
+  const prop=document.getElementById("presupProporcional");
+  if(prop){
+    if(F.esRango && Math.abs(F.factor-1)>0.001){
+      prop.style.display="block";
+      prop.innerHTML=`📅 Rango de <strong>${F.dias} día${F.dias===1?"":"s"}</strong> = <strong>${F.factor.toFixed(2)} semanas</strong>. Las metas de abajo son tu presupuesto semanal <strong>× ${F.factor.toFixed(2)}</strong>; los campos siguen editando el <strong>semanal</strong>.`;
+    } else prop.style.display="none";
+  }
   const bar=document.getElementById("presupTotalBar"); if(bar) bar.style.display = puedeEditar ? "grid" : "none";
   const acciones=document.getElementById("presupAcciones"); if(acciones) acciones.style.display = puedeEditar ? "flex" : "none";
   const candado=document.getElementById("presupCandado");
@@ -3871,9 +3902,13 @@ let _presupGastadoPeriodo = 0;
 function actualizarTotalPresupuesto(){
   const sumaEl=document.getElementById("presupSuma"), difEl=document.getElementById("presupDif"), lblEl=document.getElementById("presupDifLbl");
   if(!sumaEl || !difEl) return;
-  let suma=0;
-  document.querySelectorAll("[id^='bp_']").forEach(el=>{ suma += parseFloat(el.value)||0; });
-  const objetivo=parseFloat(document.getElementById("presupObjetivo")?.value)||0;
+  // Los campos guardan la cifra SEMANAL; para comparar contra el gasto del periodo hay que
+  // llevar ambos lados a la misma escala.
+  const F=factorPresupuestoPeriodo();
+  let sumaSemanal=0;
+  document.querySelectorAll("[id^='bp_']").forEach(el=>{ sumaSemanal += parseFloat(el.value)||0; });
+  const suma=sumaSemanal*F.factor;
+  const objetivo=(parseFloat(document.getElementById("presupObjetivo")?.value)||0)*F.factor;
   const dif=objetivo-suma;
   sumaEl.textContent=fmt(suma);
   if(Math.abs(dif) < 0.005){
@@ -3975,10 +4010,11 @@ function renderSeguimientoVista(gastos, label){
 // ═══════════════════════════════════════════════════════════════════════════
 function exportarExcel(){
   const p=getPeriodoSP(), gastos=gastosDelPeriodoSP(), totals=totalesPorCatPeriodo(), wb=XLSX.utils.book_new();
+  const _fPresup=factorPresupuestoPeriodo(p).factor;
   const det=[["CICSA — Control de Egresos"],[`Periodo: ${p.label}`],[],["Fecha","Proveedor","Categoría","No. Factura","Importe","Notas"],...gastos.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map(g=>[g.fecha,g.proveedor,g.categoria,g.factura,g.importe,g.notas]),[],["","","","TOTAL",gastos.reduce((s,g)=>s+g.importe,0)]];
   const ws1=XLSX.utils.aoa_to_sheet(det); ws1["!cols"]=[{wch:12},{wch:30},{wch:26},{wch:14},{wch:14},{wch:30}]; XLSX.utils.book_append_sheet(wb,ws1,"Detalle");
-  const totalPresup=Object.values(state.budget).reduce((s,v)=>s+v,0), totalGast=gastos.reduce((s,g)=>s+g.importe,0);
-  const sum=[["CICSA — Resumen"],[`Periodo: ${p.label}`],[],["Categoría","Presupuesto","Gasto Real","Diferencia","Estado"],...[...new Set([...Object.keys(totals),...catsActuales()])].map(cat=>{const pr=state.budget[cat]||0,g=totals[cat]||0;return[cat,pr,g,pr-g,pr>0&&g>pr?"EXCEDIDO":"OK"];}),[], ["","TOTAL",totalPresup,totalGast,totalPresup-totalGast]];
+  const totalPresup=Object.values(state.budget).reduce((s,v)=>s+(parseFloat(v)||0),0)*_fPresup, totalGast=gastos.reduce((s,g)=>s+g.importe,0);
+  const sum=[["CICSA — Resumen"],[`Periodo: ${p.label}`],[],["Categoría","Presupuesto","Gasto Real","Diferencia","Estado"],...[...new Set([...Object.keys(totals),...catsActuales()])].map(cat=>{const pr=presupCatPeriodo(cat,_fPresup),g=totals[cat]||0;return[cat,pr,g,pr-g,pr>0&&g>pr?"EXCEDIDO":"OK"];}),[], ["","TOTAL",totalPresup,totalGast,totalPresup-totalGast]];
   const ws2=XLSX.utils.aoa_to_sheet(sum); ws2["!cols"]=[{wch:28},{wch:14},{wch:14},{wch:14},{wch:12}]; XLSX.utils.book_append_sheet(wb,ws2,"Resumen");
   XLSX.writeFile(wb,`Egresos_${(p.label||"periodo").replace(/[^A-Za-z0-9]/g,"_")}.xlsx`);
 }
@@ -3986,8 +4022,9 @@ function exportarExcel(){
 // CAMBIO 1: PDF con semáforo de colores
 function exportarPDF(){
   const {jsPDF}=window.jspdf, p=getPeriodoSP(), gastos=gastosDelPeriodoSP(), totals=totalesPorCatPeriodo();
+  const _fPresupPdf=factorPresupuestoPeriodo(p).factor;   // `p` se re-usa dentro del bucle
   const wk={label:p.label};
-  const totalGlobal=gastos.reduce((s,g)=>s+g.importe,0), totalPresup=Object.values(state.budget).reduce((s,v)=>s+v,0);
+  const totalGlobal=gastos.reduce((s,g)=>s+g.importe,0), totalPresup=Object.values(state.budget).reduce((s,v)=>s+(parseFloat(v)||0),0)*_fPresupPdf;
   const doc=new jsPDF({unit:"mm",format:"letter"});
   const PW=215.9,MAR=15,W=PW-MAR*2; let Y=MAR;
   const VD=[45,94,30],GO=[212,160,23],ME=[74,140,42],CL=[240,247,236],RED=[192,57,43],GRN=[46,139,87];
@@ -4013,7 +4050,7 @@ function exportarPDF(){
   doc.text("ESTADO",MAR+178,Y+4.5); Y+=7;
   Object.entries(totals).sort((a,b)=>b[1]-a[1]).forEach(([cat,val],i)=>{
     if(Y>250){ doc.addPage(); Y=MAR; }
-    const p=state.budget[cat]||0, over=p>0&&val>p;
+    const p=presupCatPeriodo(cat,_fPresupPdf), over=p>0&&val>p;
     doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6.5,"F");
     doc.setTextColor(...(over?RED:VD)); doc.setFontSize(7); doc.setFont("helvetica",over?"bold":"normal");
     doc.text(cat,MAR+3,Y+4.5);
