@@ -50,6 +50,8 @@ const FUNCS = [
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
+  "_cfdiTipoDesdeTexto", "filtrarCfdisConciliables", "autodetectarRfcPropio",
+  "rfcPropio", "guardarRfcPropio",
 ];
 
 const sandbox = {
@@ -57,6 +59,8 @@ const sandbox = {
   // Stubs para consolidarFacturaDividida (efectos de UI/persistencia fuera de alcance del test).
   confirm: () => true, alert: () => {}, save: () => {}, marcarBorrado: () => {},
   renderRevisionDuplicados: () => {}, document: { getElementById: () => null },
+  localStorage: (() => { const m = {}; return { getItem: k => (k in m ? m[k] : null),
+    setItem: (k, v) => { m[k] = String(v); }, removeItem: k => { delete m[k]; } }; })(),
 };
 vm.createContext(sandbox);
 for (const f of FUNCS) vm.runInContext(extractFunction(f), sandbox);
@@ -667,6 +671,89 @@ t("budget y cajaSaldoInicial se unen por llave", () => {
   assert.equal(m.budget["Hielo"], 40000);          // remoto se conserva
   assert.equal(m.budget["Gas"], 10000);
   assert.equal(Object.keys(m.cajaSaldoInicial).length, 2);
+});
+
+console.log("\n== CFDI: qué es realmente un gasto ==");
+// Caso real: la Consulta del SAT devolvía facturas emitidas por la propia CICSA
+// (RFC CIC190426SD4) y complementos de pago, y la conciliación pedía capturarlos.
+const RFC_CICSA = "CIC190426SD4";
+const cfdisReales = [
+  { folio: "B876F3AC", rfc: RFC_CICSA, proveedor: "COMEDORES INDUSTRIALES DE CUAUHTEMOC", fecha: "2026-07-04", total: 1837.80, tipo: "I" },
+  { folio: "09B01E9A", rfc: RFC_CICSA, proveedor: "COMEDORES INDUSTRIALES DE CUAUHTEMOC", fecha: "2026-07-10", total: 970.20,  tipo: "P" },
+  { folio: "A5909D50", rfc: RFC_CICSA, proveedor: "COMEDORES INDUSTRIALES DE CUAUHTEMOC", fecha: "2026-07-25", total: 2205.20, tipo: "P" },
+  { folio: "WM-001",   rfc: "WMA991231AAA", proveedor: "NUEVA WAL MART DE MEXICO", fecha: "2026-07-06", total: 24946.02, tipo: "I" },
+  { folio: "PB-315",   rfc: "PBA010101BBB", proveedor: "POLLO BAL", fecha: "2026-07-07", total: 26484, tipo: "I" },
+  { folio: "PB-315P",  rfc: "PBA010101BBB", proveedor: "POLLO BAL", fecha: "2026-07-12", total: 26484, tipo: "P" },
+];
+t("las facturas que emite la propia empresa no son gastos", () => {
+  const r = S.filtrarCfdisConciliables(cfdisReales, RFC_CICSA);
+  assert.ok(!r.utiles.some(c => c.rfc === RFC_CICSA), "quedó un CFDI emitido por la empresa");
+  assert.equal(r.omitidos.PROPIO, 3);
+});
+t("el complemento de pago de un proveedor no se pide capturar", () => {
+  const r = S.filtrarCfdisConciliables(cfdisReales, RFC_CICSA);
+  assert.ok(!r.utiles.some(c => c.folio === "PB-315P"), "el complemento de pago pasó el filtro");
+  assert.equal(r.omitidos.P, 1);
+});
+t("solo sobreviven las 2 facturas reales de proveedor (Walmart y Pollo Bal)", () => {
+  const r = S.filtrarCfdisConciliables(cfdisReales, RFC_CICSA);
+  assert.deepEqual(r.utiles.map(c => c.folio).sort(), ["PB-315", "WM-001"]);
+});
+t("sin RFC configurado se filtra por tipo, pero las propias siguen pasando", () => {
+  const r = S.filtrarCfdisConciliables(cfdisReales, "");
+  assert.equal(r.omitidos.P, 3);            // los 3 complementos de pago sí se van
+  assert.equal(r.utiles.length, 3);         // quedan las 3 de tipo I
+});
+t("CFDIs viejos sin tipo (guardados antes del fix) no se descartan", () => {
+  const r = S.filtrarCfdisConciliables([{ folio: "X", rfc: "OTRO010101XXX", total: 100 }], RFC_CICSA);
+  assert.equal(r.utiles.length, 1);
+});
+t("nómina, traslado y nota de crédito quedan fuera", () => {
+  const r = S.filtrarCfdisConciliables([
+    { folio: "n", rfc: "A", total: 1, tipo: "N" },
+    { folio: "t", rfc: "A", total: 1, tipo: "T" },
+    { folio: "e", rfc: "A", total: 1, tipo: "E" },
+    { folio: "i", rfc: "A", total: 1, tipo: "I" },
+  ], "");
+  assert.deepEqual(r.utiles.map(c => c.folio), ["i"]);
+  assert.equal(r.omitidos.N, 1); assert.equal(r.omitidos.T, 1); assert.equal(r.omitidos.E, 1);
+});
+t("el tipo del Excel del SAT se lee como palabra o como letra", () => {
+  assert.equal(S._cfdiTipoDesdeTexto("Pago"), "P");
+  assert.equal(S._cfdiTipoDesdeTexto("Ingreso"), "I");
+  assert.equal(S._cfdiTipoDesdeTexto("Egreso"), "E");
+  assert.equal(S._cfdiTipoDesdeTexto("Nómina"), "N");
+  assert.equal(S._cfdiTipoDesdeTexto("Traslado"), "T");
+  assert.equal(S._cfdiTipoDesdeTexto("P"), "P");
+  assert.equal(S._cfdiTipoDesdeTexto(""), "");
+});
+t("parseCFDIXML saca tipo y receptor del XML", () => {
+  const xml = `<cfdi:Comprobante Version="4.0" Serie="A" Folio="12" Fecha="2026-07-10T10:00:00" SubTotal="0" Total="0" TipoDeComprobante="P">
+    <cfdi:Emisor Rfc="${RFC_CICSA}" Nombre="COMEDORES INDUSTRIALES DE CUAUHTEMOC"/>
+    <cfdi:Receptor Rfc="CLI010101AAA" Nombre="CLIENTE SA"/>
+    <tfd:TimbreFiscalDigital UUID="09B01E9A-23DA-4AD0-0000-000000000000"/></cfdi:Comprobante>`;
+  const c = S.parseCFDIXML(xml);
+  assert.equal(c.tipo, "P");
+  assert.equal(c.rfc, RFC_CICSA);
+  assert.equal(c.rfcReceptor, "CLI010101AAA");
+  assert.equal(S.filtrarCfdisConciliables([c], RFC_CICSA).utiles.length, 0);
+});
+
+t("el RFC propio se deduce: es el único que aparece en TODOS los comprobantes", () => {
+  // Empate a propósito: 3 facturas emitidas a un cliente grande y 3 recibidas de proveedores.
+  // Contar solo receptores daría empate y podía elegir al cliente; contar ambos papeles no falla.
+  const mezcla = [
+    { rfc: RFC_CICSA, rfcReceptor: "CLIENTE01AAA" }, { rfc: RFC_CICSA, rfcReceptor: "CLIENTE01AAA" },
+    { rfc: RFC_CICSA, rfcReceptor: "CLIENTE01AAA" }, { rfc: "WMA991231AAA", rfcReceptor: RFC_CICSA },
+    { rfc: "PBA010101BBB", rfcReceptor: RFC_CICSA }, { rfc: "EVA010101CCC", rfcReceptor: RFC_CICSA },
+  ];
+  S.localStorage.removeItem("cicsa_rfc_propio");
+  assert.equal(S.autodetectarRfcPropio(mezcla), RFC_CICSA);
+});
+t("sin mayoría clara no adivina el RFC: lo deja en blanco", () => {
+  S.localStorage.removeItem("cicsa_rfc_propio");
+  assert.equal(S.autodetectarRfcPropio([{ rfc: "A", rfcReceptor: "B" }, { rfc: "C", rfcReceptor: "D" },
+                                        { rfc: "E", rfcReceptor: "F" }, { rfc: "G", rfcReceptor: "H" }]), "");
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
