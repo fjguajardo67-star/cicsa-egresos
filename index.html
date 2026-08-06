@@ -1886,7 +1886,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-06-c";
+const APP_BUILD = "2026-08-06-d";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5899,13 +5899,89 @@ function checkDuplicateForm(){
   if(dup){info.innerHTML=`<span class="dup-badge">${dup.gasto.proveedor}</span> ${fmt(dup.gasto.importe)} · ${fmtDate(dup.gasto.fecha)} · ${dup.reason}`;warn.style.display="block";}
   else warn.style.display="none";
 }
+// ── Adjuntos de Gmail ya revisados ──────────────────────────────────
+// Las facturas reaparecian por tres motivos distintos: el registro de "vistos" del servidor vive
+// en un archivo del disco de Railway, que se borra en cada redespliegue; marcar un adjunto como
+// atendido solo se guardaba en el navegador de quien lo hizo; y el detector solo miraba el id del
+// correo, asi que un reenvio del proveedor entraba como nuevo. El registro de abajo vive en
+// Firestore: sobrevive a los reinicios y lo comparte todo el equipo.
+
+// Huella del CONTENIDO: el mismo archivo da la misma huella aunque llegue en otro correo o con
+// otro nombre. Se exige ademas el mismo tamano exacto, para que una colision no oculte una
+// factura buena. En adjuntos grandes se muestrea: sigue distinguiendo dos facturas del mismo
+// proveedor porque los importes caen dentro del muestreo y el tamano casi nunca coincide.
+function _gmailHuella(b64){
+  const s=String(b64||""); if(!s) return "";
+  const paso = s.length > 500000 ? 3 : 1;
+  let h1=0x811c9dc5, h2=0x01000193;
+  for(let i=0;i<s.length;i+=paso){
+    const c=s.charCodeAt(i);
+    h1=((h1^c)*16777619)>>>0;
+    h2=(((h2+c)*31)+(h2>>>7))>>>0;
+  }
+  return s.length.toString(36)+"-"+h1.toString(36)+"-"+h2.toString(36);
+}
+
+const GMAIL_REV_COL = "gmail_revisados";
+let _gmailRevisados = null;
+async function cargarGmailRevisados(forzar){
+  if(_gmailRevisados && !forzar) return _gmailRevisados;
+  _gmailRevisados = await fbListCollection(GMAIL_REV_COL);
+  return _gmailRevisados;
+}
+// estado: "capturado" (se mando a Capturar) | "descartado" (no era un gasto).
+async function registrarGmailRevisado(item, estado){
+  if(!item) return;
+  const huella = item._huella || _gmailHuella(item.data_b64);
+  if(!huella) return;
+  const id = ("h"+huella).replace(/[^A-Za-z0-9_-]/g,"_");
+  const data = { huella, msgId:item.msg_id||"", filename:item.filename||"", sender:item.sender||"",
+                 subject:item.subject||"", fechaCorreo:item.date||"", estado,
+                 por:(currentNombre||currentUser?.email||""), ts:new Date().toISOString() };
+  try{
+    await cargarGmailRevisados();
+    const i=_gmailRevisados.findIndex(r=>r.id===id);
+    if(i>=0) _gmailRevisados[i]={id,...data}; else _gmailRevisados.push({id,...data});
+    await fbUpdateDoc(GMAIL_REV_COL, id, data);
+  }catch(e){ console.warn("registrarGmailRevisado:",e); }
+}
+
 function filterGmailDuplicates(items){
   const todos=allGastosAllWeeks();
-  return items.map(item=>{
-    const byMsgId=todos.find(g=>g._gmailMsgId===item.msg_id);if(byMsgId)return{...item,_dupReason:`Ya capturada`,_isDup:true};
-    const byFile=todos.find(g=>g._gmailFile===item.filename);if(byFile)return{...item,_dupReason:`Archivo ya procesado`,_isDup:true};
-    return{...item,_isDup:false};
+  const porHuella={}, porMsg={};
+  (_gmailRevisados||[]).forEach(r=>{ if(r.huella) porHuella[r.huella]=r; if(r.msgId) porMsg[r.msgId]=r; });
+  const enEstaTanda={};
+  return items.map((item,i)=>{
+    const huella = item._huella || _gmailHuella(item.data_b64);
+    const marca=(razon)=>({...item,_huella:huella,_dupReason:razon,_isDup:true});
+    const quien=(r)=>r.por?` por ${r.por}`:"";
+    // 1) Registro compartido: es el unico que sobrevive a reiniciar el servidor.
+    const rh=huella&&porHuella[huella];
+    if(rh) return marca(rh.estado==="descartado"?`Ya descartada${quien(rh)}`:`Ya revisada${quien(rh)}`);
+    const rm=item.msg_id&&porMsg[item.msg_id];
+    if(rm) return marca(rm.estado==="descartado"?`Correo ya descartado${quien(rm)}`:`Correo ya revisado${quien(rm)}`);
+    // 2) Ya hay un gasto capturado desde este correo.
+    const byMsgId=todos.find(g=>g._gmailMsgId&&g._gmailMsgId===item.msg_id);
+    if(byMsgId) return marca("Ya capturada");
+    // 3) El mismo archivo repetido dentro de esta misma descarga.
+    if(huella && enEstaTanda[huella]) return marca(`Repetida en esta descarga (igual a «${enEstaTanda[huella]}»)`);
+    if(huella) enEstaTanda[huella]=item.filename||("adjunto "+(i+1));
+    // 4) Regla original: mismo nombre de archivo que un gasto ya capturado por Gmail.
+    const byFile=todos.find(g=>g._gmailFile&&g._gmailFile===item.filename);
+    if(byFile) return marca("Archivo ya procesado");
+    return {...item,_huella:huella,_isDup:false};
   });
+}
+
+// Quita de la lista, de un jalon, todo lo ya revisado. Con 30 adjuntos, hacerlo uno por uno era
+// justo el trabajo que se queria evitar.
+function ocultarGmailRevisados(){
+  const marcados=filterGmailDuplicates(gmailItems);
+  let n=0;
+  marcados.forEach((m,i)=>{ if(m._isDup && gmailItems[i] && !gmailItems[i]._done){ gmailItems[i]._done=true; n++; } });
+  guardarGmailItemsLocal();
+  renderGmailInbox();
+  setStatus("gmailStatus", n?`✅ ${n} adjunto(s) ya revisados se quitaron de la lista.`:"No hay adjuntos ya revisados en la lista.", n?"ok":"err");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6215,18 +6291,26 @@ async function fetchGmail(includeSeen=false){
     const nuevos=(data.items||[]).filter(i=>!vistos.has(i.filename));
     gmailItems=[...previos, ...nuevos];
     guardarGmailItemsLocal();
+    await cargarGmailRevisados(true);   // fresco: otro del equipo pudo revisarlas hace un minuto
     if(gmailItems.length===0)setStatus("gmailStatus","✅ No se encontraron facturas.","ok");
-    else{const yaCap=filterGmailDuplicates(gmailItems).filter(i=>i._isDup).length;setStatus("gmailStatus",`✅ <strong>${gmailItems.length} adjunto(s)</strong>${yaCap?` — ${yaCap} ya capturados (puedes "Leer igual")`:" nuevos"}.`,"ok");renderGmailInbox();document.getElementById("gmailInboxCard").style.display="block";}}catch(err){setStatus("gmailStatus","❌ "+err.message,"err");}
+    else{const yaCap=filterGmailDuplicates(gmailItems).filter(i=>i._isDup).length;setStatus("gmailStatus",`✅ <strong>${gmailItems.length} adjunto(s)</strong>${yaCap?` — ${yaCap} ya revisados antes (puedes ocultarlos o "Leer igual")`:" nuevos"}.`,"ok");renderGmailInbox();document.getElementById("gmailInboxCard").style.display="block";}}catch(err){setStatus("gmailStatus","❌ "+err.message,"err");}
   document.getElementById("btnGmailFetch").disabled=false;
 }
 
-function renderGmailInbox(){
+async function renderGmailInbox(){
+  await cargarGmailRevisados();
   const list=document.getElementById("gmailInboxList");
   document.getElementById("gmailCount").textContent=`${gmailItems.length} adjunto(s)`;
   list.innerHTML="";
   const filteredItems=filterGmailDuplicates(gmailItems);
   const dupCount=filteredItems.filter(i=>i._isDup).length;
-  if(dupCount>0){const n=document.createElement("div");n.style.cssText="padding:10px 14px;background:#FFF3E0;border-radius:8px;font-size:12px;color:#E65100;margin-bottom:10px;border-left:4px solid #E65100";n.innerHTML=`⚠ <strong>${dupCount} adjunto(s)</strong> ya fueron capturados anteriormente.`;list.appendChild(n);}
+  if(dupCount>0){
+    const n=document.createElement("div");
+    n.style.cssText="padding:10px 14px;background:#FFF3E0;border-radius:8px;font-size:12px;color:#E65100;margin-bottom:10px;border-left:4px solid #E65100;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap";
+    n.innerHTML=`<span>⚠ <strong>${dupCount} adjunto(s)</strong> ya fueron revisados antes. Se marcan abajo con el motivo.</span>` +
+      `<button class="btn btn-light" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="ocultarGmailRevisados()">🧹 Ocultar los ${dupCount} ya revisados</button>`;
+    list.appendChild(n);
+  }
   filteredItems.forEach((item,idx)=>{
     if(item._done)return;
     const div=document.createElement("div");div.id=`gmail-item-${idx}`;
@@ -6290,6 +6374,7 @@ async function gmailProcessItem(idx){
   else capturedDataURL=null;
   gmailItems[idx]._done=true;
   guardarGmailItemsLocal();
+  registrarGmailRevisado(item,"capturado");   // en segundo plano: no debe frenar la lectura
   const el=document.getElementById(`gmail-item-${idx}`);if(el){el.style.opacity="0.4";el.innerHTML=`<div style="padding:8px;color:var(--vm);font-size:13px">✅ Procesando…</div>`;}
   showPage("captura");   // sin btn: showPage marca sola la pestana correcta (con el sidebar, el primer .nav-btn ya no es Capturar sino Resumen)
   const preview=document.getElementById("imgPreview");
@@ -6300,7 +6385,15 @@ async function gmailProcessItem(idx){
   document.getElementById("fFecha").value=todayStr();document.getElementById("fCategoria").selectedIndex=0;
   setTimeout(async()=>{await leerDocumento();if(el)el.innerHTML=`<div style="padding:8px;color:var(--vm);font-size:13px">✅ Enviado a Capturar</div>`;},300);
 }
-function gmailSkipItem(idx){gmailItems[idx]._done=true;guardarGmailItemsLocal();const el=document.getElementById(`gmail-item-${idx}`);if(el) el.remove();}
+// Descartar ahora vale para TODO el equipo (antes solo para este navegador), asi que la misma
+// factura no le vuelve a aparecer a nadie. Se revierte con "Incluir ya revisadas" + "Leer igual".
+function gmailSkipItem(idx){
+  const item=gmailItems[idx]; if(!item) return;
+  gmailItems[idx]._done=true;
+  guardarGmailItemsLocal();
+  registrarGmailRevisado(item,"descartado");
+  const el=document.getElementById(`gmail-item-${idx}`); if(el) el.remove();
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FORMA DE PAGO
