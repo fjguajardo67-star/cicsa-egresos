@@ -1899,7 +1899,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-06-f";
+const APP_BUILD = "2026-08-06-g";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3730,7 +3730,7 @@ async function desbloquearPresupuesto(){
     const cred=firebase.auth.EmailAuthProvider.credential(email, pass);
     await currentUser.reauthenticateWithCredential(cred);
   }catch(e){
-    alert("❌ Contraseña incorrecta. El presupuesto sigue bloqueado.");
+    alert("❌ "+_msgAuth(e)+"\n\nEl presupuesto sigue bloqueado.");
     return;
   }
   _presupDesbloqueadoHasta = Date.now() + PRESUP_MIN_DESBLOQUEO*60000;
@@ -7049,12 +7049,48 @@ function toggleUserMenu() {
   }), 100);
 }
 
-function cambiarPassword() {
-  const newPass = prompt("Nueva contraseña (mínimo 6 caracteres):");
-  if(!newPass || newPass.length < 6) { alert("Contraseña muy corta."); return; }
-  currentUser.updatePassword(newPass)
-    .then(() => alert("✅ Contraseña actualizada."))
-    .catch(e => alert("Error: " + e.message));
+// Traduce los códigos de Firebase: "auth/weak-password" no le dice nada a nadie.
+function _msgAuth(e){
+  const c=(e&&e.code)||"";
+  if(c==="auth/wrong-password"||c==="auth/invalid-credential") return "La contraseña actual no es correcta.";
+  if(c==="auth/weak-password") return "La contraseña es muy débil: usa al menos 6 caracteres.";
+  if(c==="auth/too-many-requests") return "Demasiados intentos. Espera unos minutos y vuelve a intentar.";
+  if(c==="auth/network-request-failed") return "Sin conexión. Revisa tu internet.";
+  if(c==="auth/requires-recent-login") return "Por seguridad hay que confirmar tu contraseña actual.";
+  return (e&&e.message)||"Error desconocido.";
+}
+// Firebase exige autenticación RECIENTE para cambiar la contraseña. Con la sesión abierta desde
+// hace horas —lo normal en esta app— updatePassword truena con auth/requires-recent-login, así
+// que primero se confirma la contraseña actual. Si no la recuerda, se le ofrece el correo de
+// restablecimiento en vez de dejarlo atorado.
+async function cambiarPassword(){
+  const email=(currentUser&&currentUser.email)||"";
+  if(!email){ alert("No hay sesión activa. Vuelve a entrar."); return; }
+  const actual=prompt(`Confirma tu contraseña ACTUAL.\n\nCuenta: ${email}\n\n(Si no la recuerdas, deja esto vacío y te mando el correo para restablecerla.)`);
+  if(actual===null) return;
+  if(!actual){
+    if(!confirm(`¿Enviar el correo de restablecimiento a ${email}?`)) return;
+    try{ await auth.sendPasswordResetEmail(email); alert(`✅ Correo enviado a ${email}. Abre el enlace para poner una nueva contraseña.`); }
+    catch(e){ alert("No se pudo enviar: "+_msgAuth(e)); }
+    return;
+  }
+  try{
+    const cred=firebase.auth.EmailAuthProvider.credential(email, actual);
+    await currentUser.reauthenticateWithCredential(cred);
+  }catch(e){
+    if(confirm(`❌ ${_msgAuth(e)}\n\n¿Te mando el correo de restablecimiento a ${email}?`)){
+      try{ await auth.sendPasswordResetEmail(email); alert(`✅ Correo enviado a ${email}.`); }
+      catch(e2){ alert("No se pudo enviar: "+_msgAuth(e2)); }
+    }
+    return;
+  }
+  const nueva=prompt("Nueva contraseña (mínimo 6 caracteres):");
+  if(nueva===null) return;
+  if(!nueva || nueva.length<6){ alert("Contraseña muy corta: mínimo 6 caracteres."); return; }
+  try{
+    await currentUser.updatePassword(nueva);
+    alert("✅ Contraseña actualizada.\n\nEs la misma que usas para desbloquear la edición del presupuesto.");
+  }catch(e){ alert("No se pudo cambiar: "+_msgAuth(e)); }
 }
 
 // ── Chat de equipo ─────────────────────────────────────────────────────────────
