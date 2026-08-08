@@ -758,6 +758,7 @@ body.snav-min .side-theme span { display:none; }
     <div class="sn-group">
       <h4>Análisis</h4>
       <button class="nav-btn" onclick="showPage('presupuesto',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/></svg><span class="nb-lbl">Presupuesto</span></button>
+      <button class="nav-btn" id="navBalance" style="display:none" onclick="showPage('balance',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 4v16M4 8h16"/><path d="M7 8l-3 6h6zM17 8l-3 6h6z"/></svg><span class="nb-lbl">Balance</span></button>
       <button class="nav-btn" onclick="showPage('reporte',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 17l6-6 4 4 7-8"/><path d="M17 7h4v4"/></svg><span class="nb-lbl">Seguimiento</span></button>
       <button class="nav-btn" id="navReportes" onclick="showPage('reportes',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><span class="nb-lbl">Auditoría</span></button>
       <button class="nav-btn" id="navSat" onclick="showPage('sat',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 10h16M5 10l7-6 7 6M6 10v9M18 10v9M4 21h16"/></svg><span class="nb-lbl">SAT</span></button>
@@ -1117,6 +1118,20 @@ body.snav-min .side-theme span { display:none; }
 </div>
 
 <!-- ═══════════════ PAGE: REPORTE ═══════════════ -->
+<div class="container page" id="page-balance">
+  <div class="card">
+    <div class="card-title">⚖️ Balance operativo <span id="balancePeriodoLabel" style="font-weight:400;color:var(--txt2)"></span></div>
+    <p style="font-size:13px;color:var(--txt2);margin-bottom:14px">¿Entró más de lo que salió? Compara lo facturado al cliente y las ventas en efectivo contra los egresos capturados. Información reservada.</p>
+    <div id="balancePeriodoSel" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px"></div>
+    <div id="balanceContenido"></div>
+    <div class="btn-row" id="balanceAcciones" style="margin-top:16px;display:none">
+      <button class="btn btn-gold" onclick="exportarBalancePDF()">📄 Reporte del periodo (PDF)</button>
+      <button class="btn btn-light" onclick="exportarBalanceExcel()">📊 Exportar Excel</button>
+      <button class="btn btn-light" onclick="bloquearPresupuesto()">🔒 Bloquear</button>
+    </div>
+  </div>
+</div>
+
 <div class="container page" id="page-reporte">
   <div class="card" style="margin-bottom:16px">
     <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
@@ -1901,7 +1916,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-07-d";
+const APP_BUILD = "2026-08-07-f";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2782,6 +2797,9 @@ function showPage(name,btn){
   if(name==="resumen")     renderResumen();
   if(name==="gastos")     { pintarSelectorPeriodoSP("gastosPeriodoSel","renderGastos"); renderGastos(); }
   if(name==="presupuesto"){ pintarSelectorPeriodoSP("presupPeriodoSel","renderPresupuesto"); renderPresupuesto(); }
+  if(name==="balance"){    pintarSelectorPeriodoSP("balancePeriodoSel","renderBalance"); renderBalance();
+                           // Los CFDI viven en la nube: si aún no se cargan, se piden y se repinta.
+                           if(!_cfdisStore && currentRole==="admin") cargarCfdisStore().then(()=>renderBalance()).catch(()=>{}); }
   if(name==="reporte"){    pintarSelectorPeriodoSP("reportePeriodoSel","renderReporteActual"); renderReporteActual(); }
   if(name==="gmail")       checkGmailStatus();
   if(name==="pagos")       { restaurarPagosPeriodo(); renderPagos(); }
@@ -3863,30 +3881,41 @@ function partidasExpandidas(gastos){
 const PRESUP_MIN_DESBLOQUEO = 10;
 let _presupDesbloqueadoHasta = 0, _presupTimer = null;
 function presupDesbloqueado(){ return Date.now() < _presupDesbloqueadoHasta; }
-async function desbloquearPresupuesto(){
-  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede modificar el presupuesto."); return; }
+// Reautenticación compartida por las pantallas sensibles: el presupuesto y el balance. Pide la
+// contraseña de la PROPIA cuenta y abre una ventana corta; una sola confirmación sirve para las
+// dos, que es menos fricción sin perder el control.
+async function _reautenticarAdmin(motivo){
+  if(currentRole!=="admin"){ alert(`🔒 Solo un administrador puede ${motivo}.`); return false; }
   const email=(currentUser&&currentUser.email)||"";
-  if(!email){ alert("No hay sesión activa. Vuelve a entrar."); return; }
-  const pass=prompt(`Confirma TU contraseña para editar el presupuesto.\n\nCuenta: ${email}\nLa edición queda abierta ${PRESUP_MIN_DESBLOQUEO} minutos.`);
-  if(pass===null) return;
-  if(!pass){ alert("Contraseña vacía."); return; }
+  if(!email){ alert("No hay sesión activa. Vuelve a entrar."); return false; }
+  const pass=prompt(`Confirma TU contraseña para ${motivo}.\n\nCuenta: ${email}\nQueda abierto ${PRESUP_MIN_DESBLOQUEO} minutos.`);
+  if(pass===null) return false;
+  if(!pass){ alert("Contraseña vacía."); return false; }
   try{
     const cred=firebase.auth.EmailAuthProvider.credential(email, pass);
     await currentUser.reauthenticateWithCredential(cred);
-  }catch(e){
-    alert("❌ "+_msgAuth(e)+"\n\nEl presupuesto sigue bloqueado.");
-    return;
-  }
+  }catch(e){ alert("❌ "+_msgAuth(e)); return false; }
   _presupDesbloqueadoHasta = Date.now() + PRESUP_MIN_DESBLOQUEO*60000;
-  // Se vuelve a cerrar solo: dejar la edición abierta en una pantalla compartida es el riesgo real.
+  // Se vuelve a cerrar solo: dejar esto abierto en una pantalla compartida es el riesgo real.
   if(_presupTimer) clearTimeout(_presupTimer);
-  _presupTimer=setTimeout(()=>{ _presupDesbloqueadoHasta=0; if(document.getElementById("budgetGrid")) renderPresupuesto(); }, PRESUP_MIN_DESBLOQUEO*60000+500);
-  renderPresupuesto();
+  _presupTimer=setTimeout(()=>{
+    _presupDesbloqueadoHasta=0;
+    if(document.getElementById("budgetGrid")) renderPresupuesto();
+    if(document.getElementById("balanceContenido")) renderBalance();
+  }, PRESUP_MIN_DESBLOQUEO*60000+500);
+  return true;
+}
+async function desbloquearPresupuesto(){
+  if(await _reautenticarAdmin("modificar el presupuesto")) renderPresupuesto();
+}
+async function desbloquearBalance(){
+  if(await _reautenticarAdmin("ver el balance")) renderBalance();
 }
 function bloquearPresupuesto(){
   _presupDesbloqueadoHasta=0;
   if(_presupTimer){ clearTimeout(_presupTimer); _presupTimer=null; }
-  renderPresupuesto();
+  if(document.getElementById("budgetGrid")) renderPresupuesto();
+  if(document.getElementById("balanceContenido")) renderBalance();
 }
 
 // ── Categorías: agregar, renombrar, eliminar ────────────────────────
@@ -4013,6 +4042,252 @@ function restaurarCategorias(){
   if(!confirm("¿Volver a la lista de categorías de fábrica?\n\nNo toca los gastos ya capturados: si alguno usa una categoría que quites, seguirá apareciendo abajo como suelta.")) return;
   state.categorias=[...CATS];
   save(); renderPresupuesto();
+}
+
+// ── Balance operativo del periodo ───────────────────────────────────
+// Responde una sola pregunta: ¿entró más de lo que salió? NO es contabilidad ni una balanza de
+// comprobación — no hay partida doble, ni cuentas, ni activos.
+//
+// Criterios, definidos con la operación:
+//  · Los cortes de caja son ventas EN EFECTIVO NO FACTURADAS: se SUMAN a lo facturado sin
+//    duplicar, porque por ellas nunca se emite CFDI.
+//  · Del CFDI se toma el SUBTOTAL: el IVA es un impuesto trasladado, no un ingreso.
+//  · Solo cuenta lo que EMITIÓ la empresa (RFC propio). Lo que le facturan a ella es egreso.
+//  · Las notas de crédito (tipo E) restan; los complementos de pago (P) no son venta nueva.
+//  · Los retiros de caja NO son salida: es efectivo que se movió, y lo que se pagó con él ya
+//    está capturado como gasto. Se informan aparte para no contarlos dos veces.
+function balanceOperativo(cfdis, ini, fin, rfcEmpresa){
+  const propio=(rfcEmpresa||"").trim().toUpperCase();
+  const enRango=(f)=>!!f && (!ini || f>=ini) && (!fin || f<=fin);
+  let facturado=0, notasCredito=0, nFacturas=0;
+  (cfdis||[]).forEach(c=>{
+    if(!c || c.ignorado) return;
+    if(!propio || (c.rfc||"").trim().toUpperCase()!==propio) return;   // solo lo EMITIDO por nosotros
+    if(!enRango(c.fecha)) return;
+    const t=(c.tipo||"I").toUpperCase().slice(0,1);
+    const sub=parseFloat(c.subtotal)||0;
+    const monto= sub>0 ? sub : (parseFloat(c.total)||0);   // CFDIs guardados antes de leer el subtotal
+    if(t==="I"){ facturado+=monto; nFacturas++; }
+    else if(t==="E"){ notasCredito+=monto; }
+  });
+  const cortes=(typeof todosLosCortes==="function"?todosLosCortes():[]).filter(c=>enRango(c.fecha));
+  const efectivo=cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  const retiros=(typeof todosLosRetiros==="function"?todosLosRetiros():[]).filter(r=>enRango(r.fecha))
+    .reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
+  const gastos=(typeof allGastosAllWeeks==="function"?allGastosAllWeeks():[]).filter(g=>enRango(g.fecha));
+  const salidas=gastos.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+  const entradas=facturado-notasCredito+efectivo;
+  return {
+    facturado, notasCredito, nFacturas, efectivo, nCortes:cortes.length, retiros,
+    entradas, salidas, nGastos:gastos.length,
+    resultado: entradas-salidas,
+    margen: entradas>0 ? ((entradas-salidas)/entradas)*100 : 0,
+  };
+}
+
+// Rango del periodo elegido, en fechas concretas (la semana guardada trae ini/fin propios).
+function _rangoBalance(){
+  const p=getPeriodoSP();
+  if(p.modo==="rango") return { ini:p.ini||"", fin:p.fin||"", label:p.label };
+  const wk=state.weeks.find(w=>w.id===p.weekId);
+  return { ini:wk?.ini||"", fin:wk?.fin||"", label:p.label };
+}
+// Mismo desglose que muestra Auditoría, para que el reporte y esa pantalla cuadren.
+function _egresosPorProveedor(){
+  const t={};
+  gastosDelPeriodoSP().forEach(g=>{ const p=g.proveedor||"—"; t[p]=(t[p]||0)+(parseFloat(g.importe)||0); });
+  return Object.entries(t).sort((a,b)=>b[1]-a[1]);
+}
+function _datosBalance(){
+  const r=_rangoBalance();
+  const rfc=(typeof rfcPropio==="function")?rfcPropio():"";
+  return { ...r, rfc, b: balanceOperativo(_cfdisStore||[], r.ini, r.fin, rfc), porCat: totalesPorCatPeriodo() };
+}
+
+function renderBalance(){
+  const cont=document.getElementById("balanceContenido"); if(!cont) return;
+  const acciones=document.getElementById("balanceAcciones");
+  const sel=document.getElementById("balancePeriodoSel");
+  const ocultar=(v)=>{ if(acciones) acciones.style.display=v?"none":"flex"; if(sel) sel.style.display=v?"none":"flex"; };
+  const esAdmin=(typeof currentRole!=="undefined" && currentRole==="admin");
+  // Documento sensible: ni la pantalla ni la exportación se muestran a quien no es admin, y
+  // tampoco aparece ninguna cifra de esto en el Resumen.
+  if(!esAdmin){
+    ocultar(true);
+    cont.innerHTML=`<div style="background:var(--claro);border-radius:10px;padding:16px;font-size:13px;color:var(--txt2)">🔒 El balance del periodo es información reservada. Solo un administrador puede consultarlo.</div>`;
+    return;
+  }
+  if(!presupDesbloqueado()){
+    ocultar(true);
+    cont.innerHTML=`<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <span style="font-size:13px">🔒 <strong>Documento sensible.</strong> Confirma tu contraseña para consultar el balance.</span>
+      <button class="btn btn-gold" style="padding:7px 14px" onclick="desbloquearBalance()">🔓 Ver balance</button></div>`;
+    return;
+  }
+  ocultar(false);
+  const { b, rfc, label } = _datosBalance();
+  const lbl=document.getElementById("balancePeriodoLabel"); if(lbl) lbl.textContent=`— ${label}`;
+  const sano=b.resultado>=0;
+  const aviso = !rfc
+    ? `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px">⚠️ Falta el <strong>RFC de tu empresa</strong> (se pone en la pantalla SAT): sin él no se puede saber cuáles CFDI emitiste tú, y lo facturado sale en cero.</div>`
+    : (b.nFacturas===0
+      ? `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px">ℹ️ No hay <strong>facturas emitidas</strong> en este periodo. Súbelas como XML en la pantalla <strong>SAT</strong> para que aparezcan aquí.</div>`
+      : "");
+  const fila=(etq,val,sub,color)=>`<tr><td style="padding:9px 4px">${etq}${sub?`<div style="font-size:11px;color:var(--txt2)">${sub}</div>`:""}</td>`+
+    `<td class="amount-cell" style="padding:9px 4px;color:${color||"var(--txt)"}">${fmt(val)}</td></tr>`;
+  const cats=Object.entries(totalesPorCatPeriodo()).sort((a,b2)=>b2[1]-a[1]);
+  const totCats=cats.reduce((s,[,v])=>s+v,0);
+  cont.innerHTML = aviso + `
+    <div class="summary-grid" style="margin-bottom:16px">
+      <div class="scard"><div class="scard-label">⬆️ Entradas</div><div class="scard-val" style="color:var(--vd)">${fmt(b.entradas)}</div><div class="scard-sub">facturado + efectivo</div></div>
+      <div class="scard"><div class="scard-label">⬇️ Salidas</div><div class="scard-val" style="color:var(--red)">${fmt(b.salidas)}</div><div class="scard-sub">${b.nGastos} gasto(s)</div></div>
+      <div class="scard ${sano?"":"alert"}"><div class="scard-label">${sano?"✅ Resultado":"⚠️ Resultado"}</div>
+        <div class="scard-val" style="color:${sano?"var(--vm)":"var(--red)"}">${fmt(b.resultado)}</div>
+        <div class="scard-sub">${sano?"periodo sano":"salió más de lo que entró"}</div></div>
+      <div class="scard"><div class="scard-label">Margen</div><div class="scard-val" style="color:${sano?"var(--vd)":"var(--red)"}">${b.entradas>0?b.margen.toFixed(1)+"%":"—"}</div><div class="scard-sub">del total de entradas</div></div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Concepto</th><th style="text-align:right">Monto</th></tr></thead>
+      <tbody>
+        ${fila("<strong>Facturado a cliente</strong>", b.facturado, `${b.nFacturas} CFDI emitido(s) · subtotal, sin IVA`, "var(--vd)")}
+        ${b.notasCredito>0?fila("Notas de crédito emitidas", -b.notasCredito, "restan de lo facturado", "var(--red)"):""}
+        ${fila("<strong>Ventas en efectivo</strong>", b.efectivo, `${b.nCortes} corte(s) de caja · no facturadas`, "var(--vd)")}
+        <tr style="border-top:2px solid var(--border)"><td style="padding:10px 4px"><strong>Total entradas</strong></td><td class="amount-cell" style="padding:10px 4px;font-weight:700;color:var(--vd)">${fmt(b.entradas)}</td></tr>
+        ${fila("<strong>Egresos de la operación</strong>", -b.salidas, `${b.nGastos} factura(s) capturada(s) · por su importe pagado`, "var(--red)")}
+        <tr style="border-top:2px solid var(--border);background:${sano?"#F0F7F0":"#FFF6F5"}"><td style="padding:12px 4px"><strong>Resultado del periodo</strong></td>
+          <td class="amount-cell" style="padding:12px 4px;font-weight:700;font-size:16px;color:${sano?"var(--vm)":"var(--red)"}">${fmt(b.resultado)}</td></tr>
+      </tbody></table></div>
+    ${b.retiros>0?`<div style="font-size:12px;color:var(--txt2);margin-top:12px">Retiros de caja del periodo: <strong>${fmt(b.retiros)}</strong> — no cuentan como salida: es efectivo que se movió, y lo que se pagó con él ya está en los egresos.</div>`:""}
+    <div class="card-title" style="margin-top:22px">📊 Egresos por categoría</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Categoría</th><th style="text-align:right">Monto</th><th style="text-align:right">%</th></tr></thead><tbody>
+      ${cats.map(([c,v])=>`<tr><td>${esc(c||"(sin categoría)")}</td><td class="amount-cell">${fmt(v)}</td><td class="amount-cell" style="color:var(--txt2)">${totCats>0?(v/totCats*100).toFixed(1):"0.0"}%</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="card-title" style="margin-top:22px">🏭 Egresos por proveedor</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Proveedor</th><th style="text-align:right">Facturas</th><th style="text-align:right">Monto</th></tr></thead><tbody>
+      ${(()=>{const pr=_egresosPorProveedor(), cnt={}; gastosDelPeriodoSP().forEach(g=>{const k=g.proveedor||"—";cnt[k]=(cnt[k]||0)+1;});
+        return pr.map(([p,v])=>`<tr><td>${esc(p)}</td><td class="amount-cell" style="color:var(--txt2)">${cnt[p]||0}</td><td class="amount-cell">${fmt(v)}</td></tr>`).join("");})()}
+    </tbody></table></div>
+    <div style="font-size:11px;color:var(--txt2);margin-top:14px;line-height:1.6;border-top:1px solid var(--border);padding-top:12px">
+      <strong>Cómo se calcula:</strong> lo facturado sale del <strong>subtotal</strong> de los CFDI que emitió tu empresa (el IVA es un impuesto trasladado, no un ingreso).
+      Los cortes de caja son ventas en efectivo <strong>no facturadas</strong>, por eso se suman sin duplicar.
+      Los egresos son las facturas capturadas, por su importe pagado. No es un estado contable ni una balanza de comprobación.
+    </div>`;
+}
+
+// Reporte general del periodo, para imprimir o mandar. Solo admin y con el candado abierto: es
+// el mismo documento sensible, no vale exportarlo por la puerta de atrás.
+function exportarBalancePDF(){
+  if(currentRole!=="admin" || !presupDesbloqueado()){ alert("🔒 Confirma tu contraseña para exportar el balance."); return; }
+  const { b, label } = _datosBalance();
+  const { jsPDF } = window.jspdf;
+  const doc=new jsPDF({unit:"mm",format:"letter"});
+  const PW=215.9, MAR=15, W=PW-MAR*2; let Y=MAR;
+  const VD=[45,94,30], GO=[212,160,23], CL=[240,247,236], RED=[192,57,43], GRN=[46,139,87];
+  doc.setFillColor(...VD); doc.rect(0,0,PW,28,"F");
+  doc.setFillColor(...GO); doc.rect(0,28,PW,3,"F");
+  doc.setTextColor(...GO); doc.setFontSize(20); doc.setFont("helvetica","bold");
+  doc.text("CICSA — Balance operativo",MAR,16);
+  doc.setTextColor(180,230,180); doc.setFontSize(9); doc.setFont("helvetica","normal");
+  doc.text(`Periodo: ${label} | Generado: ${new Date().toLocaleDateString("es-MX")}`,MAR,23);
+  Y=42;
+  const sano=b.resultado>=0;
+  const reng=(etq,val,neg,bold)=>{
+    doc.setFillColor(...CL); doc.rect(MAR,Y,W,8,"F");
+    doc.setTextColor(...(neg?RED:VD)); doc.setFontSize(10); doc.setFont("helvetica",bold?"bold":"normal");
+    doc.text(etq,MAR+3,Y+5.5);
+    doc.text(fmt(val),MAR+W-3,Y+5.5,{align:"right"});
+    Y+=9;
+  };
+  doc.setTextColor(...VD); doc.setFontSize(12); doc.setFont("helvetica","bold");
+  doc.text("Entradas",MAR,Y); Y+=6;
+  reng(`Facturado a cliente (${b.nFacturas} CFDI, subtotal sin IVA)`, b.facturado, false);
+  if(b.notasCredito>0) reng("Notas de credito emitidas", -b.notasCredito, true);
+  reng(`Ventas en efectivo (${b.nCortes} cortes de caja)`, b.efectivo, false);
+  reng("TOTAL ENTRADAS", b.entradas, false, true);
+  Y+=4;
+  doc.setTextColor(...VD); doc.setFontSize(12); doc.setFont("helvetica","bold");
+  doc.text("Salidas",MAR,Y); Y+=6;
+  reng(`Egresos de la operacion (${b.nGastos} facturas)`, b.salidas, true, true);
+  Y+=6;
+  doc.setFillColor(...(sano?GRN:RED)); doc.rect(MAR,Y,W,12,"F");
+  doc.setTextColor(255,255,255); doc.setFontSize(12); doc.setFont("helvetica","bold");
+  doc.text("RESULTADO DEL PERIODO",MAR+3,Y+8);
+  doc.text(`${fmt(b.resultado)}   (${b.entradas>0?b.margen.toFixed(1)+"%":"—"})`,MAR+W-3,Y+8,{align:"right"});
+  Y+=18;
+  if(b.retiros>0){
+    doc.setTextColor(120,120,120); doc.setFontSize(8); doc.setFont("helvetica","normal");
+    doc.text(`Retiros de caja del periodo: ${fmt(b.retiros)} (informativo, no es salida: lo pagado con ese efectivo ya esta en los egresos).`,MAR,Y);
+    Y+=7;
+  }
+  const cats=Object.entries(totalesPorCatPeriodo()).sort((a,b2)=>b2[1]-a[1]);
+  const totCats=cats.reduce((s,[,v])=>s+v,0);
+  if(cats.length){
+    doc.setTextColor(...VD); doc.setFontSize(12); doc.setFont("helvetica","bold");
+    doc.text("Egresos por categoria",MAR,Y); Y+=6;
+    doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
+    doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold");
+    doc.text("CATEGORIA",MAR+3,Y+4.7); doc.text("MONTO",MAR+120,Y+4.7); doc.text("%",MAR+160,Y+4.7);
+    Y+=8;
+    cats.forEach(([c,v],i)=>{
+      if(Y>250){ doc.addPage(); Y=MAR; }
+      doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6.5,"F");
+      doc.setTextColor(...VD); doc.setFontSize(8); doc.setFont("helvetica","normal");
+      doc.text(String(c||"(sin categoria)").slice(0,55),MAR+3,Y+4.5);
+      doc.text(fmt(v),MAR+120,Y+4.5);
+      doc.text(totCats>0?(v/totCats*100).toFixed(1)+"%":"0.0%",MAR+160,Y+4.5);
+      Y+=7;
+    });
+  }
+  const provs=_egresosPorProveedor();
+  if(provs.length){
+    if(Y>235){ doc.addPage(); Y=MAR; }
+    Y+=6;
+    doc.setTextColor(...VD); doc.setFontSize(12); doc.setFont("helvetica","bold");
+    doc.text("Egresos por proveedor",MAR,Y); Y+=6;
+    doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
+    doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold");
+    doc.text("PROVEEDOR",MAR+3,Y+4.7); doc.text("MONTO",MAR+130,Y+4.7);
+    Y+=8;
+    provs.forEach(([p,v],i)=>{
+      if(Y>250){ doc.addPage(); Y=MAR; }
+      doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6.5,"F");
+      doc.setTextColor(...VD); doc.setFontSize(8); doc.setFont("helvetica","normal");
+      doc.text(String(p).slice(0,60),MAR+3,Y+4.5);
+      doc.text(fmt(v),MAR+130,Y+4.5);
+      Y+=7;
+    });
+  }
+  if(Y>245){ doc.addPage(); Y=MAR; }
+  Y+=6;
+  doc.setTextColor(130,130,130); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
+  doc.text("Lo facturado es el subtotal de los CFDI emitidos por la empresa (el IVA es impuesto trasladado, no ingreso).",MAR,Y); Y+=4;
+  doc.text("Los cortes de caja son ventas en efectivo no facturadas, por eso se suman sin duplicar.",MAR,Y); Y+=4;
+  doc.text("Documento operativo interno. No es un estado contable ni una balanza de comprobacion.",MAR,Y);
+  const r=_rangoBalance();
+  doc.save(`Balance_${r.ini||"periodo"}_${r.fin||""}.pdf`);
+}
+
+function exportarBalanceExcel(){
+  if(currentRole!=="admin" || !presupDesbloqueado()){ alert("🔒 Confirma tu contraseña para exportar el balance."); return; }
+  const { b, label, ini, fin } = _datosBalance();
+  const cats=Object.entries(totalesPorCatPeriodo()).sort((a,b2)=>b2[1]-a[1]);
+  const aoa=[["CICSA — Balance operativo"],[`Periodo: ${label}`],[],
+    ["Concepto","Monto"],
+    ["Facturado a cliente (subtotal, sin IVA)", b.facturado],
+    ["Notas de crédito emitidas", -b.notasCredito],
+    ["Ventas en efectivo (cortes de caja)", b.efectivo],
+    ["TOTAL ENTRADAS", b.entradas],
+    ["Egresos de la operación", -b.salidas],
+    ["RESULTADO DEL PERIODO", b.resultado],[],
+    ["Retiros de caja (informativo, no es salida)", b.retiros],
+    ["Facturas emitidas", b.nFacturas],["Cortes de caja", b.nCortes],["Gastos capturados", b.nGastos],[],
+    ["Egresos por categoría","Monto"],
+    ...cats.map(([c,v])=>[c||"(sin categoría)", v]),[],
+    ["Egresos por proveedor","Monto"],
+    ..._egresosPorProveedor().map(([p,v])=>[p, v])];
+  const ws=XLSX.utils.aoa_to_sheet(aoa); ws["!cols"]=[{wch:46},{wch:16}];
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Balance");
+  XLSX.writeFile(wb, `Balance_${ini||"periodo"}_${fin||""}.xlsx`);
 }
 
 function renderPresupuesto(){
@@ -4760,7 +5035,7 @@ async function guardarCfdisEnStore(cfdis){
     const docId = uuid.replace(/[^A-Za-z0-9_-]/g,"_");
     // Si ya se descartó a mano, volver a subir el XML NO debe resucitarlo.
     const prev = _cfdisStore.find(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase());
-    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), mes:cfdiMes(c.fecha), subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
+    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, subtotal:parseFloat(c.subtotal)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), mes:cfdiMes(c.fecha), subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
     if(prev && prev.ignorado){ data.ignorado=true; data.ignoradoPor=prev.ignoradoPor||""; data.ignoradoTs=prev.ignoradoTs||""; }
     tareas.push({ docId, data });
     if(yaHay.has(uuid.toUpperCase())){ existentes++; const i=_cfdisStore.findIndex(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase()); if(i>=0)_cfdisStore[i]={id:docId,...data}; }
@@ -4879,6 +5154,8 @@ function _cfdiAttr(xml, tagLocal, attr){
 function parseCFDIXML(xml){
   if(!xml || xml.indexOf("Comprobante")===-1) return null;
   const total  = parseFloat(_cfdiAttr(xml,"Comprobante","Total")||"0")||0;
+  // El IVA es un impuesto trasladado, no un ingreso: el balance operativo usa el SubTotal.
+  const subtot = parseFloat(_cfdiAttr(xml,"Comprobante","SubTotal")||"0")||0;
   const fecha  = (_cfdiAttr(xml,"Comprobante","Fecha")||"").slice(0,10);
   const serie  = _cfdiAttr(xml,"Comprobante","Serie");
   const folioC = _cfdiAttr(xml,"Comprobante","Folio");
@@ -4890,7 +5167,7 @@ function parseCFDIXML(xml){
   const rfcRec = _cfdiAttr(xml,"Receptor","Rfc");   // quién RECIBE: distingue gasto de venta propia
   const uuid   = _cfdiAttr(xml,"TimbreFiscalDigital","UUID");
   if(!uuid && !total) return null;                 // no parece un CFDI válido
-  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, total, tipo, rfcReceptor: rfcRec };
+  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, total, subtotal: subtot, tipo, rfcReceptor: rfcRec };
 }
 async function procesarSATXml(){
   const files=[...(document.getElementById("satXmlFiles").files||[])];
@@ -7238,6 +7515,10 @@ auth.onAuthStateChanged(async user => {
     chip.style.display = "flex";
     avatar.textContent = user.email.charAt(0).toUpperCase();
     name.textContent = currentRole === "admin" ? "Admin" : "Operativo";
+
+    // El Balance es información reservada: el botón ni siquiera aparece para un operativo.
+    const _nb=document.getElementById("navBalance");
+    if(_nb) _nb.style.display = (currentRole === "admin") ? "flex" : "none";
 
     // Show admin button if admin
     if(currentRole === "admin") {
