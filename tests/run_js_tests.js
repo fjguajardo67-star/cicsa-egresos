@@ -69,6 +69,7 @@ const FUNCS = [
   "divididasDescuadradas", "prorratearPartidas",
   "canonizarCategoria", "canonizarProveedor", "_categoriasEnUso", "variantesDeCategoria",
   "_normCat", "_limpiarNombreCat",
+  "balanceOperativo",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
@@ -1170,6 +1171,91 @@ t("al capturar, un nombre con espacios de más nace ya limpio", () => {
 });
 t("sigue sin fusionar categorías realmente distintas", () => {
   assert.notEqual(S._normCat("RENTA DEPTO CICSA"), S._normCat("renta depto"));
+});
+
+console.log("\n== Balance operativo del periodo ==");
+const RFC_YO = "CIC190426SD4";
+const semBal = (gastos, cortes, retiros) => [{ id: "w1", label: "s", ini: "2026-06-29", fin: "2026-07-26",
+  gastos: gastos || [], cortes: cortes || [], retiros: retiros || [] }];
+t("suma lo facturado (subtotal) más el efectivo, y resta los egresos", () => {
+  S.state = { budget: {}, weeks: semBal(
+    [{ id: "g1", fecha: "2026-07-05", importe: 300000 }, { id: "g2", fecha: "2026-07-10", importe: 200000 }],
+    [{ fecha: "2026-07-06", monto: 80000 }, { fecha: "2026-07-13", monto: 70000 }]) };
+  const r = S.balanceOperativo([
+    { rfc: RFC_YO, fecha: "2026-07-08", subtotal: 500000, total: 580000, tipo: "I" },
+  ], "2026-06-29", "2026-07-26", RFC_YO);
+  close(r.facturado, 500000, 0.01);            // subtotal, NO el total con IVA
+  close(r.efectivo, 150000, 0.01);
+  close(r.entradas, 650000, 0.01);
+  close(r.salidas, 500000, 0.01);
+  close(r.resultado, 150000, 0.01);
+  close(r.margen, 150000 / 650000 * 100, 0.01);
+});
+t("el IVA no cuenta como ingreso", () => {
+  S.state = { budget: {}, weeks: semBal([], []) };
+  const r = S.balanceOperativo([{ rfc: RFC_YO, fecha: "2026-07-08", subtotal: 100000, total: 116000, tipo: "I" }],
+    "2026-06-29", "2026-07-26", RFC_YO);
+  close(r.facturado, 100000, 0.01);
+});
+t("solo cuenta lo que EMITIÓ la empresa, no lo que le facturan", () => {
+  S.state = { budget: {}, weeks: semBal([], []) };
+  const r = S.balanceOperativo([
+    { rfc: RFC_YO,          fecha: "2026-07-08", subtotal: 100000, tipo: "I" },
+    { rfc: "PBA010101BBB",  fecha: "2026-07-09", subtotal: 26484,  tipo: "I" },   // proveedor: es egreso
+  ], "2026-06-29", "2026-07-26", RFC_YO);
+  close(r.facturado, 100000, 0.01);
+  assert.equal(r.nFacturas, 1);
+});
+t("complementos de pago no son venta nueva; las notas de crédito restan", () => {
+  S.state = { budget: {}, weeks: semBal([], []) };
+  const r = S.balanceOperativo([
+    { rfc: RFC_YO, fecha: "2026-07-08", subtotal: 100000, tipo: "I" },
+    { rfc: RFC_YO, fecha: "2026-07-09", subtotal: 100000, tipo: "P" },   // complemento: no suma
+    { rfc: RFC_YO, fecha: "2026-07-10", subtotal: 5000,   tipo: "E" },   // nota de crédito: resta
+  ], "2026-06-29", "2026-07-26", RFC_YO);
+  close(r.facturado, 100000, 0.01);
+  close(r.notasCredito, 5000, 0.01);
+  close(r.entradas, 95000, 0.01);
+});
+t("los retiros de caja NO son salida (se informan aparte)", () => {
+  S.state = { budget: {}, weeks: semBal(
+    [{ id: "g1", fecha: "2026-07-05", importe: 100000 }], [{ fecha: "2026-07-06", monto: 50000 }],
+    [{ fecha: "2026-07-07", monto: 30000 }]) };
+  const r = S.balanceOperativo([], "2026-06-29", "2026-07-26", RFC_YO);
+  close(r.salidas, 100000, 0.01, "el retiro no debe sumarse a las salidas");
+  close(r.retiros, 30000, 0.01);
+});
+t("un periodo con más salidas que entradas da resultado negativo", () => {
+  S.state = { budget: {}, weeks: semBal([{ id: "g1", fecha: "2026-07-05", importe: 900000 }], []) };
+  const r = S.balanceOperativo([{ rfc: RFC_YO, fecha: "2026-07-08", subtotal: 500000, tipo: "I" }],
+    "2026-06-29", "2026-07-26", RFC_YO);
+  close(r.resultado, -400000, 0.01);
+  assert.ok(r.resultado < 0);
+});
+t("un CFDI descartado a mano no entra al balance", () => {
+  S.state = { budget: {}, weeks: semBal([], []) };
+  const r = S.balanceOperativo([{ rfc: RFC_YO, fecha: "2026-07-08", subtotal: 100000, tipo: "I", ignorado: true }],
+    "2026-06-29", "2026-07-26", RFC_YO);
+  close(r.facturado, 0, 0.01);
+});
+t("sin RFC configurado no inventa ingresos", () => {
+  S.state = { budget: {}, weeks: semBal([], []) };
+  const r = S.balanceOperativo([{ rfc: RFC_YO, fecha: "2026-07-08", subtotal: 100000, tipo: "I" }],
+    "2026-06-29", "2026-07-26", "");
+  close(r.facturado, 0, 0.01);
+});
+t("un CFDI viejo sin subtotal cae al total, en vez de contarse como cero", () => {
+  S.state = { budget: {}, weeks: semBal([], []) };
+  const r = S.balanceOperativo([{ rfc: RFC_YO, fecha: "2026-07-08", total: 58000, tipo: "I" }],
+    "2026-06-29", "2026-07-26", RFC_YO);
+  close(r.facturado, 58000, 0.01);
+});
+t("lo de fuera del periodo no entra", () => {
+  S.state = { budget: {}, weeks: semBal(
+    [{ id: "g1", fecha: "2026-05-01", importe: 999999 }], [{ fecha: "2026-05-02", monto: 999999 }]) };
+  const r = S.balanceOperativo([{ rfc: RFC_YO, fecha: "2026-05-03", subtotal: 999999, tipo: "I" }],
+    "2026-06-29", "2026-07-26", RFC_YO);
+  close(r.entradas, 0, 0.01); close(r.salidas, 0, 0.01);
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
