@@ -20,8 +20,10 @@ const script = html.match(/<script>([\s\S]*)<\/script>/)[1];
 
 function extractFunction(name) {
   const decl = "function " + name + "(";
-  let i = script.indexOf(decl);
-  if (i === -1) { i = script.indexOf("async " + decl); }
+  // Primero la forma async: buscar solo "function nombre(" encontraría esa misma posición dentro
+  // de "async function nombre(" y recortaría el async, dejando un cuerpo con await inválido.
+  let i = script.indexOf("async " + decl);
+  if (i === -1) i = script.indexOf(decl);
   if (i === -1) throw new Error("No encontré la función: " + name);
   const bodyStart = script.indexOf("{", i);
   let depth = 0, inStr = null, inComment = null;
@@ -70,6 +72,7 @@ const FUNCS = [
   "canonizarCategoria", "canonizarProveedor", "_categoriasEnUso", "variantesDeCategoria",
   "_normCat", "_limpiarNombreCat",
   "balanceOperativo", "ingresosDetalle",
+  "fetchStorage", "esImagenRespaldo",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
@@ -81,10 +84,14 @@ const sandbox = {
   renderRevisionDuplicados: () => {}, document: { getElementById: () => null },
   localStorage: (() => { const m = {}; return { getItem: k => (k in m ? m[k] : null),
     setItem: (k, v) => { m[k] = String(v); }, removeItem: k => { delete m[k]; } }; })(),
+  // fetchStorage habla con Firebase Storage: se le pone una sesión y un fetch de mentira.
+  auth: { currentUser: { getIdToken: async () => "TOKEN" } },
+  fetch: async () => ({ ok: true, status: 200 }),
 };
 vm.createContext(sandbox);
 for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
 vm.runInContext("const TOL_DIVIDIDA = 0.05;", sandbox);
+vm.runInContext("let _storageAuthScheme = null;", sandbox);   // memo del esquema que funcionó
 for (const f of FUNCS) vm.runInContext(extractFunction(f), sandbox);
 const S = sandbox;
 
@@ -1315,5 +1322,117 @@ t("el detalle sale ordenado por fecha", () => {
   assert.deepEqual(d.facturas.map(f => f.fecha), ["2026-07-01", "2026-07-10", "2026-07-20"]);
 });
 
-console.log(`\n${pass} pasaron, ${fail} fallaron`);
-process.exit(fail ? 1 : 0);
+// ── Autenticación contra Firebase Storage ───────────────────────────────
+// El bug real: se mandaba «Bearer <idToken>», que Storage no reconoce — trataba la petición
+// como anónima, las reglas devolvían 403, la subida fallaba en silencio y la factura no se
+// podía abrir. El SDK oficial manda «Firebase <idToken>».
+const setScheme = (v) => vm.runInContext("_storageAuthScheme = " + JSON.stringify(v) + ";", sandbox);
+const getScheme = () => vm.runInContext("_storageAuthScheme", sandbox);
+// Devuelve [fn, llamadas]: fn responde ok solo al esquema indicado.
+function fetchQueAcepta(esquema) {
+  const llamadas = [];
+  return [async (url, o) => {
+    const h = (o && o.headers && o.headers.Authorization) || "";
+    llamadas.push(h);
+    return h.startsWith(esquema + " ") ? { ok: true, status: 200 } : { ok: false, status: 403 };
+  }, llamadas];
+}
+console.log("\n== Autenticación con Firebase Storage ==");
+
+async function pruebasStorage() {
+  const T = async (name, fn) => {
+    try { await fn(); pass++; console.log("  ok - " + name); }
+    catch (e) { fail++; console.error("  FAIL - " + name + "\n        " + e.message); }
+  };
+
+  await T("usa «Firebase <token>» — el esquema del SDK oficial, no «Bearer»", async () => {
+    setScheme(null);
+    const [f, llamadas] = fetchQueAcepta("Firebase");
+    S.fetch = f;
+    const r = await S.fetchStorage("https://storage/x");
+    assert.ok(r.ok);
+    assert.equal(llamadas.length, 1, "no debió reintentar: el primer esquema funcionó");
+    assert.equal(llamadas[0], "Firebase TOKEN");
+    assert.equal(getScheme(), "Firebase");
+  });
+
+  await T("si Storage rechaza «Firebase» con 403, reintenta con «Bearer»", async () => {
+    setScheme(null);
+    const [f, llamadas] = fetchQueAcepta("Bearer");
+    S.fetch = f;
+    const r = await S.fetchStorage("https://storage/x");
+    assert.ok(r.ok, "el reintento debió funcionar");
+    assert.deepEqual(llamadas, ["Firebase TOKEN", "Bearer TOKEN"]);
+    assert.equal(getScheme(), "Bearer");
+  });
+
+  await T("una vez que sabe el esquema no vuelve a duplicar peticiones", async () => {
+    setScheme("Bearer");
+    const [f, llamadas] = fetchQueAcepta("Bearer");
+    S.fetch = f;
+    await S.fetchStorage("https://storage/x");
+    await S.fetchStorage("https://storage/y");
+    assert.equal(llamadas.length, 2, "una petición por factura, no dos");
+  });
+
+  await T("un 404 no dispara el reintento (no es problema de credencial)", async () => {
+    setScheme(null);
+    const llamadas = [];
+    S.fetch = async (url, o) => { llamadas.push((o.headers||{}).Authorization); return { ok:false, status:404 }; };
+    const r = await S.fetchStorage("https://storage/x");
+    assert.equal(r.status, 404);
+    assert.equal(llamadas.length, 1);
+    assert.equal(getScheme(), null, "un 404 no confirma ningún esquema");
+  });
+
+  await T("si los dos esquemas fallan, devuelve el error original", async () => {
+    setScheme(null);
+    S.fetch = async () => ({ ok:false, status:403 });
+    const r = await S.fetchStorage("https://storage/x");
+    assert.equal(r.ok, false); assert.equal(r.status, 403);
+    assert.equal(getScheme(), null, "no debe memorizar un esquema que no funcionó");
+  });
+
+  await T("sin sesión iniciada no manda cabecera de autorización", async () => {
+    setScheme(null);
+    const guardado = S.auth; S.auth = { currentUser: null };
+    let vistas = null;
+    S.fetch = async (url, o) => { vistas = (o && o.headers) || null; return { ok:true, status:200 }; };
+    await S.fetchStorage("https://storage/x");
+    assert.ok(!vistas || !vistas.Authorization, "sin usuario no hay token que mandar");
+    S.auth = guardado;
+  });
+
+  await T("conserva método y cuerpo al reintentar la subida", async () => {
+    setScheme(null);
+    const vistas = [];
+    S.fetch = async (url, o) => {
+      vistas.push({ method:o.method, body:o.body, ct:(o.headers||{})["Content-Type"] });
+      return { ok: ((o.headers||{}).Authorization||"").startsWith("Bearer "), status:403 };
+    };
+    await S.fetchStorage("https://storage/subir", { method:"POST", headers:{"Content-Type":"image/jpeg"}, body:"BLOB" });
+    assert.equal(vistas.length, 2);
+    vistas.forEach(v => { assert.equal(v.method, "POST"); assert.equal(v.body, "BLOB"); assert.equal(v.ct, "image/jpeg"); });
+  });
+
+  console.log("\n== Tipo de respaldo (imagen vs PDF) ==");
+
+  await T("reconoce como imagen las URL de Storage con la ruta codificada", async () => {
+    const u = (n) => "https://firebasestorage.googleapis.com/v0/b/b/o/" + encodeURIComponent("facturas/" + n);
+    ["a.jpg", "a.jpeg", "a.PNG", "a.webp", "a.gif"].forEach(n =>
+      assert.ok(S.esImagenRespaldo(u(n)), n + " debería contar como imagen"));
+  });
+
+  await T("un PDF (o un adjunto sin extensión conocida) no es imagen", async () => {
+    const u = (n) => "https://firebasestorage.googleapis.com/v0/b/b/o/" + encodeURIComponent("facturas/" + n);
+    ["a.pdf", "a.octet-stream", "a.xml", "sin_extension"].forEach(n =>
+      assert.equal(S.esImagenRespaldo(u(n)), false, n + " no debería contar como imagen"));
+    assert.equal(S.esImagenRespaldo(""), false);
+    assert.equal(S.esImagenRespaldo(null), false);
+  });
+}
+
+pruebasStorage().then(() => {
+  console.log(`\n${pass} pasaron, ${fail} fallaron`);
+  process.exit(fail ? 1 : 0);
+});
