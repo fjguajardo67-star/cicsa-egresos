@@ -73,6 +73,7 @@ const FUNCS = [
   "_normCat", "_limpiarNombreCat",
   "balanceOperativo", "ingresosDetalle",
   "fetchStorage", "esImagenRespaldo",
+  "gastosFiltradosReporte",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
@@ -81,7 +82,11 @@ const sandbox = {
   _gmailRevisados: null,
   // Stubs para consolidarFacturaDividida (efectos de UI/persistencia fuera de alcance del test).
   confirm: () => true, alert: () => {}, save: () => {}, marcarBorrado: () => {},
-  renderRevisionDuplicados: () => {}, document: { getElementById: () => null },
+  renderRevisionDuplicados: () => {},
+  // Los campos del formulario de Auditoría se simulan con un mapa: null cuando el id no está,
+  // igual que un DOM donde ese elemento no existe.
+  __dom: {},
+  document: { getElementById: (id) => (id in sandbox.__dom ? { value: sandbox.__dom[id] } : null) },
   localStorage: (() => { const m = {}; return { getItem: k => (k in m ? m[k] : null),
     setItem: (k, v) => { m[k] = String(v); }, removeItem: k => { delete m[k]; } }; })(),
   // fetchStorage habla con Firebase Storage: se le pone una sesión y un fetch de mentira.
@@ -92,6 +97,7 @@ vm.createContext(sandbox);
 for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
 vm.runInContext("const TOL_DIVIDIDA = 0.05;", sandbox);
 vm.runInContext("let _storageAuthScheme = null;", sandbox);   // memo del esquema que funcionó
+vm.runInContext('const CAT_SIN = "__SIN__";', sandbox);       // centinela de "sin categoría"
 for (const f of FUNCS) vm.runInContext(extractFunction(f), sandbox);
 const S = sandbox;
 
@@ -1337,6 +1343,48 @@ function fetchQueAcepta(esquema) {
     return h.startsWith(esquema + " ") ? { ok: true, status: 200 } : { ok: false, status: 403 };
   }, llamadas];
 }
+// ── Filtro de categoría en Auditoría ────────────────────────────────────
+// El bug: "" ya significaba "todas", así que al saltar desde Presupuesto a las facturas SIN
+// categoría el filtro llegaba vacío y la pantalla mostraba TODO. Ahora va un centinela.
+console.log("\n== Filtro de categoría en Auditoría ==");
+const GASTOS_CAT = [
+  { id: "a", fecha: "2026-07-05", proveedor: "POLLO", categoria: "Cárnicos", importe: 100 },
+  { id: "b", fecha: "2026-07-06", proveedor: "MISTERIO 1", categoria: "", importe: 20000 },
+  { id: "c", fecha: "2026-07-07", proveedor: "MISTERIO 2", importe: 3059.01 },          // ni la clave existe
+  { id: "d", fecha: "2026-07-08", proveedor: "MIXTA", categoria: "Cárnicos", importe: 500,
+    _dividida: true, _partidas: [{ categoria: "Cárnicos", importe: 300 }, { categoria: "", importe: 200 }] },
+  { id: "e", fecha: "2026-08-01", proveedor: "FUERA DE RANGO", categoria: "", importe: 999 },
+];
+const conFiltro = (f) => {
+  S.state = { budget: {}, weeks: [{ id: "w1", gastos: GASTOS_CAT, cortes: [], retiros: [] }] };
+  S.__dom = { rFechaIni: "2026-07-01", rFechaFin: "2026-07-31", rCategoria: f, rProveedor: "" };
+  return S.gastosFiltradosReporte().map(g => g.id);
+};
+t("sin filtro salen todas las del rango", () => {
+  assert.deepEqual(conFiltro("").sort(), ["a", "b", "c", "d"]);
+});
+t("el centinela trae SOLO las facturas sin categoría", () => {
+  assert.deepEqual(conFiltro("__SIN__").sort(), ["b", "c", "d"]);
+});
+t("una categoría normal no arrastra las que no tienen ninguna", () => {
+  assert.deepEqual(conFiltro("Cárnicos").sort(), ["a", "d"]);
+});
+t("la factura dividida entra por su partida sin categoría, no por su encabezado", () => {
+  const soloSin = conFiltro("__SIN__");
+  assert.ok(soloSin.includes("d"), "tiene una partida sin categoría");
+  S.__dom = { rFechaIni: "2026-07-01", rFechaFin: "2026-07-31", rCategoria: "__SIN__", rProveedor: "" };
+  const g = S.gastosFiltradosReporte().find(x => x.id === "d");
+  assert.equal(g.categoria, "Cárnicos", "el encabezado sí tiene categoría; entra por la partida");
+});
+t("el rango de fechas sigue mandando sobre el centinela", () => {
+  assert.ok(!conFiltro("__SIN__").includes("e"), "agosto queda fuera del rango de julio");
+});
+t("el filtro de proveedor se combina con el centinela", () => {
+  S.state = { budget: {}, weeks: [{ id: "w1", gastos: GASTOS_CAT, cortes: [], retiros: [] }] };
+  S.__dom = { rFechaIni: "2026-07-01", rFechaFin: "2026-07-31", rCategoria: "__SIN__", rProveedor: "MISTERIO 1" };
+  assert.deepEqual(S.gastosFiltradosReporte().map(g => g.id), ["b"]);
+});
+
 console.log("\n== Autenticación con Firebase Storage ==");
 
 async function pruebasStorage() {
