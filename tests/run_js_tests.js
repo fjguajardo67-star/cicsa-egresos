@@ -64,6 +64,8 @@ const FUNCS = [
   "_gmailHuella", "filterGmailDuplicates",
   "catsActuales", "_catsEditable", "_catExiste", "renombrarCategoriaEnEstado",
   "factorPresupuestoPeriodo", "presupCatPeriodo",
+  "fechaCorteDatos", "filtrarPorCorte", "contarAntesDelCorte",
+  "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
 const sandbox = {
@@ -943,6 +945,66 @@ t("el gasto de un mes deja de verse excedido contra la meta semanal", () => {
   const mensual = S.presupCatPeriodo("Tortilla", F("2026-07-01", "2026-07-31").factor);
   assert.ok(mensual > semanal * 4, "el mes debe valer más de 4 semanas");
   close(mensual, 60000 * 31 / 7, 0.01);
+});
+
+console.log("\n== Fecha de corte: ocultar histórico mal capturado ==");
+const CORTE = "2026-06-28";
+const semanaCon = (gastos, extra) => [{ id: "w1", label: "s", cortes: [], retiros: [], gastos, ...(extra || {}) }];
+t("sin corte configurado no se filtra nada", () => {
+  S.state = { weeks: semanaCon([{ id: "a", fecha: "2026-01-05", importe: 100 }]), budget: {} };
+  assert.equal(S.fechaCorteDatos(), "");
+  assert.equal(S.allGastosAllWeeks().length, 1);
+});
+t("una fecha inválida se ignora (no oculta nada por accidente)", () => {
+  S.state = { weeks: semanaCon([{ id: "a", fecha: "2026-01-05", importe: 100 }]), budget: {}, fechaCorte: "28/06/2026" };
+  assert.equal(S.fechaCorteDatos(), "");
+  assert.equal(S.allGastosAllWeeks().length, 1, "no debe ocultar con una fecha mal escrita");
+});
+t("con corte, lo anterior desaparece y el propio día del corte se conserva", () => {
+  S.state = { budget: {}, fechaCorte: CORTE, weeks: semanaCon([
+    { id: "viejo",  fecha: "2026-06-27", importe: 500 },
+    { id: "borde",  fecha: "2026-06-28", importe: 300 },   // el día del corte SÍ entra
+    { id: "nuevo",  fecha: "2026-07-15", importe: 200 },
+  ]) };
+  assert.deepEqual(S.allGastosAllWeeks().map(g => g.id), ["borde", "nuevo"]);
+});
+t("un gasto SIN fecha se conserva: no hay forma de saber si es viejo", () => {
+  S.state = { budget: {}, fechaCorte: CORTE, weeks: semanaCon([
+    { id: "sinFecha", importe: 900 }, { id: "viejo", fecha: "2026-05-01", importe: 100 },
+  ]) };
+  assert.deepEqual(S.allGastosAllWeeks().map(g => g.id), ["sinFecha"]);
+});
+t("los cortes y retiros de caja también respetan el corte", () => {
+  S.state = { budget: {}, fechaCorte: CORTE, weeks: [{ id: "w1", label: "s", gastos: [],
+    cortes:  [{ fecha: "2026-06-01", monto: 1000 }, { fecha: "2026-07-01", monto: 2000 }],
+    retiros: [{ fecha: "2026-06-10", monto: 300 },  { fecha: "2026-07-05", monto: 400 }] }] };
+  assert.deepEqual(S.todosLosCortes().map(c => c.monto), [2000]);
+  assert.deepEqual(S.todosLosRetiros().map(r => r.monto), [400]);
+});
+t("el corte se refleja en los totales por categoría del periodo", () => {
+  S.state = { budget: {}, fechaCorte: CORTE, activeWeek: "w1",
+    weeks: semanaCon([
+      { id: "v", fecha: "2026-06-20", categoria: "Cárnicos", importe: 5000 },
+      { id: "n", fecha: "2026-07-02", categoria: "Cárnicos", importe: 1500 },
+    ], { ini: "2026-06-01", fin: "2026-07-31" }) };
+  S.localStorage.setItem("cicsa_periodo_seg_pres", JSON.stringify({ modo: "rango", ini: "2026-06-01", fin: "2026-07-31" }));
+  close(S.totalesPorCatPeriodo()["Cárnicos"], 1500, 0.01);
+});
+t("contarAntesDelCorte dice cuánto se va a ocultar antes de aplicarlo", () => {
+  S.state = { budget: {}, weeks: semanaCon([
+    { id: "a", fecha: "2026-06-01", importe: 1200.50 },
+    { id: "b", fecha: "2026-06-27", importe: 800.25 },
+    { id: "c", fecha: "2026-07-01", importe: 999 },
+  ]) };
+  const r = S.contarAntesDelCorte(CORTE);
+  assert.equal(r.n, 2); close(r.monto, 2000.75, 0.01);
+});
+t("quitar el corte devuelve TODO el histórico (es reversible)", () => {
+  const gastos = [{ id: "a", fecha: "2026-01-01", importe: 10 }, { id: "b", fecha: "2026-07-01", importe: 20 }];
+  S.state = { budget: {}, fechaCorte: CORTE, weeks: semanaCon(gastos) };
+  assert.equal(S.allGastosAllWeeks().length, 1);
+  S.state.fechaCorte = "";
+  assert.equal(S.allGastosAllWeeks().length, 2, "al quitar el corte deben volver todos");
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);

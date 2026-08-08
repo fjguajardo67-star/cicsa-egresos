@@ -1899,7 +1899,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-06-g";
+const APP_BUILD = "2026-08-07-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2479,7 +2479,7 @@ function gastosDelPeriodoSP(){
   const wk=state.weeks.find(w=>w.id===p.weekId);
   // Semana con rango → por fecha real (cuadra con Auditoría). Semana vieja sin rango → su bolsa.
   if(wk && wk.ini && wk.fin) return allGastosAllWeeks().filter(g=>g.fecha && g.fecha>=wk.ini && g.fecha<=wk.fin);
-  return (wk?.gastos)||[];
+  return filtrarPorCorte((wk?.gastos)||[]);
 }
 // El presupuesto se captura POR SEMANA. Al revisar un rango (una quincena, un mes) hay que
 // escalarlo: comparar el gasto de 31 días contra la meta de 7 hacía que TODO saliera excedido
@@ -2507,12 +2507,59 @@ function totalesPorCatPeriodo(){
 // Pinta el selector (modo + fechas) dentro de un contenedor. `onChange` = nombre de la función
 // que re-renderiza el contenido de esa página. Se pinta una vez al entrar; los cambios solo
 // alternan la visibilidad del rango y re-renderizan (sin repintar, para no perder el foco).
+function fijarFechaCorte(fecha){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede cambiar la fecha de corte."); return; }
+  const f=(fecha||"").trim();
+  if(!f){ quitarFechaCorte(); return; }
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(f)){ alert("Fecha no válida."); return; }
+  const { n, monto } = contarAntesDelCorte(f);
+  if(!confirm(`Ocultar todo lo anterior al ${fmtDate(f)}.\n\n`+
+    `Quedan fuera ${n} movimiento(s) por ${fmt(monto)}.\n\n`+
+    `NO se borra nada: el dato sigue guardado y puedes quitar el corte cuando quieras.\n`+
+    `Aplica para todo el equipo.\n\n¿Continuar?`)) return;
+  state.fechaCorte = f;
+  save();
+  refrescarTrasCorte();
+  alert(`✅ Listo — ${n} movimiento(s) anteriores al ${fmtDate(f)} ya no aparecen en las consultas.`);
+}
+function quitarFechaCorte(){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede cambiar la fecha de corte."); return; }
+  if(!fechaCorteDatos()) return;
+  if(!confirm("¿Quitar el corte y volver a mostrar TODO el histórico?")) return;
+  state.fechaCorte = "";
+  save();
+  refrescarTrasCorte();
+}
+// El corte cambia lo que ve CADA pantalla, así que se repintan las que estén montadas.
+function refrescarTrasCorte(){
+  const repinta = [
+    ["budgetGrid", "renderPresupuesto"], ["gastosBody", "renderGastos"],
+    ["reporteContent", "renderReporteActual"], ["cajaContenido", "renderCaja"],
+    ["pagosBody", "renderPagos"], ["resumenKpis", "renderResumen"],
+  ];
+  repinta.forEach(([id, fn])=>{
+    try{ if(document.getElementById(id) && typeof window[fn]==="function") window[fn](); }catch(_){}
+  });
+  ["gastosPeriodoSel","presupPeriodoSel","reportePeriodoSel"].forEach(id=>{
+    const c=document.getElementById(id);
+    if(c && c.innerHTML.trim()){
+      const fn = id==="gastosPeriodoSel" ? "renderGastos" : id==="presupPeriodoSel" ? "renderPresupuesto" : "renderReporteActual";
+      try{ pintarSelectorPeriodoSP(id, fn); }catch(_){}
+    }
+  });
+}
+
 function pintarSelectorPeriodoSP(containerId, onChange){
   const cont=document.getElementById(containerId); if(!cont) return;
   const p=getPeriodoSP(), raw=getPeriodoSPRaw();
   const selStyle="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit";
-  const weekOpts=state.weeks.slice().reverse().map(w=>
-    `<option value="${w.id}" ${p.modo==="semana"&&w.id===p.weekId?"selected":""}>${esc(w.label)}</option>`).join("");
+  const corte=fechaCorteDatos();
+  const esAdminSel=(typeof currentRole!=="undefined" && currentRole==="admin");
+  // Una semana que termina antes del corte no mostraría nada: se saca del desplegable para
+  // que nadie la elija y crea que se perdieron los datos.
+  const weekOpts=state.weeks.slice().reverse()
+    .filter(w=>!(corte && w.fin && w.fin < corte))
+    .map(w=>`<option value="${w.id}" ${p.modo==="semana"&&w.id===p.weekId?"selected":""}>${esc(w.label)}</option>`).join("");
   const s=semanaCalendario(new Date());
   cont.innerHTML=`
     <div class="field" style="flex:0 0 auto">
@@ -2529,7 +2576,17 @@ function pintarSelectorPeriodoSP(containerId, onChange){
     <div id="${containerId}_rango" style="display:${p.modo==="rango"?"flex":"none"};gap:10px;align-items:flex-end;flex-wrap:wrap">
       <div class="field"><label>Fecha inicio</label><input type="date" id="${containerId}_ini" value="${raw.ini||s.ini}" onchange="onCambioPeriodoSP('${containerId}','${onChange}')"></div>
       <div class="field"><label>Fecha fin</label><input type="date" id="${containerId}_fin" value="${raw.fin||s.fin}" onchange="onCambioPeriodoSP('${containerId}','${onChange}')"></div>
-    </div>`;
+    </div>
+    ${esAdminSel?`<div class="field" style="flex:0 0 auto">
+      <label title="Oculta de TODAS las consultas lo capturado antes de esta fecha. No borra nada.">🚫 Ocultar anterior a</label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="date" id="${containerId}_corte" value="${corte}" onchange="fijarFechaCorte(this.value)" style="${selStyle}">
+        ${corte?`<button class="btn btn-light" style="padding:8px 10px" title="Quitar el corte y volver a mostrar todo" onclick="quitarFechaCorte()">✕</button>`:""}
+      </div>
+    </div>`:""}
+    ${corte?`<div style="flex:1 1 100%;background:#FFF8E1;border:1.5px solid var(--do);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--txt)">
+      🚫 Ocultando lo anterior al <strong>${fmtDate(corte)}</strong>${(()=>{const c=contarAntesDelCorte(corte);return c.n?` — ${c.n} movimiento(s) por ${fmt(c.monto)} fuera de las consultas`:"";})()}. No se borró nada.
+    </div>`:""}`;
 }
 function onCambioPeriodoSP(containerId, onChange){
   const modo=document.getElementById(containerId+"_modo")?.value||"semana";
@@ -6599,7 +6656,33 @@ function checkFormaPago(){
 // PAGOS
 // ═══════════════════════════════════════════════════════════════════════════
 let pagosFilter="pendiente";
-function allGastosAllWeeks(){return state.weeks.flatMap(w=>(w.gastos||[]).map(g=>({...g,_weekLabel:w.label})));}
+// ── Fecha de corte de datos ─────────────────────────────────────────
+// Lo capturado ANTES de esta fecha deja de aparecer en consultas, reportes y conciliaciones.
+// NO se borra: el dato sigue en la nube y basta con quitar la fecha para que todo vuelva. Se
+// eligió ocultar en vez de borrar porque un histórico mal capturado se puede querer revisar
+// después, y de un borrado no se regresa. Vive en state, así que aplica para todo el equipo.
+function fechaCorteDatos(){
+  const f = state && state.fechaCorte;
+  return (typeof f === "string" && /^\d{4}-\d{2}-\d{2}$/.test(f)) ? f : "";
+}
+// Quita del arreglo lo anterior al corte. Un registro SIN fecha se conserva: no hay forma de
+// saber si cae antes o después, y desaparecerlo en silencio sería peor.
+function filtrarPorCorte(arr){
+  const c = fechaCorteDatos();
+  if(!c) return arr || [];
+  return (arr||[]).filter(x => !(x && x.fecha && x.fecha < c));
+}
+function contarAntesDelCorte(f){
+  let n=0, monto=0;
+  (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{
+    if(g && g.fecha && f && g.fecha < f){ n++; monto += parseFloat(g.importe)||0; }
+  }));
+  return { n, monto };
+}
+
+// Los tres accesos centrales a los datos. Filtrando aquí, TODO lo de aguas abajo (gastos,
+// presupuesto, reportes, caja, conciliación SAT, duplicados) hereda el corte sin tocar nada más.
+function allGastosAllWeeks(){return filtrarPorCorte(state.weeks.flatMap(w=>(w.gastos||[]).map(g=>({...g,_weekLabel:w.label}))));}
 function diasRestantes(venc){if(!venc)return null;const hoy=new Date();hoy.setHours(0,0,0,0);return Math.floor((new Date(venc+"T12:00:00")-hoy)/86400000);}
 function setPagosFilter(f,btn){pagosFilter=f;document.querySelectorAll(".filter-btn").forEach(b=>b.classList.remove("active"));if(btn)btn.classList.add("active");renderPagos();}
 
@@ -7623,8 +7706,8 @@ function revisarGastosEnAuditoria(){
 
 // Junta cortes/retiros de TODAS las semanas (no solo la activa) — para la consulta por
 // rango de fechas, que ignora en qué "semana" (bolsa de captura) quedó archivado cada uno.
-function todosLosCortes(){ return state.weeks.flatMap(w => (w.cortes||[]).map(c => ({...c}))); }
-function todosLosRetiros(){ return state.weeks.flatMap(w => (w.retiros||[]).map(r => ({...r}))); }
+function todosLosCortes(){ return filtrarPorCorte(state.weeks.flatMap(w => (w.cortes||[]).map(c => ({...c})))); }
+function todosLosRetiros(){ return filtrarPorCorte(state.weeks.flatMap(w => (w.retiros||[]).map(r => ({...r})))); }
 
 // Saldo de caja acumulado hasta ANTES de una fecha dada (estrictamente por fecha, cruzando
 // todas las semanas) — usado por el modo "Rango de fechas". Es un cálculo distinto del de
