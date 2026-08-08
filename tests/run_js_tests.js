@@ -67,6 +67,7 @@ const FUNCS = [
   "factorPresupuestoPeriodo", "presupCatPeriodo",
   "fechaCorteDatos", "filtrarPorCorte", "contarAntesDelCorte",
   "divididasDescuadradas", "prorratearPartidas",
+  "canonizarCategoria", "canonizarProveedor", "_categoriasEnUso", "variantesDeCategoria",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
@@ -1076,6 +1077,66 @@ t("tras prorratear, el detector ya no la marca", () => {
   const g = dividida("f1", 10000, [{ categoria: "A", importe: 6000 }, { categoria: "B", importe: 3601.65 }]);
   g._partidas = S.prorratearPartidas(g._partidas, g.importe);
   assert.equal(S.divididasDescuadradas([g]).length, 0);
+});
+
+console.log("\n== Nombres canónicos: evitar variantes antes de que existan ==");
+t("una categoría que solo cambia en mayúsculas usa la grafía OFICIAL", () => {
+  S.state = { weeks: [], budget: {}, categorias: ["Agua Purificada", "Cárnicos"] };
+  assert.equal(S.canonizarCategoria("agua purificada"), "Agua Purificada");
+  assert.equal(S.canonizarCategoria("AGUA PURIFICADA"), "Agua Purificada");
+  assert.equal(S.canonizarCategoria("CARNICOS"), "Cárnicos", "también sin acentos");
+});
+t("si no está en la lista oficial, respeta la primera grafía ya usada", () => {
+  S.state = { budget: {}, categorias: ["Cárnicos"], weeks: [{ id: "w1", cortes: [], retiros: [],
+    gastos: [{ id: "a", categoria: "Mant Software", importe: 100 }] }] };
+  assert.equal(S.canonizarCategoria("MANT SOFTWARE"), "Mant Software");
+  assert.equal(S.canonizarCategoria("mant software"), "Mant Software");
+});
+t("una categoría genuinamente nueva pasa tal cual", () => {
+  S.state = { weeks: [], budget: {}, categorias: ["Cárnicos"] };
+  assert.equal(S.canonizarCategoria("  Fletes  "), "Fletes", "solo se recortan espacios");
+  assert.equal(S.canonizarCategoria(""), "");
+});
+t("NO fusiona nombres que difieren en algo más que mayúsculas o acentos", () => {
+  // Es la lección de los alias de productos: aproximar acaba juntando cosas distintas.
+  S.state = { weeks: [], budget: {}, categorias: ["RENTA DEPTO CICSA"] };
+  assert.equal(S.canonizarCategoria("renta depto"), "renta depto", "son categorías distintas");
+});
+t("el proveedor reusa el nombre que ya existe en los gastos", () => {
+  S.state = { budget: {}, weeks: [{ id: "w1", cortes: [], retiros: [],
+    gastos: [{ id: "a", proveedor: "GAS EXPRESS NIETO", importe: 100 }] }] };
+  assert.equal(S.canonizarProveedor("Gas Express Nieto"), "GAS EXPRESS NIETO");
+  assert.equal(S.canonizarProveedor("gas express nieto"), "GAS EXPRESS NIETO");
+  assert.equal(S.canonizarProveedor("POLLO BAL"), "POLLO BAL", "uno nuevo pasa tal cual");
+});
+t("detecta los grupos de variantes y elige la oficial como canónica", () => {
+  S.state = { budget: {}, categorias: ["Agua Purificada"], weeks: [{ id: "w1", cortes: [], retiros: [],
+    gastos: [
+      { id: "a", categoria: "Agua Purificada", importe: 35470.50 },
+      { id: "b", categoria: "agua purificada", importe: 18190.00 },
+      { id: "c", categoria: "Cárnicos", importe: 5000 },
+    ] }] };
+  const g = S.variantesDeCategoria();
+  assert.equal(g.length, 1, "solo un grupo con variantes");
+  assert.equal(g[0].canon, "Agua Purificada");
+  assert.deepEqual(g[0].variantes, ["agua purificada"]);
+  close(g[0].monto, 53660.50, 0.01);
+});
+t("sin lista oficial, gana la variante con más dinero", () => {
+  S.state = { budget: {}, categorias: ["Cárnicos"], weeks: [{ id: "w1", cortes: [], retiros: [],
+    gastos: [
+      { id: "a", categoria: "mant software", importe: 500 },
+      { id: "b", categoria: "MANT SOFTWARE", importe: 9940 },
+    ] }] };
+  assert.equal(S.variantesDeCategoria()[0].canon, "MANT SOFTWARE");
+});
+t("las variantes dentro de facturas divididas también se detectan", () => {
+  S.state = { budget: {}, categorias: [], weeks: [{ id: "w1", cortes: [], retiros: [], gastos: [
+    { id: "d", categoria: "Dividida", importe: 300, _dividida: true, _partidas: [
+      { categoria: "Desechables", importe: 200 }, { categoria: "DESECHABLES", importe: 100 }] }] }] };
+  const g = S.variantesDeCategoria();
+  assert.equal(g.length, 1);
+  close(g[0].monto, 300, 0.01);
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
