@@ -69,7 +69,7 @@ const FUNCS = [
   "divididasDescuadradas", "prorratearPartidas",
   "canonizarCategoria", "canonizarProveedor", "_categoriasEnUso", "variantesDeCategoria",
   "_normCat", "_limpiarNombreCat",
-  "balanceOperativo",
+  "balanceOperativo", "ingresosDetalle",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
@@ -1256,6 +1256,63 @@ t("lo de fuera del periodo no entra", () => {
   const r = S.balanceOperativo([{ rfc: RFC_YO, fecha: "2026-05-03", subtotal: 999999, tipo: "I" }],
     "2026-06-29", "2026-07-26", RFC_YO);
   close(r.entradas, 0, 0.01); close(r.salidas, 0, 0.01);
+});
+
+console.log("\n== Desglose de ingresos (para conciliar contra estimaciones) ==");
+t("cada factura emitida sale con su folio legible y su cliente", () => {
+  S.state = { budget: {}, weeks: [{ id: "w1", gastos: [], retiros: [],
+    cortes: [{ fecha: "2026-07-06", label: "Lunes", monto: 80000 }] }] };
+  const d = S.ingresosDetalle([
+    { rfc: RFC_YO, fecha: "2026-07-08", subtotal: 500000, serie: "A", folioComp: "1024",
+      nombreReceptor: "CLIENTE COMEDOR SA", tipo: "I", uuid: "UUID-1" },
+  ], "2026-06-29", "2026-07-26", RFC_YO);
+  assert.equal(d.facturas.length, 1);
+  assert.equal(d.facturas[0].folio, "A1024", "serie + folio, no el UUID");
+  assert.equal(d.facturas[0].cliente, "CLIENTE COMEDOR SA");
+  close(d.facturas[0].monto, 500000, 0.01);
+  assert.equal(d.cortes.length, 1);
+  assert.equal(d.cortes[0].label, "Lunes");
+});
+t("una factura sin folio cae al UUID, no se queda en blanco", () => {
+  S.state = { budget: {}, weeks: [{ id: "w1", gastos: [], cortes: [], retiros: [] }] };
+  const d = S.ingresosDetalle([{ rfc: RFC_YO, fecha: "2026-07-08", subtotal: 1000, tipo: "I",
+    uuid: "B876F3AC-8DD9-455D-0000-000000000001" }], "2026-06-29", "2026-07-26", RFC_YO);
+  assert.equal(d.facturas[0].folio, "B876F3AC");
+  assert.equal(d.facturas[0].cliente, "—", "sin receptor guardado");
+});
+t("la nota de crédito aparece en negativo y marcada", () => {
+  S.state = { budget: {}, weeks: [{ id: "w1", gastos: [], cortes: [], retiros: [] }] };
+  const d = S.ingresosDetalle([
+    { rfc: RFC_YO, fecha: "2026-07-08", subtotal: 100000, tipo: "I", uuid: "u1" },
+    { rfc: RFC_YO, fecha: "2026-07-20", subtotal: 5000,   tipo: "E", uuid: "u2" },
+  ], "2026-06-29", "2026-07-26", RFC_YO);
+  assert.equal(d.facturas.length, 2);
+  const nc = d.facturas.find(f => f.tipo === "E");
+  close(nc.monto, -5000, 0.01);
+});
+t("el detalle suma exactamente lo que reporta el balance", () => {
+  S.state = { budget: {}, weeks: [{ id: "w1", gastos: [], retiros: [],
+    cortes: [{ fecha: "2026-07-06", monto: 80000 }, { fecha: "2026-07-13", monto: 70000 }] }] };
+  const cf = [
+    { rfc: RFC_YO, fecha: "2026-07-08", subtotal: 500000, tipo: "I", uuid: "u1" },
+    { rfc: RFC_YO, fecha: "2026-07-15", subtotal: 300000, tipo: "I", uuid: "u2" },
+    { rfc: RFC_YO, fecha: "2026-07-16", subtotal: 300000, tipo: "P", uuid: "u3" },  // no es venta
+    { rfc: "OTRO010101XXX", fecha: "2026-07-09", subtotal: 26484, tipo: "I", uuid: "u4" },
+  ];
+  const b = S.balanceOperativo(cf, "2026-06-29", "2026-07-26", RFC_YO);
+  const d = S.ingresosDetalle(cf, "2026-06-29", "2026-07-26", RFC_YO);
+  close(d.facturas.reduce((s, f) => s + f.monto, 0), b.facturado - b.notasCredito, 0.01);
+  close(d.cortes.reduce((s, c) => s + c.monto, 0), b.efectivo, 0.01);
+  assert.equal(d.facturas.length, 2, "el complemento de pago y el CFDI ajeno no entran");
+});
+t("el detalle sale ordenado por fecha", () => {
+  S.state = { budget: {}, weeks: [{ id: "w1", gastos: [], cortes: [], retiros: [] }] };
+  const d = S.ingresosDetalle([
+    { rfc: RFC_YO, fecha: "2026-07-20", subtotal: 1, tipo: "I", uuid: "c" },
+    { rfc: RFC_YO, fecha: "2026-07-01", subtotal: 1, tipo: "I", uuid: "a" },
+    { rfc: RFC_YO, fecha: "2026-07-10", subtotal: 1, tipo: "I", uuid: "b" },
+  ], "2026-06-29", "2026-07-26", RFC_YO);
+  assert.deepEqual(d.facturas.map(f => f.fecha), ["2026-07-01", "2026-07-10", "2026-07-20"]);
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
