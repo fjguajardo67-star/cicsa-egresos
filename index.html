@@ -1916,7 +1916,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-07-g";
+const APP_BUILD = "2026-08-07-h";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2613,12 +2613,16 @@ function refrescarTrasCorte(){
   });
 }
 
-function pintarSelectorPeriodoSP(containerId, onChange){
+// `opts.sinCorte` deja fuera el control de la fecha de corte. El corte se administra desde
+// Presupuesto y Seguimiento; en el Balance solo estorba — ahí se consulta un periodo, no se
+// configura qué histórico se oculta. El AVISO sí se conserva cuando hay corte activo: si no,
+// el balance mostraría cifras recortadas sin decir por qué.
+function pintarSelectorPeriodoSP(containerId, onChange, opts){
   const cont=document.getElementById(containerId); if(!cont) return;
   const p=getPeriodoSP(), raw=getPeriodoSPRaw();
   const selStyle="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit";
   const corte=fechaCorteDatos();
-  const esAdminSel=(typeof currentRole!=="undefined" && currentRole==="admin");
+  const esAdminSel=(typeof currentRole!=="undefined" && currentRole==="admin") && !(opts && opts.sinCorte);
   // Una semana que termina antes del corte no mostraría nada: se saca del desplegable para
   // que nadie la elija y crea que se perdieron los datos.
   const weekOpts=state.weeks.slice().reverse()
@@ -2797,7 +2801,7 @@ function showPage(name,btn){
   if(name==="resumen")     renderResumen();
   if(name==="gastos")     { pintarSelectorPeriodoSP("gastosPeriodoSel","renderGastos"); renderGastos(); }
   if(name==="presupuesto"){ pintarSelectorPeriodoSP("presupPeriodoSel","renderPresupuesto"); renderPresupuesto(); }
-  if(name==="balance"){    pintarSelectorPeriodoSP("balancePeriodoSel","renderBalance"); renderBalance();
+  if(name==="balance"){    pintarSelectorPeriodoSP("balancePeriodoSel","renderBalance",{sinCorte:true}); renderBalance();
                            // Los CFDI viven en la nube: si aún no se cargan, se piden y se repinta.
                            if(!_cfdisStore && currentRole==="admin") cargarCfdisStore().then(()=>renderBalance()).catch(()=>{}); }
   if(name==="reporte"){    pintarSelectorPeriodoSP("reportePeriodoSel","renderReporteActual"); renderReporteActual(); }
