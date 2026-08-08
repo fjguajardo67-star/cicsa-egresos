@@ -48,6 +48,7 @@ function extractConst(name) {
 }
 const CONSTS = ["CATS"];
 
+
 const FUNCS = [
   "normalizarParaComparar", "posibleMismoIngrediente", "esGastoEfectivo",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
@@ -65,6 +66,7 @@ const FUNCS = [
   "catsActuales", "_catsEditable", "_catExiste", "renombrarCategoriaEnEstado",
   "factorPresupuestoPeriodo", "presupCatPeriodo",
   "fechaCorteDatos", "filtrarPorCorte", "contarAntesDelCorte",
+  "divididasDescuadradas", "prorratearPartidas",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
@@ -79,6 +81,7 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
+vm.runInContext("const TOL_DIVIDIDA = 0.05;", sandbox);
 for (const f of FUNCS) vm.runInContext(extractFunction(f), sandbox);
 const S = sandbox;
 
@@ -1029,6 +1032,50 @@ t("sin corte, los CFDIs viejos siguen apareciendo (no cambia el comportamiento p
   ], "2026-01-01", "2026-12-31", "CIC190426SD4");
   assert.equal(r.faltantes.length, 1);
   assert.equal(r.omitidos.CORTE, undefined);
+});
+
+console.log("\n== Facturas divididas que no cuadran ==");
+const dividida = (id, total, partidas) => ({ id, fecha: "2026-07-10", importe: total,
+  _dividida: true, categoria: "Dividida", _partidas: partidas });
+t("detecta la factura cuyo desglose no cubre el total", () => {
+  const g = dividida("f1", 10000, [{ categoria: "Abarrotes", importe: 6000 }, { categoria: "Lácteos", importe: 3601.65 }]);
+  const r = S.divididasDescuadradas([g]);
+  assert.equal(r.length, 1);
+  close(r[0].diff, 398.35, 0.01);   // el hueco real del reporte
+});
+t("una división que cuadra no se reporta, ni por centavos de redondeo", () => {
+  assert.equal(S.divididasDescuadradas([
+    dividida("ok", 10000, [{ categoria: "A", importe: 6000 }, { categoria: "B", importe: 4000 }]),
+    dividida("centavo", 100, [{ categoria: "A", importe: 99.98 }]),
+  ]).length, 0);
+});
+t("una factura normal (no dividida) nunca se reporta", () => {
+  assert.equal(S.divididasDescuadradas([{ id: "n", importe: 500, categoria: "Cárnicos" }]).length, 0);
+});
+t("el prorrateo reparte la diferencia en proporción y suma EXACTO el total", () => {
+  const ps = S.prorratearPartidas([{ categoria: "A", importe: 6000 }, { categoria: "B", importe: 3601.65 }], 10000);
+  const suma = ps.reduce((s, p) => s + p.importe, 0);
+  close(suma, 10000, 0.001);
+  assert.ok(ps[0].importe > 6000 && ps[1].importe > 3601.65, "ambas deben subir");
+  assert.ok(ps[0].importe > ps[1].importe, "la mayor se lleva más");
+});
+t("prorratear cuando SOBRA dinero baja las partidas y sigue cuadrando", () => {
+  const ps = S.prorratearPartidas([{ categoria: "A", importe: 7000 }, { categoria: "B", importe: 4000 }], 10000);
+  close(ps.reduce((s, p) => s + p.importe, 0), 10000, 0.001);
+  assert.ok(ps[0].importe < 7000 && ps[1].importe < 4000);
+});
+t("el redondeo no deja centavos sueltos (tres partes iguales de $100)", () => {
+  const ps = S.prorratearPartidas([{ categoria: "A", importe: 1 }, { categoria: "B", importe: 1 }, { categoria: "C", importe: 1 }], 100);
+  close(ps.reduce((s, p) => s + p.importe, 0), 100, 0.001);
+});
+t("prorratear no rompe si las partidas suman cero", () => {
+  const ps = S.prorratearPartidas([{ categoria: "A", importe: 0 }], 500);
+  assert.equal(ps.length, 1);
+});
+t("tras prorratear, el detector ya no la marca", () => {
+  const g = dividida("f1", 10000, [{ categoria: "A", importe: 6000 }, { categoria: "B", importe: 3601.65 }]);
+  g._partidas = S.prorratearPartidas(g._partidas, g.importe);
+  assert.equal(S.divididasDescuadradas([g]).length, 0);
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);

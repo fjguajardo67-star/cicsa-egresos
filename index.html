@@ -1405,6 +1405,7 @@ body.snav-min .side-theme span { display:none; }
     <div id="editPartidasInfo" style="font-size:13px;color:var(--txt2);margin:4px 0 14px"></div>
     <div id="editPartidasRows"></div>
     <button class="btn btn-light" onclick="editPartidasAddRow()" style="margin-top:6px;padding:6px 12px;font-size:13px">➕ Agregar categoría</button>
+    <button class="btn btn-light" id="btnEditPartCuadrar" onclick="cuadrarEditPartidas()" style="margin-top:6px;margin-left:6px;padding:6px 12px;font-size:13px;display:none">⚖️ Cuadrar con el total</button>
     <div id="editPartidasDiff" style="margin:14px 0;font-size:13px;font-weight:600"></div>
     <div class="btn-row">
       <button class="btn btn-gold" onclick="guardarEditPartidas()">💾 Guardar</button>
@@ -1899,7 +1900,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-07-b";
+const APP_BUILD = "2026-08-07-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3753,6 +3754,44 @@ function eliminarGasto(id){
 // importe de ESA partida — no el total de la factura. Solo lo usan Presupuesto/Reporte/Excel/
 // PDF para el desglose por categoría; Gastos y Pagos siempre muestran la factura como una sola
 // fila (ver splitGuardar).
+// ── Facturas divididas que no cuadran ───────────────────────────────
+// Las pantallas por categoría usan la SUMA DE LAS PARTIDAS, no el total de la factura. Si el
+// desglose no cubre el importe, esa diferencia desaparece del presupuesto y de los reportes pero
+// sigue contando en los totales — dinero que no está en ninguna categoría y que nadie vuelve a
+// ver. Al guardar solo se advertía una vez; después nada lo señalaba.
+const TOL_DIVIDIDA = 0.05;
+function divididasDescuadradas(gastos, tolerancia){
+  const tol = (tolerancia===undefined) ? TOL_DIVIDIDA : tolerancia;
+  const out=[];
+  (gastos||[]).forEach(g=>{
+    if(!(g && g._dividida && Array.isArray(g._partidas) && g._partidas.length)) return;
+    const total=parseFloat(g.importe)||0;
+    const suma=g._partidas.reduce((s,p)=>s+(parseFloat(p.importe)||0),0);
+    const diff=Math.round((total-suma)*100)/100;
+    if(Math.abs(diff)>tol) out.push({ gasto:g, total, suma, diff });
+  });
+  return out;
+}
+// Reparte la diferencia ENTRE TODAS las partidas, en proporción a su importe. Mandarla toda a la
+// partida mayor (lo que hacía el único botón que existía) distorsiona esa categoría; prorratear
+// mantiene la mezcla del documento. El redondeo sobrante se ajusta en la partida mayor para que
+// la suma dé EXACTA — si no, cuadrar dejaría centavos sueltos y volvería a descuadrar.
+function prorratearPartidas(partidas, total){
+  const ps=(partidas||[]).map(p=>({...p, importe: parseFloat(p.importe)||0}));
+  const t=parseFloat(total)||0;
+  const suma=ps.reduce((s,p)=>s+p.importe,0);
+  if(!ps.length || suma<=0 || t<=0) return ps;
+  const f=t/suma;
+  ps.forEach(p=>{ p.importe = Math.round(p.importe*f*100)/100; });
+  const nueva=ps.reduce((s,p)=>s+p.importe,0);
+  const resto=Math.round((t-nueva)*100)/100;
+  if(resto!==0){
+    const iMayor=ps.reduce((im,p,i,arr)=>p.importe>arr[im].importe?i:im,0);
+    ps[iMayor].importe = Math.round((ps[iMayor].importe+resto)*100)/100;
+  }
+  return ps;
+}
+
 function partidasExpandidas(gastos){
   const out=[];
   gastos.forEach(g=>{
@@ -4285,6 +4324,13 @@ function renderResumen(){
   // ── Requiere atención ──
   const alerts=[];
   if(vencidas.length) alerts.push(`<div class="rs-alert crit"><div><strong>${vencidas.length} factura${vencidas.length===1?"":"s"} vencida${vencidas.length===1?"":"s"}</strong> por ${fmt(vencTotal)}</div><button class="go" onclick="showPage('pagos')">Revisar →</button></div>`);
+  // Se revisan TODAS las semanas, no solo el periodo: una división descuadrada de hace un mes
+  // sigue restando de las categorías hoy, y nadie la iba a encontrar sola.
+  const _desc = divididasDescuadradas(allGastosAllWeeks());
+  if(_desc.length){
+    const _mDesc=_desc.reduce((s,d)=>s+Math.abs(d.diff),0);
+    alerts.push(`<div class="rs-alert"><div><strong>${_desc.length} factura${_desc.length===1?"":"s"} dividida${_desc.length===1?"":"s"} sin cuadrar</strong> — ${fmt(_mDesc)} que no cae en ninguna categoría</div><button class="go" onclick="showPage('gastos')">Revisar →</button></div>`);
+  }
   if(satFalt&&satFalt.n>0) alerts.push(`<div class="rs-alert crit"><div><strong>${satFalt.n} CFDI${satFalt.n===1?"":"s"} en SAT sin capturar</strong> por ${fmt(satFalt.total)}</div><button class="go" onclick="showPage('sat')">Revisar →</button></div>`);
   if(excedidas.length) alerts.push(`<div class="rs-alert warn"><div><strong>${excedidas.length} categoría${excedidas.length===1?"":"s"} sobre presupuesto</strong> — ${esc(excedidas.slice(0,3).join(", "))}${excedidas.length>3?"…":""} (${fmt(excedidasMonto)} de más)</div><button class="go" onclick="showPage('presupuesto')">Ver →</button></div>`);
   if(!si) alerts.push(`<div class="rs-alert warn"><div><strong>Saldo inicial de caja sin fijar</strong> — el saldo mostrado parte de $0</div><button class="go" onclick="showPage('caja')">Fijar →</button></div>`);
@@ -6292,13 +6338,44 @@ function renderEditPartDiff(){
   const el=document.getElementById("editPartidasDiff");
   if(Math.abs(diff)<0.05){ el.style.color="var(--vm)"; el.textContent=`✅ Cuadra con el total (${fmt(_editPartTotal)})`; }
   else{ el.style.color="var(--red)"; el.textContent=`⚠ ${diff>0?"Falta":"Sobra"} ${fmt(Math.abs(diff))} — la suma debe ser ${fmt(_editPartTotal)}`; }
+  const btn=document.getElementById("btnEditPartCuadrar");
+  if(btn) btn.style.display = (Math.abs(diff)>TOL_DIVIDIDA) ? "inline-block" : "none";
 }
 function editPartidasAddRow(){ _editPart.push({categoria:"Otro", importe:0, descripcion:""}); renderEditPartRows(); }
+// Cuadra el desglose de una factura YA GUARDADA. Antes esto solo existía al capturar, así que
+// una división descuadrada solo se podía corregir a mano, renglón por renglón.
+function cuadrarEditPartidas(){
+  const conImporte=_editPart.filter(p=>(parseFloat(p.importe)||0)>0);
+  if(!conImporte.length){ alert("Pon al menos una categoría con importe para poder cuadrar."); return; }
+  const suma=conImporte.reduce((s,p)=>s+(parseFloat(p.importe)||0),0);
+  const diff=Math.round((_editPartTotal-suma)*100)/100;
+  if(Math.abs(diff)<=TOL_DIVIDIDA){ alert("Ya cuadra con el total."); return; }
+  const iMayor=conImporte.reduce((im,p,i,arr)=>(parseFloat(p.importe)||0)>(parseFloat(arr[im].importe)||0)?i:im,0);
+  const mayor=conImporte[iMayor];
+  const msg=`${diff>0?"Faltan":"Sobran"} ${fmt(Math.abs(diff))} para llegar al total de la factura (${fmt(_editPartTotal)}).\n\n`+
+    `Aceptar = repartir la diferencia entre las ${conImporte.length} categorías, en proporción a su importe\n`+
+    `Cancelar = ${diff>0?"sumarla a":"restarla de"} la categoría mayor («${mayor.categoria}»)`;
+  const prorratear=confirm(msg);
+  let ajustadas;
+  if(prorratear){
+    ajustadas=prorratearPartidas(conImporte, _editPartTotal);
+  } else {
+    const nuevo=Math.round(((parseFloat(mayor.importe)||0)+diff)*100)/100;
+    if(nuevo<=0){ alert("Así la categoría mayor quedaría en cero o negativa. Usa el reparto proporcional o ajusta a mano."); return; }
+    ajustadas=conImporte.map((p,i)=>i===iMayor?{...p, importe:nuevo}:{...p});
+  }
+  _editPart=ajustadas;
+  renderEditPartRows();
+}
 function guardarEditPartidas(){
   const validas=_editPart.filter(p=>parseFloat(p.importe)>0).map(p=>({categoria:p.categoria, importe:parseFloat(p.importe), descripcion:p.descripcion||""}));
   if(!validas.length){ alert("Debe quedar al menos una categoría con importe mayor a $0."); return; }
   const suma=validas.reduce((s,p)=>s+p.importe,0), diff=Math.abs(_editPartTotal-suma);
-  if(diff>1 && !confirm(`La suma de categorías (${fmt(suma)}) difiere del total de la factura (${fmt(_editPartTotal)}) en ${fmt(diff)}. ¿Guardar de todas formas?`)) return;
+  // Guardar descuadrado es válido a veces, pero hay que decir la consecuencia: esa diferencia
+  // no aparecerá en ninguna categoría del presupuesto ni de los reportes.
+  if(diff>TOL_DIVIDIDA && !confirm(`La suma de categorías (${fmt(suma)}) difiere del total de la factura (${fmt(_editPartTotal)}) en ${fmt(diff)}.\n\n`+
+    `Esos ${fmt(diff)} NO aparecerán en ninguna categoría del presupuesto ni de los reportes, aunque sí en los totales.\n\n`+
+    `Usa «⚖️ Cuadrar con el total» para repartirlos.\n\n¿Guardar así de todas formas?`)) return;
   let g=null;
   state.weeks.forEach(w=>(w.gastos||[]).forEach(x=>{ if(String(x.id)===_editPartGastoId) g=x; }));
   if(!g) return;
