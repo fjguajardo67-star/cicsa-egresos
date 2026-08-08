@@ -1103,6 +1103,7 @@ body.snav-min .side-theme span { display:none; }
       <span style="font-size:12px;color:var(--vd)">🔓 <span id="presupAbiertoTxt"></span></span>
       <span style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-green" style="padding:6px 12px;font-size:12px" onclick="agregarCategoria()">➕ Agregar categoría</button>
+        <button class="btn btn-light" style="padding:6px 12px;font-size:12px" title="Junta las categorías que solo cambian en mayúsculas o acentos" onclick="unificarVariantesCategorias()">🔤 Unificar variantes</button>
         <button class="btn btn-light" style="padding:6px 12px;font-size:12px" onclick="restaurarCategorias()">↺ Categorías de fábrica</button>
         <button class="btn btn-light" style="padding:6px 12px;font-size:12px" onclick="bloquearPresupuesto()">🔒 Bloquear</button>
       </span>
@@ -1900,7 +1901,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-07-c";
+const APP_BUILD = "2026-08-07-d";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2234,6 +2235,43 @@ const CATS = [
 ];
 // Categorías vigentes. CATS es el juego de fábrica; si el admin agregó o renombró alguna,
 // state.categorias manda (y viaja a todo el equipo por el guardado normal).
+// ── Nombres canónicos ───────────────────────────────────────────────
+// Con cinco personas capturando, la misma categoría entra escrita de tres formas ("Agua
+// Purificada", "agua purificada", "AGUA PURIFICADA") y el gasto se parte en renglones que nadie
+// vuelve a juntar. En vez de limpiar después, se reusa el nombre que YA existe cuando el nuevo
+// solo difiere en mayúsculas o acentos: la variante nunca llega a crearse.
+//
+// La comparación es EXACTA tras normalizar, nunca difusa. Una coincidencia aproximada acabaría
+// fusionando cosas distintas — es justo lo que pasó con los alias de productos.
+function _categoriasEnUso(){
+  const set=new Set();
+  (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{
+    if(g.categoria) set.add(g.categoria);
+    (g._partidas||[]).forEach(p=>{ if(p.categoria) set.add(p.categoria); });
+  }));
+  return [...set];
+}
+function canonizarCategoria(nombre){
+  const txt=(nombre||"").trim();
+  if(!txt) return txt;
+  const n=normalizarParaComparar(txt);
+  // 1) La lista oficial manda: si la categoría ya existe ahí, se usa esa grafía.
+  const oficial=(typeof catsActuales==="function"?catsActuales():[]).find(c=>normalizarParaComparar(c)===n);
+  if(oficial) return oficial;
+  // 2) Si no está en la lista pero ya se usó antes, se respeta la primera grafía.
+  const usada=_categoriasEnUso().find(c=>normalizarParaComparar(c)===n);
+  return usada || txt;
+}
+function canonizarProveedor(nombre){
+  const txt=(nombre||"").trim();
+  if(!txt) return txt;
+  const n=normalizarParaComparar(txt);
+  const set=new Set();
+  (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{ if(g.proveedor) set.add(g.proveedor); }));
+  try{ const al=(typeof getAliases==="function")?getAliases():{}; Object.keys(al||{}).forEach(k=>set.add(k)); }catch(_){}
+  const existente=[...set].find(x=>normalizarParaComparar(x)===n);
+  return existente || txt;
+}
 function catsActuales(){
   return (Array.isArray(state.categorias) && state.categorias.length) ? state.categorias : CATS;
 }
@@ -3194,10 +3232,10 @@ function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
 function guardarGasto(){
   const cat=document.getElementById("fCategoria").value;
   const otro=document.getElementById("fOtro").value.trim();
-  const catFinal=cat==="Otro"?(otro||"Otro"):cat;
+  const catFinal=canonizarCategoria(cat==="Otro"?(otro||"Otro"):cat);
   const gasto={
     id:Date.now().toString(),
-    proveedor:document.getElementById("fProv").value.trim(),
+    proveedor:canonizarProveedor(document.getElementById("fProv").value),
     fecha:document.getElementById("fFecha").value,
     factura:document.getElementById("fFactura").value.trim(),
     importe:parseFloat(document.getElementById("fImporte").value)||0,
@@ -3257,10 +3295,10 @@ function guardarGasto(){
 function guardarManual(){
   const cat=document.getElementById("mCategoria").value;
   const otro=document.getElementById("mOtro").value.trim();
-  const catFinal=cat==="Otro"?(otro||"Otro"):cat;
+  const catFinal=canonizarCategoria(cat==="Otro"?(otro||"Otro"):cat);
   const fp=document.getElementById("mFormaPago")?.value||"efectivo";
   const gasto={
-    id:Date.now().toString(), proveedor:document.getElementById("mProv").value.trim(),
+    id:Date.now().toString(), proveedor:canonizarProveedor(document.getElementById("mProv").value),
     fecha:document.getElementById("mFecha").value, factura:document.getElementById("mFactura").value.trim(),
     importe:parseFloat(document.getElementById("mImporte").value)||0,
     categoria:catFinal, notas:document.getElementById("mNotas").value.trim(), esOtro:cat==="Otro",
@@ -3648,7 +3686,7 @@ function splitGuardar(){
   const suma=(splitData.partidas||[]).reduce((s,p)=>s+parseFloat(p.importe||0),0);
   const total=parseFloat(splitData.total||0), diff=Math.abs(total-suma);
   if(diff>1){ if(!confirm(`La suma (${fmt(suma)}) difiere del total (${fmt(total)}) en ${fmt(diff)}. ¿Guardar de todas formas?`)) return; }
-  const proveedor=splitData.proveedor||document.getElementById("fProv").value;
+  const proveedor=canonizarProveedor(splitData.proveedor||document.getElementById("fProv").value);
   const fecha=splitData.fecha||document.getElementById("fFecha").value;
   const factura=splitData.factura||document.getElementById("fFactura").value;
   const _dup=findDuplicate(proveedor,total,fecha,factura);
@@ -3662,7 +3700,7 @@ function splitGuardar(){
   // por lo que la misma factura aparecía repetida en Gastos, Pagos y Reporte.
   const wk=getActiveWeek();
   const id=Date.now().toString()+Math.random().toString(36).slice(2,6);
-  const partidasValidas=(splitData.partidas||[]).filter(p=>parseFloat(p.importe||0)>0).map(p=>({categoria:p.categoria, importe:parseFloat(p.importe), descripcion:p.descripcion||""}));
+  const partidasValidas=(splitData.partidas||[]).filter(p=>parseFloat(p.importe||0)>0).map(p=>({categoria:canonizarCategoria(p.categoria), importe:parseFloat(p.importe), descripcion:p.descripcion||""}));
   wk.gastos.push({
     id, proveedor, fecha, factura,
     importe:total, categoria:"Dividida", notas:"",
@@ -3849,6 +3887,39 @@ function _catsEditable(){
 function _catExiste(nombre){
   const n=normalizarParaComparar(nombre);
   return catsActuales().some(c=>normalizarParaComparar(c)===n);
+}
+// Agrupa las categorías en uso que solo difieren en mayúsculas o acentos. La canónica es la que
+// esté en la lista oficial; si ninguna lo está, la que traiga más dinero — esa es la que el
+// equipo viene usando de verdad.
+function variantesDeCategoria(){
+  const montos={};
+  (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{
+    const suma=(c,v)=>{ if(c) montos[c]=(montos[c]||0)+(parseFloat(v)||0); };
+    if(Array.isArray(g._partidas) && g._partidas.length) g._partidas.forEach(p=>suma(p.categoria,p.importe));
+    else suma(g.categoria, g.importe);
+  }));
+  const grupos={};
+  _categoriasEnUso().forEach(c=>{
+    const n=normalizarParaComparar(c);
+    if(n) (grupos[n]=grupos[n]||[]).push(c);
+  });
+  const oficiales=(typeof catsActuales==="function"?catsActuales():[]);
+  return Object.values(grupos).filter(g=>g.length>1).map(g=>{
+    const canon = g.find(c=>oficiales.includes(c))
+      || g.slice().sort((a,b)=>(montos[b]||0)-(montos[a]||0))[0];
+    return { canon, variantes:g.filter(c=>c!==canon), monto:g.reduce((s,c)=>s+(montos[c]||0),0) };
+  });
+}
+function unificarVariantesCategorias(){
+  if(!_soloAdminPresup()) return;
+  const grupos=variantesDeCategoria();
+  if(!grupos.length){ alert("✅ No hay categorías escritas de dos formas distintas."); return; }
+  const detalle=grupos.map(x=>`• ${x.variantes.join(", ")} → «${x.canon}»  (${fmt(x.monto)})`).join("\n");
+  if(!confirm(`Se unifican ${grupos.length} grupo(s) de categorías que solo cambian en mayúsculas o acentos:\n\n${detalle}\n\nSe actualizan los gastos, sus partidas y el presupuesto. ¿Continuar?`)) return;
+  let tocados=0;
+  grupos.forEach(x=>x.variantes.forEach(v=>{ tocados+=renombrarCategoriaEnEstado(v, x.canon); }));
+  save(); renderPresupuesto();
+  alert(`✅ ${grupos.length} grupo(s) unificados — ${tocados} registro(s) actualizados.`);
 }
 function agregarCategoria(){
   if(!_soloAdminPresup()) return;
@@ -5560,7 +5631,7 @@ function consolidarFacturaDividida(prov, folio){
   padres.forEach(p=>{ if(Array.isArray(p._partidas)) p._partidas.forEach(x=>push(x.categoria, parseFloat(x.importe)||0, x.descripcion)); });
   hijos.forEach(h=>push(h.categoria, imp(h), h.descripcion));
   const partidas = Object.values(acc).filter(p=>p.importe>0)
-    .map(p=>({categoria:p.categoria, importe:Math.round(p.importe*100)/100, descripcion:p.descripcion||""}));
+    .map(p=>({categoria:canonizarCategoria(p.categoria), importe:Math.round(p.importe*100)/100, descripcion:p.descripcion||""}));
   if(partidas.length < 1){ alert("No se encontraron categorías para consolidar."); return; }
   const total = imp(keeper), suma = partidas.reduce((s,p)=>s+p.importe,0);
   const lista = partidas.map(p=>`• ${p.categoria}: ${fmt(p.importe)}`).join("\n");
@@ -6294,6 +6365,9 @@ function ocultarGmailRevisados(){
 // ═══════════════════════════════════════════════════════════════════════════
 function editarGasto(id,campo,valor){
   if(campo==="importe" && !(parseFloat(valor)>0)){ alert("El importe debe ser mayor que cero."); renderGastos(); return; }
+  // Editar a mano es otra puerta por donde entran variantes del mismo nombre.
+  if(campo==="categoria") valor=canonizarCategoria(valor);
+  if(campo==="proveedor") valor=canonizarProveedor(valor);
   state.weeks.forEach(w=>{const g=(w.gastos||[]).find(x=>x.id===id);if(g){g[campo]=valor;if(campo==="categoria")g.esOtro=(valor==="Otro");}});
   save();
   renderGastos();
@@ -6368,7 +6442,7 @@ function cuadrarEditPartidas(){
   renderEditPartRows();
 }
 function guardarEditPartidas(){
-  const validas=_editPart.filter(p=>parseFloat(p.importe)>0).map(p=>({categoria:p.categoria, importe:parseFloat(p.importe), descripcion:p.descripcion||""}));
+  const validas=_editPart.filter(p=>parseFloat(p.importe)>0).map(p=>({categoria:canonizarCategoria(p.categoria), importe:parseFloat(p.importe), descripcion:p.descripcion||""}));
   if(!validas.length){ alert("Debe quedar al menos una categoría con importe mayor a $0."); return; }
   const suma=validas.reduce((s,p)=>s+p.importe,0), diff=Math.abs(_editPartTotal-suma);
   // Guardar descuadrado es válido a veces, pero hay que decir la consecuencia: esa diferencia
