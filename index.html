@@ -2243,6 +2243,16 @@ const CATS = [
 //
 // La comparación es EXACTA tras normalizar, nunca difusa. Una coincidencia aproximada acabaría
 // fusionando cosas distintas — es justo lo que pasó con los alias de productos.
+// Normaliza para COMPARAR categorías. Además de mayúsculas y acentos colapsa los espacios
+// (incluidos los no separables): el HTML colapsa los espacios al pintar, así que "MANT SOFTWARE"
+// y "MANT  SOFTWARE" se ven IDÉNTICAS en pantalla pero son cadenas distintas — salían como dos
+// tarjetas iguales que no había manera de unificar. No se toca normalizarParaComparar, que la usa
+// el catálogo de productos y tiene su propio comportamiento probado.
+function _normCat(s){
+  return (s||"").replace(/[\s\u00a0]+/g," ").trim().toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+}
+function _limpiarNombreCat(s){ return (s||"").replace(/[\s\u00a0]+/g," ").trim(); }
 function _categoriasEnUso(){
   const set=new Set();
   (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{
@@ -2252,14 +2262,14 @@ function _categoriasEnUso(){
   return [...set];
 }
 function canonizarCategoria(nombre){
-  const txt=(nombre||"").trim();
+  const txt=_limpiarNombreCat(nombre);   // de paso, un nombre nuevo nunca nace con espacios de más
   if(!txt) return txt;
-  const n=normalizarParaComparar(txt);
+  const n=_normCat(txt);
   // 1) La lista oficial manda: si la categoría ya existe ahí, se usa esa grafía.
-  const oficial=(typeof catsActuales==="function"?catsActuales():[]).find(c=>normalizarParaComparar(c)===n);
+  const oficial=(typeof catsActuales==="function"?catsActuales():[]).find(c=>_normCat(c)===n);
   if(oficial) return oficial;
   // 2) Si no está en la lista pero ya se usó antes, se respeta la primera grafía.
-  const usada=_categoriasEnUso().find(c=>normalizarParaComparar(c)===n);
+  const usada=_categoriasEnUso().find(c=>_normCat(c)===n);
   return usada || txt;
 }
 function canonizarProveedor(nombre){
@@ -3885,8 +3895,8 @@ function _catsEditable(){
   return state.categorias;
 }
 function _catExiste(nombre){
-  const n=normalizarParaComparar(nombre);
-  return catsActuales().some(c=>normalizarParaComparar(c)===n);
+  const n=_normCat(nombre);
+  return catsActuales().some(c=>_normCat(c)===n);
 }
 // Agrupa las categorías en uso que solo difieren en mayúsculas o acentos. La canónica es la que
 // esté en la lista oficial; si ninguna lo está, la que traiga más dinero — esa es la que el
@@ -3900,7 +3910,7 @@ function variantesDeCategoria(){
   }));
   const grupos={};
   _categoriasEnUso().forEach(c=>{
-    const n=normalizarParaComparar(c);
+    const n=_normCat(c);
     if(n) (grupos[n]=grupos[n]||[]).push(c);
   });
   const oficiales=(typeof catsActuales==="function"?catsActuales():[]);
@@ -3914,12 +3924,25 @@ function unificarVariantesCategorias(){
   if(!_soloAdminPresup()) return;
   const grupos=variantesDeCategoria();
   if(!grupos.length){ alert("✅ No hay categorías escritas de dos formas distintas."); return; }
-  const detalle=grupos.map(x=>`• ${x.variantes.join(", ")} → «${x.canon}»  (${fmt(x.monto)})`).join("\n");
+  // Si la variante solo cambia en espacios se ve igual que la canónica; hay que decirlo o el
+  // diálogo parece pedir fusionar algo consigo mismo.
+  const _et=(v,canon)=>_limpiarNombreCat(v).toLowerCase()===_limpiarNombreCat(canon).toLowerCase()
+    ? `${v} (espacios distintos)` : v;
+  const detalle=grupos.map(x=>`• ${x.variantes.map(v=>_et(v,x.canon)).join(", ")} → «${x.canon}»  (${fmt(x.monto)})`).join("\n");
   if(!confirm(`Se unifican ${grupos.length} grupo(s) de categorías que solo cambian en mayúsculas o acentos:\n\n${detalle}\n\nSe actualizan los gastos, sus partidas y el presupuesto. ¿Continuar?`)) return;
   let tocados=0;
-  grupos.forEach(x=>x.variantes.forEach(v=>{ tocados+=renombrarCategoriaEnEstado(v, x.canon); }));
+  // Si la variante también traía presupuesto asignado, al fusionar se conserva el de la
+  // canónica y el otro se pierde. Sumarlos sería adivinar (pudo ser un reparto o un error),
+  // así que se conserva el destino pero se avisa cuál se descartó, para poder ajustarlo.
+  const descartados=[];
+  grupos.forEach(x=>x.variantes.forEach(v=>{
+    const bv=parseFloat((state.budget||{})[v]);
+    if(bv>0 && (parseFloat((state.budget||{})[x.canon])||0)>0) descartados.push(`«${v}» ${fmt(bv)}`);
+    tocados+=renombrarCategoriaEnEstado(v, x.canon);
+  }));
   save(); renderPresupuesto();
-  alert(`✅ ${grupos.length} grupo(s) unificados — ${tocados} registro(s) actualizados.`);
+  alert(`✅ ${grupos.length} grupo(s) unificados — ${tocados} registro(s) actualizados.`
+    + (descartados.length ? `\n\n⚠ Estas variantes también tenían presupuesto y se descartó (se conservó el de la categoría que quedó):\n${descartados.join("\n")}\n\nRevisa que el presupuesto semanal siga siendo el correcto.` : ""));
 }
 function agregarCategoria(){
   if(!_soloAdminPresup()) return;

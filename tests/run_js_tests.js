@@ -68,6 +68,7 @@ const FUNCS = [
   "fechaCorteDatos", "filtrarPorCorte", "contarAntesDelCorte",
   "divididasDescuadradas", "prorratearPartidas",
   "canonizarCategoria", "canonizarProveedor", "_categoriasEnUso", "variantesDeCategoria",
+  "_normCat", "_limpiarNombreCat",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
@@ -1137,6 +1138,38 @@ t("las variantes dentro de facturas divididas también se detectan", () => {
   const g = S.variantesDeCategoria();
   assert.equal(g.length, 1);
   close(g[0].monto, 300, 0.01);
+});
+
+console.log("\n== Variantes invisibles (mismo texto, distintos espacios) ==");
+t("dos categorías que se ven IGUAL en pantalla se reconocen como la misma", () => {
+  // El HTML colapsa los espacios: "MANT SOFTWARE" y "MANT  SOFTWARE" se pintan idénticas.
+  assert.equal(S._normCat("MANT SOFTWARE"), S._normCat("MANT  SOFTWARE"));
+  assert.equal(S._normCat("MANT SOFTWARE"), S._normCat("MANT SOFTWARE "));
+  assert.equal(S._normCat("RENTA DEPTO CICSA"), S._normCat(" RENTA  DEPTO CICSA "));
+  assert.equal(S._normCat("Mant Software"), S._normCat("MANT\u00a0SOFTWARE"), "espacio no separable");
+});
+t("las dos tarjetas repetidas se unifican en un solo grupo", () => {
+  S.state = { budget: {}, categorias: ["MANT SOFTWARE", "RENTA DEPTO CICSA"], weeks: [{ id: "w1",
+    cortes: [], retiros: [], gastos: [
+      { id: "a", categoria: "MANT SOFTWARE",   importe: 10440 },
+      { id: "b", categoria: "MANT  SOFTWARE",  importe: 8000 },
+      { id: "c", categoria: "RENTA DEPTO CICSA",  importe: 4500 },
+      { id: "d", categoria: "RENTA DEPTO CICSA ", importe: 15000 },
+    ] }] };
+  const g = S.variantesDeCategoria().sort((a, b) => a.canon.localeCompare(b.canon));
+  assert.equal(g.length, 2, "los dos pares repetidos");
+  assert.equal(g[0].canon, "MANT SOFTWARE");        close(g[0].monto, 18440, 0.01);
+  assert.equal(g[1].canon, "RENTA DEPTO CICSA");    close(g[1].monto, 19500, 0.01);
+  g.forEach(x => x.variantes.forEach(v => S.renombrarCategoriaEnEstado(v, x.canon)));
+  assert.deepEqual(S._categoriasEnUso().sort(), ["MANT SOFTWARE", "RENTA DEPTO CICSA"]);
+  assert.equal(S.variantesDeCategoria().length, 0, "ya no queda ninguna repetida");
+});
+t("al capturar, un nombre con espacios de más nace ya limpio", () => {
+  S.state = { weeks: [], budget: {}, categorias: ["Cárnicos"] };
+  assert.equal(S.canonizarCategoria("  Mant   Software  "), "Mant Software");
+});
+t("sigue sin fusionar categorías realmente distintas", () => {
+  assert.notEqual(S._normCat("RENTA DEPTO CICSA"), S._normCat("renta depto"));
 });
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
