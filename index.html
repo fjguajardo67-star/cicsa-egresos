@@ -1791,6 +1791,8 @@ body.snav-min .side-theme span { display:none; }
       </div>
     </div>
     <img id="thumbModalImg" src="" alt="Respaldo" style="max-width:90vw;max-height:80vh;border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,.5);transition:transform .2s;transform-origin:center;cursor:grab">
+    <iframe id="thumbModalPdf" src="" title="Factura en PDF" style="display:none;width:90vw;height:80vh;border:none;border-radius:10px;background:white;box-shadow:0 20px 60px rgba(0,0,0,.5)"></iframe>
+    <div id="thumbModalMsg" style="display:none;color:#EFEFE7;font-size:14px;font-family:'DM Sans',sans-serif;background:rgba(0,0,0,.6);border-radius:10px;padding:28px 36px;text-align:center"></div>
   </div>
 </div>
 
@@ -1916,7 +1918,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-07-h";
+const APP_BUILD = "2026-08-08-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2087,6 +2089,36 @@ function encontrarGastoPorId(id){
   return null;
 }
 
+// ── Peticiones a Firebase Storage ───────────────────────────────────
+// Storage NO usa el mismo esquema de Authorization que Firestore. El SDK oficial manda
+// «Firebase <idToken>»; con «Bearer <idToken>» el endpoint no reconoce la credencial, trata la
+// petición como anónima y las reglas la rechazan con 403. Eso rompía las DOS puntas: la subida
+// fallaba en silencio (el gasto quedaba sin _respaldoUrl) y abrir la factura daba error.
+// Se prueban los dos esquemas la primera vez y se recuerda el que funcionó, para no duplicar
+// peticiones en cada miniatura de la tabla.
+let _storageAuthScheme = null;                 // "Firebase" | "Bearer" | null (aún sin probar)
+async function fetchStorage(url, opts){
+  const o = opts || {};
+  let token = null;
+  try{
+    if(typeof auth !== "undefined" && auth && auth.currentUser){
+      const t = await auth.currentUser.getIdToken();
+      if(typeof t === "string" && t) token = t;   // si viene algo raro, mejor sin cabecera que reventar
+    }
+  }catch(_){}
+  if(!token) return fetch(url, o);
+  const intentar = (esq)=>fetch(url, {...o, headers:{...(o.headers||{}), "Authorization": esq+" "+token}});
+  const esquemas = _storageAuthScheme ? [_storageAuthScheme] : ["Firebase", "Bearer"];
+  const r = await intentar(esquemas[0]);
+  if(r.ok){ _storageAuthScheme = esquemas[0]; return r; }
+  if(esquemas.length > 1 && (r.status === 401 || r.status === 403)){
+    const r2 = await intentar(esquemas[1]);
+    if(r2.ok){ _storageAuthScheme = esquemas[1]; return r2; }
+    return r;                                  // ninguno sirvió: devuelve el error del primero
+  }
+  return r;
+}
+
 function b64ToBlob(b64, mimeType){
   const raw = atob(b64);
   const bytes = new Uint8Array(raw.length);
@@ -2105,20 +2137,37 @@ async function subirRespaldoAStorage(gastoIds, b64, mimeType, factura){
     const nombreArchivo = `${Date.now()}_${(factura||"sf").replace(/[^\w.-]/g,"_")}.${ext}`;
     const path = `facturas/${nombreArchivo}`;
     const blob = b64ToBlob(b64, mimeType);
-    const headers = { "Content-Type": mimeType||"application/octet-stream", ...(await fbAuthHeader()) };
-    const r = await fetch(
+    const r = await fetchStorage(
       `https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o?uploadType=media&name=${encodeURIComponent(path)}`,
-      { method:"POST", headers, body: blob }
+      { method:"POST", headers:{ "Content-Type": mimeType||"application/octet-stream" }, body: blob }
     );
     if(!r.ok) throw new Error(`Storage respondió ${r.status}`);
     const data = await r.json();
     const url = `https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o/${encodeURIComponent(data.name)}`;
     ids.forEach(id=>{
       const gg = encontrarGastoPorId(id);
-      if(gg) gg._respaldoUrl = url;
+      if(gg){ gg._respaldoUrl = url; delete gg._respaldoError; }
     });
     save();
-  } catch(e){ console.warn("subirRespaldoAStorage error:", e); }
+    return { ok:true, url };
+  } catch(e){
+    // Antes esto solo hacía console.warn. La subida fallaba sin que nadie se enterara: el gasto
+    // se guardaba igual, quedaba sin respaldo y en la tabla aparecía una miniatura que al hacer
+    // clic no hacía absolutamente nada. Ahora el motivo se guarda en el gasto y se avisa.
+    const motivo = e.message || String(e);
+    ids.forEach(id=>{ const gg = encontrarGastoPorId(id); if(gg) gg._respaldoError = motivo; });
+    save();
+    avisarRespaldoFallido(motivo);
+    return { ok:false, motivo };
+  }
+}
+function avisarRespaldoFallido(motivo){
+  console.warn("subirRespaldoAStorage error:", motivo);
+  const el = document.getElementById("statusGuardar") || document.getElementById("statusLectura");
+  if(el){
+    el.style.display = "block"; el.className = "status err";
+    el.textContent = `⚠ El gasto SÍ se guardó, pero la imagen de la factura no se pudo subir (${motivo}). Vuelve a capturarla con la foto para reintentar.`;
+  }
 }
 
 // Barrido único (o cuantas veces se quiera): las facturas VIEJAS guardaban la imagen como
@@ -2167,23 +2216,34 @@ async function ejecutarMigracionRespaldos(){
   finally{ if(btn) btn.disabled = false; }
 }
 
-// Abre la factura guardada en Storage. Como las reglas de Storage exigen sesión iniciada
-// (no son públicas), no puede ser un <a href> normal — hay que pedirla con el idToken y
-// abrirla como blob.
+// Abre la factura guardada en Storage. Como las reglas exigen sesión iniciada (no son públicas),
+// no puede ser un <a href> normal: hay que pedirla con el idToken y mostrarla como blob.
+//
+// Se muestra DENTRO de la app, en el visor que ya existía. Antes se hacía window.open() del blob
+// después del fetch, y para el navegador eso ya no cuenta como un clic del usuario: Chrome lo
+// bloquea como popup si la descarga tardó unos segundos, y Safari/iPhone lo bloquea siempre.
+// Resultado: el clic en la miniatura no hacía nada visible.
 async function verFactura(gastoId){
   const g = allGastosAllWeeks().find(x=>x.id===gastoId);
   if(!g) return;
   if(!g._respaldoUrl){
-    alert("Este gasto no tiene una factura guardada en Storage.\n\nO se capturó sin imagen/PDF (ej. desde conciliación SAT o captura manual), o la subida no se completó. Solo las facturas capturadas con foto o desde Gmail quedan con respaldo visible.");
+    alert(g._respaldoError
+      ? `La imagen de esta factura no se pudo subir a Storage:\n\n${g._respaldoError}\n\nEl gasto sí está registrado. Para recuperar el respaldo hay que volver a capturarlo con la foto o el PDF.`
+      : "Este gasto no tiene factura adjunta.\n\nSe capturó sin imagen ni PDF — por ejemplo desde la conciliación SAT, la captura manual o una importación de Excel. Solo las facturas capturadas con foto o desde Gmail quedan con respaldo visible.");
     return;
   }
+  const info = `${g.proveedor}  ·  ${fmt(g.importe)}  ·  ${fmtDate(g.fecha)}`;
+  const nombre = `respaldo_${String(g.proveedor||"factura").replace(/\s+/g,"_")}_${g.fecha||""}`;
+  abrirVisorRespaldo(null, info, nombre, "⏳ Cargando la factura…");
   try {
-    const headers = await fbAuthHeader();
-    const r = await fetch(g._respaldoUrl+"?alt=media", { headers });
+    const r = await fetchStorage(g._respaldoUrl+"?alt=media");
     if(!r.ok) throw new Error(`Storage respondió ${r.status} (probable regla de Storage que bloquea la lectura).`);
     const blob = await r.blob();
-    window.open(URL.createObjectURL(blob), "_blank");
-  } catch(e){ alert("❌ No se pudo abrir la factura: "+e.message); }
+    abrirVisorRespaldo(blob, info, nombre);
+  } catch(e){
+    closeThumbModal();
+    alert("❌ No se pudo abrir la factura: "+(e.message||e));
+  }
 }
 
 // Miniatura real de la factura guardada en Storage — como las reglas exigen sesión iniciada,
@@ -2204,9 +2264,8 @@ async function cargarThumbReal(gastoId, url, wrapElId){
     return;
   }
   try {
-    const headers = await fbAuthHeader();
-    const r = await fetch(url+"?alt=media", { headers });
-    if(!r.ok) return;
+    const r = await fetchStorage(url+"?alt=media");
+    if(!r.ok){ console.warn("cargarThumbReal: Storage respondió", r.status); return; }
     const blob = await r.blob();
     const objUrl = URL.createObjectURL(blob);
     // Tope de memoria: los blob URLs no se liberan solos. Al pasar de 80, suelta el más viejo
@@ -3405,7 +3464,11 @@ function renderGastos(){
       ?`<div class="thumb-wrap" id="${thumbId}" style="cursor:pointer" title="🔍 Clic para ver factura" onclick="verFactura('${safeId}')"><span class="thumb-none">📄</span></div>`
       :g._respaldoUrl
       ?`<div class="thumb-wrap" style="cursor:pointer" title="📄 Ver factura (PDF)" onclick="verFactura('${safeId}')"><span class="thumb-none">📄</span></div>`
-      :`<div class="thumb-wrap" title="Sin respaldo adjunto"><span class="thumb-none">📄</span></div>`;
+      :g._respaldoError
+      ?`<div class="thumb-wrap" style="cursor:pointer;border-color:var(--red)" title="⚠ La imagen no se pudo subir — clic para ver el motivo" onclick="verFactura('${safeId}')"><span class="thumb-none" style="color:var(--red)">⚠</span></div>`
+      // Sin respaldo el recuadro no tenía onclick: el clic no hacía NADA y parecía que el
+      // visor estaba roto. Ahora explica por qué esa factura no tiene imagen.
+      :`<div class="thumb-wrap" style="cursor:pointer" title="Sin factura adjunta — clic para saber por qué" onclick="verFactura('${safeId}')"><span class="thumb-none">📄</span></div>`;
     const catOpts=catsActuales().map(c=>`<option value="${c}" ${c===g.categoria?"selected":""}>${c}</option>`).join("");
     const catCell=g._dividida
       ?`<span class="cat-badge" style="cursor:pointer" title="Editar división por categoría" onclick="abrirEditPartidas('${safeId}')">🔀 Dividida (${(g._partidas||[]).length}) ✏️</span>`
@@ -3775,32 +3838,93 @@ function resetCaptura(){
 // ═══════════════════════════════════════════════════════════════════════════
 // THUMBNAIL MODAL
 // ═══════════════════════════════════════════════════════════════════════════
+let _thumbCurrentGasto=null, _thumbScale=1;
+// El visor sirve para tres cosas distintas (imagen incrustada vieja, comprobante de pago, y la
+// factura descargada de Storage). Todas pasan por aquí para que abrir una no deje escondida la
+// anterior — antes cada una tocaba el <img> por su cuenta.
+let _respaldoBlobUrl = null, _respaldoNombre = "respaldo";
+function _visorEls(){
+  return { img:  document.getElementById("thumbModalImg"),
+           pdf:  document.getElementById("thumbModalPdf"),
+           msg:  document.getElementById("thumbModalMsg"),
+           info: document.getElementById("thumbModalInfo"),
+           modal:document.getElementById("thumbModal") };
+}
+function _visorLimpiar(){
+  const e=_visorEls();
+  // Los blob URL no se liberan solos: si no se revoca, cada factura abierta se queda en RAM.
+  if(_respaldoBlobUrl){ try{ URL.revokeObjectURL(_respaldoBlobUrl); }catch(_){} _respaldoBlobUrl=null; }
+  if(e.img){ e.img.src=""; e.img.style.display="none"; }
+  if(e.pdf){ e.pdf.src="about:blank"; e.pdf.style.display="none"; }
+  if(e.msg){ e.msg.style.display="none"; e.msg.textContent=""; }
+}
+function _visorImagen(src, info, nombre){
+  const e=_visorEls();
+  _visorLimpiar(); _thumbScale=1;
+  if(e.img){ e.img.src=src; e.img.style.transform="scale(1)"; e.img.style.display="block"; }
+  if(e.info) e.info.textContent=info||"";
+  _respaldoNombre = nombre || "respaldo";
+  if(e.modal) e.modal.classList.add("open");
+}
+// blob=null + cargando: deja el visor abierto con el aviso mientras se descarga, para que el
+// clic se sienta atendido aunque la factura tarde.
+function abrirVisorRespaldo(blob, info, nombre, cargando){
+  const e=_visorEls();
+  _visorLimpiar();
+  if(e.info) e.info.textContent = info||"";
+  _respaldoNombre = nombre || "respaldo";
+  if(!blob){
+    if(e.msg){ e.msg.textContent = cargando || "Sin contenido."; e.msg.style.display="block"; }
+  } else {
+    _respaldoBlobUrl = URL.createObjectURL(blob);
+    const tipo = blob.type || "";
+    if(tipo.startsWith("image/")){
+      _thumbScale=1;
+      if(e.img){ e.img.src=_respaldoBlobUrl; e.img.style.transform="scale(1)"; e.img.style.display="block"; }
+      _respaldoNombre += "." + (tipo.split("/")[1]||"jpg");
+    } else if(tipo==="application/pdf"){
+      if(e.pdf){ e.pdf.src=_respaldoBlobUrl; e.pdf.style.display="block"; }
+      _respaldoNombre += ".pdf";
+    } else {
+      // Los adjuntos de Gmail llegan a veces como application/octet-stream: no se pueden mostrar,
+      // pero descargarlos sí funciona.
+      if(e.msg){ e.msg.textContent = `Archivo de tipo ${tipo||"desconocido"} — no se puede mostrar aquí. Usa ⬇️ Descargar para abrirlo.`; e.msg.style.display="block"; }
+    }
+  }
+  if(e.modal) e.modal.classList.add("open");
+}
+
 window._openThumb=function(id){
   const entry=(window._thumbMap||{})[id];
   if(!entry||!entry.src){ openThumbModal(id); return; }
-  _thumbCurrentGasto={id,respaldo:entry.src}; _thumbScale=1;
-  const img=document.getElementById("thumbModalImg"), info=document.getElementById("thumbModalInfo");
-  if(img){ img.src=entry.src; img.style.transform="scale(1)"; }
-  if(info) info.textContent=entry.info;
-  document.getElementById("thumbModal").classList.add("open");
+  _thumbCurrentGasto={id, respaldo:entry.src, proveedor:"", fecha:""};
+  _visorImagen(entry.src, entry.info, "respaldo");
 };
-let _thumbCurrentGasto=null, _thumbScale=1;
 
 function openThumbModal(gastoId){
   const g=gastosSemana().find(x=>x.id===gastoId)||allGastosAllWeeks().find(x=>x.id===gastoId);
-  if(!g?.respaldo){ alert("Este gasto no tiene imagen de respaldo adjunta."); return; }
-  _thumbCurrentGasto=g; _thumbScale=1;
-  const img=document.getElementById("thumbModalImg"); img.src=g.respaldo; img.style.transform="scale(1)";
-  document.getElementById("thumbModalInfo").textContent=`${g.proveedor}  ·  ${fmt(g.importe)}  ·  ${fmtDate(g.fecha)}`;
-  document.getElementById("thumbModal").classList.add("open");
+  if(!g?.respaldo){ verFactura(gastoId); return; }   // sin imagen incrustada, quizá sí esté en Storage
+  _thumbCurrentGasto=g;
+  _visorImagen(g.respaldo, `${g.proveedor}  ·  ${fmt(g.importe)}  ·  ${fmtDate(g.fecha)}`,
+    `respaldo_${String(g.proveedor||"factura").replace(/\s+/g,"_")}_${g.fecha||""}`);
 }
-function closeThumbModal(){ document.getElementById("thumbModal").classList.remove("open"); document.getElementById("thumbModalImg").src=""; _thumbCurrentGasto=null; _thumbScale=1; }
+function closeThumbModal(){ const e=_visorEls(); if(e.modal) e.modal.classList.remove("open"); _visorLimpiar(); _thumbCurrentGasto=null; _thumbScale=1; }
 document.addEventListener("click",function(e){
   const thumb=e.target.closest(".thumb-click"); if(thumb){ const id=thumb.getAttribute("data-gastoid"); if(id) openThumbModal(id); return; }
   const comp=e.target.closest(".thumb-click-direct"); if(comp){ const id=comp.getAttribute("data-gastoid"); if(id) openThumbModalDirect(id); }
 });
 function thumbZoom(factor){ const img=document.getElementById("thumbModalImg"); _thumbScale=factor===0?1:Math.min(Math.max(_thumbScale*factor,0.3),5); img.style.transform=`scale(${_thumbScale})`; }
-function descargarRespaldo(){ if(!_thumbCurrentGasto?.respaldo) return; const a=document.createElement("a"); const ext=_thumbCurrentGasto.respaldo.startsWith("data:application/pdf")?"pdf":"jpg"; a.href=_thumbCurrentGasto.respaldo; a.download=`respaldo_${_thumbCurrentGasto.proveedor.replace(/\s+/g,"_")}_${_thumbCurrentGasto.fecha}.${ext}`; a.click(); }
+// Sirve tanto para la factura descargada de Storage (blob) como para las imágenes viejas
+// incrustadas en el estado (data:). Antes usaba _thumbCurrentGasto.proveedor sin comprobarlo y
+// reventaba con «cannot read properties of undefined» al descargar desde el visor rápido.
+function descargarRespaldo(){
+  const src = _respaldoBlobUrl || _thumbCurrentGasto?.respaldo;
+  if(!src) return;
+  let nombre = _respaldoNombre || "respaldo";
+  if(!/\.[a-z0-9]{2,4}$/i.test(nombre)) nombre += String(src).startsWith("data:application/pdf") ? ".pdf" : ".jpg";
+  const a=document.createElement("a"); a.href=src; a.download=nombre;
+  document.body.appendChild(a); a.click(); a.remove();
+}
 document.addEventListener("keydown",e=>{ if(!document.getElementById("thumbModal").classList.contains("open")) return; if(e.key==="Escape") closeThumbModal(); if(e.key==="+"||e.key==="=") thumbZoom(1.2); if(e.key==="-") thumbZoom(0.8); if(e.key==="0") thumbZoom(0); });
 function eliminarGasto(id){
   if(!confirm("¿Eliminar este gasto?")) return;
@@ -7324,6 +7448,8 @@ function renderPagos(){
       ?`<span id="${thumbId}" class="comp-thumb" style="cursor:pointer;font-size:18px;display:inline-flex;align-items:center;justify-content:center" title="Ver factura" onclick="verFactura('${g.id.replace(/'/g,"\\'")}')">📄</span>`
       :g._respaldoUrl
       ?`<span style="cursor:pointer;font-size:18px" title="Ver factura (PDF)" onclick="verFactura('${g.id.replace(/'/g,"\\'")}')">📄</span>`
+      :g._respaldoError
+      ?`<span style="cursor:pointer;font-size:18px;color:var(--red)" title="⚠ La imagen no se pudo subir — clic para ver el motivo" onclick="verFactura('${g.id.replace(/'/g,"\\'")}')">⚠</span>`
       :`<span style="color:#ccc;font-size:12px">—</span>`;
     const actions=g.estadoPago==="pendiente"&&g.formaPago==="credito"?`<button class="btn btn-gold" style="padding:5px 12px;font-size:11px" onclick="openPagoModal('${g.id}')">💳 Pagar</button>`:g.estadoPago==="pagado"&&g.formaPago==="credito"&&!g.comprobantePago?`<button class="btn btn-light" style="padding:5px 12px;font-size:11px" onclick="openPagoModal('${g.id}')">📎 Comprobante</button>`:`<span style="color:var(--vm);font-size:12px">✅</span>`;
     const tr=document.createElement("tr");tr.className=rowClass;
@@ -7366,7 +7492,13 @@ function confirmarPago(){
   if(!found){alert("No se encontró la factura.");return;}
   save();closePagoModal();renderPagos();
 }
-function openThumbModalDirect(gastoId){const g=allGastosAllWeeks().find(x=>x.id===gastoId);if(!g?.comprobantePago)return;document.getElementById("thumbModalImg").src=g.comprobantePago;document.getElementById("thumbModal").classList.add("open");}
+function openThumbModalDirect(gastoId){
+  const g=allGastosAllWeeks().find(x=>x.id===gastoId);
+  if(!g?.comprobantePago) return;
+  _thumbCurrentGasto={id:gastoId, respaldo:g.comprobantePago, proveedor:g.proveedor, fecha:g.fecha};
+  _visorImagen(g.comprobantePago, `Comprobante de pago · ${g.proveedor}  ·  ${fmt(g.importe)}`,
+    `comprobante_${String(g.proveedor||"pago").replace(/\s+/g,"_")}_${g.fecha||""}`);
+}
 
 function exportarPagosExcel(){
   const wb=XLSX.utils.book_new(),pend=pagosEnPeriodo(allGastosAllWeeks()).filter(g=>g.estadoPago==="pendiente");
