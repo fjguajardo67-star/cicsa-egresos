@@ -1229,12 +1229,6 @@ body.snav-min .side-theme span { display:none; }
         <label>Categoría</label>
         <select id="rCategoria" onchange="renderReportes()" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
           <option value="">Todas</option>
-          <option>Cárnicos</option><option>Lácteos / Cremería</option><option>Frutas y Verduras</option>
-          <option>Tortilla</option><option>Abarrotes / Secos</option><option>Refrescos / Pepsi</option>
-          <option>Hielo</option><option>Gas</option><option>Artículos de limpieza</option><option>Desechables</option>
-          <option>Mantenimiento y Equipo</option><option>Transporte / Combustible</option>
-          <option>Servicios (Basura, Agua, Luz)</option><option>Nómina / Personal</option>
-          <option>Gastos Generales</option><option>Otro</option>
         </select>
       </div>
       <div class="field">
@@ -1918,7 +1912,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-08-a";
+const APP_BUILD = "2026-08-08-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4647,9 +4641,20 @@ function renderSeguimientoVista(gastos, label){
   // para que su parte llegue a cada categoría en vez de amontonarse en una categoría "Dividida".
   // El total no cambia: las partidas suman el importe de la factura.
   partidasExpandidas(gastos).forEach(g=>{ if(!byCat[g.categoria]) byCat[g.categoria]=[]; byCat[g.categoria].push(g); });
-  const budget=state.budget||{}, allCats=[...new Set([...Object.keys(byCat),...Object.keys(DEFAULT_BUDGET)])];
-  const totalPres=allCats.reduce((s,c)=>s+(budget[c]||DEFAULT_BUDGET[c]||0),0);
-  const sobre=allCats.filter(c=>(byCat[c]||[]).reduce((s,g)=>s+g.importe,0)>(budget[c]||DEFAULT_BUDGET[c]||0));
+  // El presupuesto se captura POR SEMANA. Presupuesto ya lo escalaba al rango elegido, pero aquí
+  // seguía comparándose el gasto de un mes contra la meta de una semana: TODO salía excedido y
+  // las dos pantallas se contradecían con el mismo periodo en el selector. Se usa exactamente el
+  // mismo cálculo (presupCatPeriodo) para que las cifras cuadren.
+  const F=factorPresupuestoPeriodo(getPeriodoSP());
+  const presDe=(c)=>presupCatPeriodo(c, F.factor);
+  const gastadoDe=(c)=>(byCat[c]||[]).reduce((s,g)=>s+g.importe,0);
+  // Misma lista de categorías que Presupuesto (la del negocio, no la de fábrica): si no,
+  // Seguimiento inventaba metas para categorías que ya nadie usa y omitía las nuevas.
+  const allCats=[...new Set([...catsActuales(),...Object.keys(byCat)])];
+  const totalPres=allCats.reduce((s,c)=>s+presDe(c),0);
+  // "Excedida" exige tener meta: sin presupuesto asignado no hay nada que exceder. Antes el
+  // contador incluía esas categorías aunque su barra saliera verde.
+  const sobre=allCats.filter(c=>presDe(c)>0 && gastadoDe(c)>presDe(c));
   let html=`<div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--vd);margin-bottom:18px">Seguimiento — ${esc(label||"")}</div>
   <div class="summary-grid" style="margin-bottom:20px">
     <div class="scard"><div class="scard-label">Total gastado</div><div class="scard-val">${fmt(totalGlobal)}</div><div class="scard-sub">${gastos.length} facturas · ${esc(label||"")}</div></div>
@@ -4657,13 +4662,18 @@ function renderSeguimientoVista(gastos, label){
     <div class="scard ${totalGlobal>totalPres?'alert':''}"><div class="scard-label">Diferencia</div><div class="scard-val" style="color:${totalGlobal>totalPres?'var(--red)':'var(--vm)'}">
       ${totalGlobal>totalPres?'−':'+'} ${fmt(Math.abs(totalPres-totalGlobal))}</div></div>
     <div class="scard ${sobre.length>0?'alert':''}"><div class="scard-label">Categorías excedidas</div><div class="scard-val">${sobre.length}</div></div>
-  </div>`;
+  </div>
+  ${(F.esRango && Math.abs(F.factor-1)>0.001)?`<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--txt);margin-bottom:16px">
+    📅 Rango de <strong>${F.dias} día${F.dias===1?"":"s"}</strong> = <strong>${F.factor.toFixed(2)} semanas</strong>. Las metas se comparan con tu presupuesto semanal <strong>× ${F.factor.toFixed(2)}</strong>.
+  </div>`:""}`;
   html+=`<div class="card" style="margin-bottom:16px"><div class="card-title">🎯 Gasto vs Presupuesto por categoría</div><div style="padding:0 4px">`;
-  allCats.sort((a,b)=>(byCat[b]||[]).reduce((s,g)=>s+g.importe,0)-(byCat[a]||[]).reduce((s,g)=>s+g.importe,0)).forEach(cat=>{
-    const gastado=(byCat[cat]||[]).reduce((s,g)=>s+g.importe,0), pres=budget[cat]||DEFAULT_BUDGET[cat]||0;
+  allCats.sort((a,b)=>gastadoDe(b)-gastadoDe(a)).forEach(cat=>{
+    const gastado=gastadoDe(cat), pres=presDe(cat);
     const pct=pres>0?Math.min((gastado/pres)*100,100):(gastado>0?100:0), over=gastado>pres&&pres>0;
-    html+=`<div class="chart-row" style="margin-bottom:10px">
-      <div style="width:160px;font-size:12px;color:var(--txt2);text-align:right;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${cat}">${cat}</div>
+    // El renglón lleva al detalle de esas facturas en Auditoría. Sin esto, ver un monto en una
+    // categoría no daba forma de averiguar de qué facturas venía.
+    html+=`<div class="chart-row" style="margin-bottom:10px;cursor:pointer" title="Ver las facturas de esta categoría en Auditoría" onclick="editarGastosCategoria('${String(cat).replace(/'/g,"\\'")}')">
+      <div style="width:160px;font-size:12px;color:var(--txt2);text-align:right;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(cat)||"(sin categoría)"}">${esc(cat)||`<em style="color:var(--do)">(sin categoría)</em>`}</div>
       <div style="flex:1;background:#E8F5E1;border-radius:20px;height:24px;overflow:hidden;margin:0 10px">
         <div style="height:100%;border-radius:20px;width:${pct}%;background:${over?'linear-gradient(90deg,var(--red),#E74C3C)':'linear-gradient(90deg,var(--vm),#5DA832)'};display:flex;align-items:center;padding-left:10px;font-size:11px;font-weight:700;color:white;white-space:nowrap;min-width:${gastado>0?'60px':'0'}">${gastado>0?fmt(gastado):''}</div>
       </div>
@@ -6987,7 +6997,16 @@ function guardarEditPartidas(){
 // ═══════════════════════════════════════════════════════════════════════════
 function gastosFiltradosReporte(){
   const ini=document.getElementById("rFechaIni")?.value||"",fin=document.getElementById("rFechaFin")?.value||"",cat=document.getElementById("rCategoria")?.value||"",prov=(document.getElementById("rProveedor")?.value||"").trim();
-  return allGastosAllWeeks().filter(g=>{if(ini&&g.fecha<ini)return false;if(fin&&g.fecha>fin)return false;if(cat&&g.categoria!==cat&&!(g._partidas||[]).some(p=>p.categoria===cat))return false;if(prov&&g.proveedor!==prov)return false;return true;});
+  return allGastosAllWeeks().filter(g=>{
+    if(ini&&g.fecha<ini)return false;
+    if(fin&&g.fecha>fin)return false;
+    if(cat===CAT_SIN){
+      // La factura entra si ella no tiene categoría, o si alguna de sus partidas se quedó sin una.
+      if(g.categoria && !(g._partidas||[]).some(p=>!p.categoria)) return false;
+    } else if(cat && g.categoria!==cat && !(g._partidas||[]).some(p=>p.categoria===cat)) return false;
+    if(prov&&g.proveedor!==prov)return false;
+    return true;
+  });
 }
 // Select de categoría editable para el detalle de Auditoría — permite reclasificar un gasto
 // (ej. las facturas que quedaron en Desechables por la migración de "sin categoría") a su
@@ -7022,12 +7041,15 @@ function periodoSPRango(){
 // reclasificar o borrar. Hace "editable" el gastado de una categoría del Presupuesto.
 function editarGastosCategoria(cat){
   const r=periodoSPRango();
-  try{ localStorage.setItem(REPORTES_FILTROS_KEY, JSON.stringify({ini:r.ini, fin:r.fin, cat, prov:""})); }catch(e){}
+  // Cadena vacía en el filtro significa "todas": las facturas sin categoría necesitan el centinela.
+  const filtro = cat ? cat : CAT_SIN;
+  try{ localStorage.setItem(REPORTES_FILTROS_KEY, JSON.stringify({ini:r.ini, fin:r.fin, cat:filtro, prov:""})); }catch(e){}
   showPage("reportes", document.getElementById("navReportes"));
 }
 
 function renderReportes(){
   guardarFiltrosReportes();
+  poblarCategoriasReporte();
   poblarProveedores();
   const gastos=gastosFiltradosReporte(),total=gastos.reduce((s,g)=>s+g.importe,0),gastosExp=partidasExpandidas(gastos);
   const porCat={};gastosExp.forEach(g=>{porCat[g.categoria]=(porCat[g.categoria]||0)+g.importe;});
@@ -7042,6 +7064,22 @@ function renderReportes(){
   const tbody2=document.getElementById("rBodyDetalle");tbody2.innerHTML="";
   document.getElementById("rEmpty").style.display=gastos.length===0?"block":"none";
   gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{const tr=document.createElement("tr");tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td>${g.proveedor}</td><td>${categoriaSelectHtml(g)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${g.factura||"—"}</td><td style="font-size:12px;color:var(--txt2)">${formaPagoLabel(g)}</td><td class="amount-cell">${fmt(g.importe)}</td><td style="text-align:center"><button onclick="eliminarGasto('${g.id.replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button></td>`;tbody2.appendChild(tr);});
+}
+// El <select> de categorías de Auditoría era una lista FIJA escrita a mano en el HTML: no traía
+// las categorías que el equipo agregó después (IMSS, agua purificada, renta depto…) ni una
+// entrada para las facturas sin categoría. Al saltar aquí desde Presupuesto o Seguimiento, el
+// valor no existía como opción, el navegador caía a "Todas" y la pantalla mostraba TODO — justo
+// lo contrario de lo que se pidió. Ahora se arma con las categorías reales.
+const CAT_SIN = "__SIN__";        // centinela: "" ya significa "todas", hace falta otro valor
+function poblarCategoriasReporte(){
+  const sel=document.getElementById("rCategoria"); if(!sel) return;
+  const prev=sel.value;
+  const enUso=new Set(); let haySin=false;
+  partidasExpandidas(allGastosAllWeeks()).forEach(g=>{ if(g.categoria) enUso.add(g.categoria); else haySin=true; });
+  const cats=[...new Set([...catsActuales(),...enUso])].sort((a,b)=>a.localeCompare(b,"es"));
+  sel.innerHTML=`<option value="">Todas</option>`
+    + (haySin?`<option value="${CAT_SIN}" ${prev===CAT_SIN?"selected":""}>(sin categoría)</option>`:"")
+    + cats.map(c=>`<option value="${esc(c)}" ${c===prev?"selected":""}>${esc(c)}</option>`).join("");
 }
 function poblarProveedores(){const sel=document.getElementById("rProveedor");if(!sel)return;const prev=sel.value,provs=[...new Set(allGastosAllWeeks().map(g=>g.proveedor).filter(Boolean))].sort();sel.innerHTML='<option value="">Todos los proveedores</option>'+provs.map(p=>`<option value="${p}" ${p===prev?"selected":""}>${p}</option>`).join("");}
 // El filtro (fechas/categoría/proveedor) de "Reportes" se reiniciaba a "mes actual, todo" cada
@@ -7062,6 +7100,9 @@ function guardarFiltrosReportes(){
 function initReporteDates(){
   let f=null;
   try{ const raw=localStorage.getItem(REPORTES_FILTROS_KEY); if(raw) f=JSON.parse(raw); }catch(e){}
+  // Las opciones se arman ANTES de asignar el valor: si no, el <select> no tiene todavía la
+  // categoría guardada y el navegador cae en silencio a "Todas".
+  poblarCategoriasReporte();
   if(f && (f.ini||f.fin||f.cat||f.prov)){
     document.getElementById("rFechaIni").value=f.ini||"";
     document.getElementById("rFechaFin").value=f.fin||"";
