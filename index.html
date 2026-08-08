@@ -1899,7 +1899,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-07-a";
+const APP_BUILD = "2026-08-07-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4921,7 +4921,17 @@ function reconciliarSiHay(){
 function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
   const gastosCICSA=allGastosAllWeeks().filter(g=>{ if(fechaIni&&g.fecha<fechaIni) return false; if(fechaFin&&g.fecha>fechaFin) return false; return true; });
   const rfcEmp = rfcEmpresa!==undefined ? rfcEmpresa : (typeof rfcPropio==="function" ? rfcPropio() : "");
-  const filtro = filtrarCfdisConciliables(cfdis, rfcEmp);
+  // La lista de gastos ya viene recortada por la fecha de corte. Si los CFDIs no se recortaran
+  // igual, cada comprobante del periodo cerrado saldría como "falta capturar" — justo el
+  // trabajo que el corte pretende evitar.
+  const _corte = (typeof fechaCorteDatos==="function") ? fechaCorteDatos() : "";
+  let _fueraDeCorte = 0;
+  const cfdisVigentes = !_corte ? (cfdis||[]) : (cfdis||[]).filter(c=>{
+    if(c && c.fecha && c.fecha < _corte){ _fueraDeCorte++; return false; }
+    return true;
+  });
+  const filtro = filtrarCfdisConciliables(cfdisVigentes, rfcEmp);
+  if(_fueraDeCorte) filtro.omitidos.CORTE = _fueraDeCorte;
   const utiles = filtro.utiles;
   const faltantes=[],diferencias=[],conciliadas=[];
   utiles.forEach(cfdi=>{
@@ -4949,6 +4959,7 @@ function pintarCfdisOmitidos(om){
     ? `<div style="margin-top:6px;color:var(--do)">⚠️ No has puesto el <strong>RFC de tu empresa</strong> (arriba): sin él no se pueden excluir las facturas que tú emites.</div>`
     : "";
   const etiquetas=[["PROPIO","factura que emitió tu empresa (es un ingreso)","facturas que emitió tu empresa (son ingresos)"],
+                   ["CORTE","CFDI del periodo ya cerrado","CFDI del periodo ya cerrado"],
                    ["DESCARTADO","CFDI que descartaste a mano","CFDI que descartaste a mano"],
                    ["P","complemento de pago","complementos de pago"],
                    ["E","nota de crédito","notas de crédito"],

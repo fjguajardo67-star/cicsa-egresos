@@ -1007,5 +1007,29 @@ t("quitar el corte devuelve TODO el histórico (es reversible)", () => {
   assert.equal(S.allGastosAllWeeks().length, 2, "al quitar el corte deben volver todos");
 });
 
+t("la conciliación SAT no pide capturar comprobantes del periodo ya cerrado", () => {
+  // Sin esto, los gastos quedaban ocultos por el corte pero los CFDIs no, así que TODO el
+  // periodo cerrado reaparecía como "falta capturar" — el trabajo que el corte evita.
+  S.state = { budget: {}, fechaCorte: "2026-07-01", weeks: semanaCon([
+    { id: "n", fecha: "2026-07-08", proveedor: "POLLO BAL", factura: "31598", importe: 26484 },
+  ]) };
+  const r = S.conciliarSAT([
+    { folio: "VIEJO-1", uuid: "VIEJO-1", rfc: "PBA010101BBB", proveedor: "POLLO BAL", fecha: "2026-05-10", total: 9000, tipo: "I" },
+    { folio: "VIEJO-2", uuid: "VIEJO-2", rfc: "EVA010101CCC", proveedor: "EVA MOTA",  fecha: "2026-06-30", total: 4000, tipo: "I" },
+    { folio: "NUEVO",   uuid: "NUEVO",   rfc: "PBA010101BBB", proveedor: "POLLO BAL", fecha: "2026-07-08", total: 26484, tipo: "I" },
+  ], "2026-01-01", "2026-12-31", "CIC190426SD4");
+  assert.equal(r.faltantes.length, 0, "no debe pedir capturar nada del periodo cerrado");
+  assert.equal(r.conciliadas.length, 1);
+  assert.equal(r.omitidos.CORTE, 2, "los 2 viejos se cuentan aparte, no se esconden en silencio");
+});
+t("sin corte, los CFDIs viejos siguen apareciendo (no cambia el comportamiento previo)", () => {
+  S.state = { budget: {}, weeks: semanaCon([]) };
+  const r = S.conciliarSAT([
+    { folio: "V", uuid: "V", rfc: "X", proveedor: "P", fecha: "2026-05-10", total: 9000, tipo: "I" },
+  ], "2026-01-01", "2026-12-31", "CIC190426SD4");
+  assert.equal(r.faltantes.length, 1);
+  assert.equal(r.omitidos.CORTE, undefined);
+});
+
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
 process.exit(fail ? 1 : 0);
