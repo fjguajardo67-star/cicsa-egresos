@@ -31,10 +31,42 @@ function extractFunction(name) {
     const c = script[j], p = script[j - 1];
     if (inComment === "//") { if (c === "\n") inComment = null; continue; }
     if (inComment === "/*") { if (p === "*" && c === "/") inComment = null; continue; }
-    if (inStr) { if (c === inStr && p !== "\\") inStr = null; continue; }
+    if (inStr) {
+      // Contar las diagonales invertidas: "\\\\" termina en una comilla NO escapada, porque la
+      // barra que la precede está a su vez escapada. El chequeo simple p !== "\\" se equivocaba
+      // ahí y el extractor se salía de la función (escAttrJs lo destapó).
+      if (c === inStr) {
+        let bs = 0, k = j - 1;
+        while (k >= 0 && script[k] === "\\") { bs++; k--; }
+        if (bs % 2 === 0) inStr = null;
+      }
+      continue;
+    }
     if (c === '"' || c === "'" || c === "`") { inStr = c; continue; }
     if (c === "/" && script[j + 1] === "/") { inComment = "//"; continue; }
     if (c === "/" && script[j + 1] === "*") { inComment = "/*"; continue; }
+    // Literales de expresión regular. Sin esto, el /'/g de .replace(/'/g,"…") se leía como el
+    // inicio de una cadena y el extractor se iba hasta el final del archivo. Para distinguir la
+    // regex de una división se mira el carácter significativo anterior: después de ( , = : [ ! & |
+    // ? { } ; o return, un / solo puede empezar una regex.
+    if (c === "/") {
+      let k = j - 1;
+      while (k >= 0 && /\s/.test(script[k])) k--;
+      const anterior = k >= 0 ? script[k] : "(";
+      if ("(,=:[!&|?{};+-*%~^".includes(anterior) || /\breturn$/.test(script.slice(Math.max(0, k - 6), k + 1))) {
+        let m = j + 1, enClase = false;
+        for (; m < script.length; m++) {
+          const d = script[m];
+          if (d === "\\") { m++; continue; }        // \/ y \] no cuentan
+          if (d === "[") enClase = true;
+          else if (d === "]") enClase = false;
+          else if (d === "/" && !enClase) break;
+          else if (d === "\n") break;               // una regex no cruza renglones: era división
+        }
+        j = m;
+        continue;
+      }
+    }
     if (c === "{") depth++;
     else if (c === "}") { depth--; if (depth === 0) return script.slice(i, j + 1); }
   }
@@ -75,6 +107,7 @@ const FUNCS = [
   "fetchStorage", "esImagenRespaldo",
   "gastosFiltradosReporte",
   "resumenEstado", "_estadoValido", "podarRespaldos",
+  "esc", "escAttrJs",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
@@ -1361,6 +1394,50 @@ function fetchQueAcepta(esquema) {
 // ── Respaldos ───────────────────────────────────────────────────────────
 // Toda la contabilidad vive en un solo documento que se reescribe completo. Sin copias, un
 // borrado o una fusión mala eran irreversibles.
+// ── Escapado de texto del usuario ───────────────────────────────────────
+// El nombre del proveedor lo escribe cualquiera del equipo (y a veces lo extrae la IA de una
+// factura) y termina en innerHTML. Sin escapar, un nombre con comillas ejecuta código en la
+// sesión de quien abra la pantalla — incluido el admin.
+console.log("\n== Escapado de texto del usuario ==");
+t("esc neutraliza los cinco caracteres que rompen el HTML", () => {
+  assert.equal(S.esc('<img src=x>'), "&lt;img src=x&gt;");
+  assert.equal(S.esc('a"b'), "a&quot;b");
+  assert.equal(S.esc("a'b"), "a&#39;b");
+  assert.equal(S.esc("a&b"), "a&amp;b");
+  assert.equal(S.esc("<&>"), "&lt;&amp;&gt;");   // el & primero, si no se doblan las entidades
+});
+t("esc no inventa nada con null, undefined ni números", () => {
+  assert.equal(S.esc(null), ""); assert.equal(S.esc(undefined), "");
+  assert.equal(S.esc(0), "0"); assert.equal(S.esc("ACME"), "ACME");
+});
+t("escAttrJs escapa para JavaScript ANTES que para HTML", () => {
+  // La comilla simple sale como \' (escape de JS) y luego como entidad (escape de HTML):
+  // al decodificar el navegador queda \' dentro de la cadena de JS.
+  assert.equal(S.escAttrJs("O'BRIEN"), "O\\&#39;BRIEN");
+  // La comilla doble es la que cierra el atributo: tiene que salir como entidad.
+  assert.ok(!S.escAttrJs('ACME" onfocus="x').includes('"'), "no puede quedar una comilla doble cruda");
+  // La diagonal invertida se dobla, si no se comería el escape siguiente.
+  assert.equal(S.escAttrJs("a\\b"), "a\\\\b");
+});
+t("escAttrJs deja inertes las cargas que se probaron en el navegador", () => {
+  [`ACME" onfocus="window.x=1" autofocus q="`,
+   `ACME' onmouseover='window.x=1' q='`,
+   `<img src=x onerror="window.x=1">`].forEach(carga => {
+    const r = S.escAttrJs(carga);
+    assert.ok(!r.includes('"'), "sin comilla doble cruda: " + r);
+    assert.ok(!r.includes("<"), "sin < crudo: " + r);
+    // toda comilla simple que quede va precedida de su escape de JS
+    assert.ok(!/(^|[^\\])&#39;/.test(r.replace(/\\&#39;/g, "")), "comilla simple sin escapar: " + r);
+  });
+});
+t("los nombres normales sobreviven: el escape se deshace al mostrarse", () => {
+  // El navegador decodifica las entidades, así que lo que ve el usuario es el texto original.
+  const decodificar = (x) => x.replace(/&lt;/g,"<").replace(/&gt;/g,">")
+    .replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,"&");
+  [`MC DONALD'S`, `AGUA & HIELO`, `OFFICE DEPOT DE MÉXICO`, `CÍA "EL BUENO"`].forEach(n =>
+    assert.equal(decodificar(S.esc(n)), n, n));
+});
+
 console.log("\n== Respaldos ==");
 const estadoCon = (gastos, cortes) => ({ weeks: [
   { id: "w1", gastos: gastos.slice(0, Math.ceil(gastos.length / 2)), cortes: cortes || [], retiros: [] },
