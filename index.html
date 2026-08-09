@@ -1924,7 +1924,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-09-a";
+const APP_BUILD = "2026-08-09-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2314,11 +2314,25 @@ async function fbSet(path, data) {
 // guardado, con una fusión hecha en el navegador. Si ese documento se corrompe —un error de la
 // app, un borrado en masa, una fusión mala— no había de dónde regresar: no existía ninguna copia.
 //
-// Las copias se guardan como estado/respaldo-AAAA-MM-DD, es decir en la MISMA colección que el
-// documento vivo. Es a propósito: la regla `match /estado/{doc}` que ya existe las cubre, así que
-// los respaldos empiezan a funcionar sin tocar la consola de Firebase.
+// Las copias viven en su PROPIA colección para poder partir los permisos por operación:
+//
+//   crear  → cualquiera del equipo (así hay copia diaria aunque el admin no entre)
+//   leer   → solo el admin
+//   borrar → solo el admin
+//
+// Antes estaban en estado/, que todo el equipo lee y escribe: cualquiera podía bajarse el
+// histórico completo o restaurar un respaldo viejo encima del trabajo del día. El
+// `if(currentRole !== "admin")` del cliente no lo impedía — es una variable del navegador.
+// No se puede restaurar lo que no se puede leer, y nadie más que el admin puede borrar la red
+// de seguridad. Escribir en estado/cicsa siguen pudiendo todos (ahí capturan), pero ahora el
+// daño es recuperable, que es justo el punto.
+const RESPALDOS_COL = "respaldos";
 const RESPALDO_PREFIJO = "respaldo-";
 const RESPALDOS_A_CONSERVAR = 30;
+// Documento aparte con SOLO los contadores (fecha, gastos, importe), sin datos. Lo lee todo el
+// equipo porque el respaldo automático necesita compararse contra el último para no pisar un
+// histórico bueno con un estado degradado — y un operativo no puede leer los respaldos.
+const RESPALDO_INDICE = "_indice";
 
 // Cifras de control de un estado. Se guardan aparte del volcado para poder listar los respaldos
 // sin bajarse varios megas por cada uno.
@@ -2334,7 +2348,7 @@ function resumenEstado(st){
 
 async function guardarRespaldo(id, st){
   const meta = resumenEstado(st);
-  const r = await fetch(`${FB_BASE}/estado/${encodeURIComponent(id)}?key=${FB_KEY}`, {
+  const r = await fetch(`${FB_BASE}/${RESPALDOS_COL}/${encodeURIComponent(id)}?key=${FB_KEY}`, {
     method: "PATCH",
     headers: {"Content-Type":"application/json", ...(await fbAuthHeader())},
     body: JSON.stringify({ fields: {
@@ -2344,15 +2358,53 @@ async function guardarRespaldo(id, st){
     }})
   });
   if(!r.ok) throw new Error(`Firestore respondió ${r.status}`);
+  await indiceAgregar({ id, ts:new Date().toISOString(), ...meta });
   return meta;
+}
+
+// El índice es un derivado: si se desincroniza, reconstruirIndice() lo rehace desde la colección.
+async function indiceAgregar(entrada){
+  try{
+    const previo = await fbGet(`${RESPALDOS_COL}/${RESPALDO_INDICE}`);
+    const sin = (Array.isArray(previo) ? previo : []).filter(x=>x && x.id !== entrada.id);
+    const nuevo = [entrada, ...sin].sort((a,b)=>a.id<b.id?1:-1).slice(0, RESPALDOS_A_CONSERVAR*2);
+    await fbSet(`${RESPALDOS_COL}/${RESPALDO_INDICE}`, nuevo);
+  }catch(e){ console.warn("indiceAgregar:", e); }
+}
+
+// Lee un respaldo completo. Distingue el 403 (un operativo intentando leerlos) del respaldo que
+// de verdad no existe: son problemas distintos y merecen mensajes distintos.
+async function leerRespaldo(id){
+  const r = await fetch(`${FB_BASE}/${RESPALDOS_COL}/${encodeURIComponent(id)}?key=${FB_KEY}`, { headers: await fbAuthHeader() });
+  if(r.status === 403) throw new Error("Solo un administrador puede abrir los respaldos.");
+  if(!r.ok) throw new Error(`No se encontró el respaldo (${r.status}).`);
+  const d = await r.json();
+  try{ return JSON.parse(d.fields?.json?.stringValue || "null"); }catch(_){ return null; }
+}
+
+// El índice lo puede leer todo el equipo; la colección solo el admin. Se intenta el índice
+// primero para que el respaldo automático funcione entre a quien entre.
+async function listarRespaldos(){
+  try{
+    const idx = await fbGet(`${RESPALDOS_COL}/${RESPALDO_INDICE}`);
+    if(Array.isArray(idx) && idx.length){
+      return idx.filter(x=>x && typeof x.id==="string" && x.id.startsWith(RESPALDO_PREFIJO))
+                .sort((a,b)=>a.id<b.id?1:-1);
+    }
+  }catch(e){ console.warn("listarRespaldos (índice):", e); }
+  // Sin índice o dañado: se reconstruye desde la colección. Solo el admin puede, porque listar
+  // exige lectura — para un operativo esto devuelve vacío y no pasa nada.
+  const desdeCol = await listarRespaldosDeColeccion();
+  if(desdeCol.length){ try{ await fbSet(`${RESPALDOS_COL}/${RESPALDO_INDICE}`, desdeCol); }catch(_){} }
+  return desdeCol;
 }
 
 // Lista SOLO ts y meta con mask.fieldPaths. Sin la máscara, listar la colección bajaría el
 // volcado completo de cada respaldo (megas por copia) nada más para pintar la tabla.
-async function listarRespaldos(){
+async function listarRespaldosDeColeccion(){
   try{
     const headers = await fbAuthHeader();
-    const url = `${FB_BASE}/estado?pageSize=100&mask.fieldPaths=ts&mask.fieldPaths=meta&key=${FB_KEY}`;
+    const url = `${FB_BASE}/${RESPALDOS_COL}?pageSize=100&mask.fieldPaths=ts&mask.fieldPaths=meta&key=${FB_KEY}`;
     const r = await fetch(url, { headers });
     if(!r.ok) return [];
     const d = await r.json();
@@ -2363,19 +2415,48 @@ async function listarRespaldos(){
         try{ meta = JSON.parse(doc.fields?.meta?.stringValue || "{}"); }catch(_){}
         return { id, ts: doc.fields?.ts?.stringValue || "", ...meta };
       })
-      .filter(x=>x.id.startsWith(RESPALDO_PREFIJO))
+      .filter(x=>x.id.startsWith(RESPALDO_PREFIJO))   // deja fuera el _indice
       .sort((a,b)=>a.id<b.id?1:-1);            // el más reciente primero
-  }catch(e){ console.warn("listarRespaldos:", e); return []; }
+  }catch(e){ console.warn("listarRespaldosDeColeccion:", e); return []; }
 }
 
-// Conserva los más recientes. Nunca toca estado/cicsa: el filtro por prefijo lo garantiza.
+// Conserva los más recientes. El filtro por prefijo deja fuera el _indice, y borrar es solo del
+// admin en las reglas: para un operativo esto no hace nada en vez de fallar en cada entrada.
 async function podarRespaldos(lista){
+  if(currentRole !== "admin") return 0;
   const sobran = (lista||[]).slice(RESPALDOS_A_CONSERVAR);
+  const borrados = [];
   for(const r of sobran){
     if(!r.id.startsWith(RESPALDO_PREFIJO)) continue;   // cinturón y tirantes
-    await fbDeleteDoc("estado", r.id);
+    await fbDeleteDoc(RESPALDOS_COL, r.id);
+    borrados.push(r.id);
+  }
+  if(borrados.length){
+    const quedan = (lista||[]).filter(x=>!borrados.includes(x.id));
+    try{ await fbSet(`${RESPALDOS_COL}/${RESPALDO_INDICE}`, quedan); }catch(_){}
   }
   return sobran.length;
+}
+
+// Los respaldos de la primera versión quedaron en estado/. Ahí todo el equipo puede leerlos y
+// borrarlos, así que se mudan a la colección con permisos. Una sola vez, cuando entra el admin.
+async function migrarRespaldosViejos(){
+  if(currentRole !== "admin") return 0;
+  try{
+    const r = await fetch(`${FB_BASE}/estado?pageSize=100&mask.fieldPaths=ts&key=${FB_KEY}`, { headers: await fbAuthHeader() });
+    if(!r.ok) return 0;
+    const d = await r.json();
+    const viejos = (d.documents||[]).map(x=>x.name.split("/").pop()).filter(id=>id.startsWith(RESPALDO_PREFIJO));
+    let movidos = 0;
+    for(const id of viejos){
+      const st = await fbGet("estado/"+id);
+      // Solo se borra el original si la copia nueva quedó bien.
+      if(_estadoValido(st)){ await guardarRespaldo(id, st); movidos++; }
+      await fbDeleteDoc("estado", id);
+    }
+    if(movidos) console.log(`Respaldos mudados a la colección propia: ${movidos}`);
+    return movidos;
+  }catch(e){ console.warn("migrarRespaldosViejos:", e); return 0; }
 }
 
 // Una copia al día, la toma quien entre primero. No hace falta que sea el admin: si dependiera
@@ -2384,6 +2465,7 @@ async function respaldoAutomatico(){
   try{
     const ahora = resumenEstado(state);
     if(ahora.gastos === 0) return;                   // nada que respaldar todavía
+    await migrarRespaldosViejos();
     const hoy = todayStr();
     const lista = await listarRespaldos();
     if(lista.some(x=>x.id === RESPALDO_PREFIJO+hoy)) return;   // ya hay uno de hoy
@@ -8251,10 +8333,12 @@ async function crearRespaldoManual(){
 
 async function descargarRespaldoNube(id){
   setStatus("respaldoStatus", "Bajando respaldo…", "");
-  const st = await fbGet("estado/"+id);
-  if(!_estadoValido(st)){ setStatus("respaldoStatus", "❌ Ese respaldo no se pudo leer.", "error"); return; }
-  descargarEstadoComoArchivo(st, `cicsa-${id}.json`);
-  setStatus("respaldoStatus", "✅ Descargado.", "ok");
+  try{
+    const st = await leerRespaldo(id);
+    if(!_estadoValido(st)) throw new Error("Ese respaldo llegó vacío o dañado.");
+    descargarEstadoComoArchivo(st, `cicsa-${id}.json`);
+    setStatus("respaldoStatus", "✅ Descargado.", "ok");
+  }catch(e){ setStatus("respaldoStatus", `❌ ${e.message||e}`, "error"); }
 }
 
 // Restaurar es destructivo, así que antes de pisar nada se guarda un respaldo del estado ACTUAL:
@@ -8287,8 +8371,12 @@ async function _restaurarEstado(st, origen){
 }
 
 async function restaurarRespaldoNube(id){
-  const st = await fbGet("estado/"+id);
-  await _restaurarEstado(st, `el respaldo del ${_fechaRespaldo(id)}`);
+  try{
+    // Si las reglas rechazan la lectura, aquí se corta: no se puede restaurar lo que no se
+    // puede leer, y esa es justamente la protección que el candado del cliente no daba.
+    const st = await leerRespaldo(id);
+    await _restaurarEstado(st, `el respaldo del ${_fechaRespaldo(id)}`);
+  }catch(e){ alert("❌ "+(e.message||e)); }
 }
 
 function restaurarDesdeArchivo(input){
