@@ -1924,7 +1924,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-09-b";
+const APP_BUILD = "2026-08-09-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3127,6 +3127,11 @@ function fmtDate(s){ if(!s)return""; const d=new Date(s+"T12:00:00"); return d.t
 // (asuntos/remitentes/nombres de archivo de correos): un correo malicioso no debe poder
 // inyectar HTML/JS en la página.
 function esc(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+// Texto del usuario dentro de un onclick="algo('AQUÍ')". Pasa por DOS analizadores: primero el
+// de HTML, que decodifica entidades, y luego el de JavaScript. Hay que escapar para los dos y en
+// este orden. Escapar solo la comilla simple (lo que se hacía) deja pasar la doble: un proveedor
+// llamado ACME" onfocus="…" cierra el atributo y lo que sigue se ejecuta como código.
+function escAttrJs(s){ return esc(String(s??"").replace(/\\/g,"\\\\").replace(/'/g,"\\'")); }
 
 // Fecha LOCAL en formato YYYY-MM-DD. Nunca usar toISOString() para "hoy": da la fecha en
 // UTC, y en México (UTC-6/7) cualquier captura después de las ~6pm quedaba fechada MAÑANA.
@@ -3268,7 +3273,7 @@ async function leerDocumento(){
     if(!resp.ok) throw new Error(data.error||"Error desconocido");
     if(Array.isArray(data.productos)) _productosPreleidos=data.productos;   // se usan al guardar
     if(data.mixto){
-      setStatus("statusLectura",`🔀 <strong>Documento mixto detectado</strong> — ${data.proveedor} · ${fmt(data.importe)}<br><span style="font-size:12px">Este documento tiene productos de varias categorías.</span>`,"ok");
+      setStatus("statusLectura",`🔀 <strong>Documento mixto detectado</strong> — ${esc(data.proveedor)} · ${fmt(data.importe)}<br><span style="font-size:12px">Este documento tiene productos de varias categorías.</span>`,"ok");
       document.getElementById("fProv").value=data.proveedor||"";
       document.getElementById("fFecha").value=data.fecha||todayStr();
       document.getElementById("fFactura").value=data.factura||"";
@@ -3586,7 +3591,7 @@ function guardarGasto(){
   if(!_saltarExtraccion || _hayPreleidos) extraerProductosEnSegundoPlano(gasto.id, capturedB64, capturedFile?.type||"image/jpeg");
   subirRespaldoAStorage(gasto.id, capturedB64, capturedFile?.type||"image/jpeg", gasto.factura);
   const conRespaldo=gasto.respaldo?" 📎 con respaldo":"";
-  setStatus("statusGuardar",`✅ Gasto guardado — ${gasto.proveedor} ${fmt(gasto.importe)}${conRespaldo}. Puedes capturar otro.`,"ok");
+  setStatus("statusGuardar",`✅ Gasto guardado — ${esc(gasto.proveedor)} ${fmt(gasto.importe)}${conRespaldo}. Puedes capturar otro.`,"ok");
   capturedFile=null; capturedDataURL=null; capturedB64=null; splitData=null;
   document.getElementById("imgPreview").style.display="none";
   document.getElementById("btnLeer").disabled=true;
@@ -3653,7 +3658,7 @@ function renderGastos(){
   const fcatEl=document.getElementById("filtrocat");
   if(fcatEl){
     const prev=fcatEl.value;
-    fcatEl.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${c}" ${c===prev?"selected":""}>${c}</option>`).join("");
+    fcatEl.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${esc(c)}" ${c===prev?"selected":""}>${esc(c)}</option>`).join("");
   }
   const filtroValFinal=document.getElementById("filtrocat")?.value||"";
   // Una factura dividida no tiene una sola categoría — si el filtro coincide con alguna de sus
@@ -3684,16 +3689,16 @@ function renderGastos(){
       // Sin respaldo el recuadro no tenía onclick: el clic no hacía NADA y parecía que el
       // visor estaba roto. Ahora explica por qué esa factura no tiene imagen.
       :`<div class="thumb-wrap" style="cursor:pointer" title="Sin factura adjunta — clic para saber por qué" onclick="verFactura('${safeId}')"><span class="thumb-none">📄</span></div>`;
-    const catOpts=catsActuales().map(c=>`<option value="${c}" ${c===g.categoria?"selected":""}>${c}</option>`).join("");
+    const catOpts=catsActuales().map(c=>`<option value="${esc(c)}" ${c===g.categoria?"selected":""}>${esc(c)}</option>`).join("");
     const catCell=g._dividida
       ?`<span class="cat-badge" style="cursor:pointer" title="Editar división por categoría" onclick="abrirEditPartidas('${safeId}')">🔀 Dividida (${(g._partidas||[]).length}) ✏️</span>`
       :`<select style="border:none;background:transparent;font-size:12px;color:var(--vd);font-weight:600;cursor:pointer;width:100%" onchange="editarGasto('${g.id}','categoria',this.value)">${catOpts}</select>`;
     tr.innerHTML=`
       <td>${thumbHtml}</td>
       <td>${fmtDate(g.fecha)}</td>
-      <td><input style="border:none;background:transparent;font-size:13px;font-weight:600;color:var(--txt);width:100%" value="${g.proveedor}" title="${g.proveedor}${g.notas?' — '+g.notas:''}" onchange="editarGasto('${g.id}','proveedor',this.value)"></td>
+      <td><input style="border:none;background:transparent;font-size:13px;font-weight:600;color:var(--txt);width:100%" value="${esc(g.proveedor)}" title="${esc(g.proveedor)}${g.notas?' — '+esc(g.notas):''}" onchange="editarGasto('${g.id}','proveedor',this.value)"></td>
       <td>${catCell}</td>
-      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${g.factura||"—"}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${esc(g.factura||"—")}</td>
       <td class="amount-cell"><input style="border:none;background:transparent;font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--vm);text-align:right;width:90px" type="number" step="0.01" value="${g.importe}" onchange="editarGasto('${g.id}','importe',parseFloat(this.value)||0)" title="Editar importe"></td>
       <td style="display:flex;gap:4px;align-items:center;padding:6px 8px">
         <button class="del-btn" onclick="eliminarGasto('${g.id}')" title="Eliminar gasto">🗑️</button>
@@ -3824,11 +3829,11 @@ function renderMenuRows() {
           onchange="_menuRows[${i}].activo=this.checked;renderMenuRows()">
       </div>
       <div>
-        <input type="text" value="${row.nombre}"
+        <input type="text" value="${esc(row.nombre)}"
           style="border:1.5px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;font-family:'DM Sans',sans-serif;width:100%"
           onchange="_menuRows[${i}].nombre=this.value;renderMenuRows()"
           onfocus="this.style.borderColor='var(--vm)'" onblur="this.style.borderColor='var(--border)'">
-        ${parecido ? `<div style="font-size:11px;color:var(--naranja);margin-top:3px">⚠ ¿Es lo mismo que "<strong>${parecido}</strong>"? <button type="button" style="border:none;background:none;color:var(--vd);text-decoration:underline;cursor:pointer;font-size:11px;padding:0" onclick="usarNombreExistente(${i},'${parecido.replace(/'/g,"\\'")}')">Usar ese nombre</button></div>` : ""}
+        ${parecido ? `<div style="font-size:11px;color:var(--naranja);margin-top:3px">⚠ ¿Es lo mismo que "<strong>${esc(parecido)}</strong>"? <button type="button" style="border:none;background:none;color:var(--vd);text-decoration:underline;cursor:pointer;font-size:11px;padding:0" onclick="usarNombreExistente(${i},'${parecido.replace(/'/g,"\\'")}')">Usar ese nombre</button></div>` : ""}
       </div>
       <div style="position:relative">
         <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--txt2);pointer-events:none">$</span>
@@ -3893,7 +3898,7 @@ async function confirmarExportMenu() {
     document.getElementById("menuSyncStatus").className="menu-sync-status ok";
     document.getElementById("menuSyncStatus").innerHTML=
       `✅ ${seleccionados.length} precio(s) sincronizados a CICSA Menú:<br>` +
-      seleccionados.map(r=>`<strong>${r.nombre}</strong> — $${Number(r.precio).toFixed(2)}/${r.unidad}`).join(" · ");
+      seleccionados.map(r=>`<strong>${esc(r.nombre)}</strong> — $${Number(r.precio).toFixed(2)}/${esc(r.unidad)}`).join(" · ");
 
     // Close after 2.5s
     setTimeout(()=>closeMenuExportModal(), 2500);
@@ -3941,7 +3946,7 @@ function renderSplitRows(){
   const container=document.getElementById("splitRows"); container.innerHTML="";
   (splitData.partidas||[]).forEach((p,i)=>{
     const row=document.createElement("div"); row.className="split-row";
-    row.innerHTML=`<div><div class="split-cat">${p.categoria}</div><div class="split-desc">${p.descripcion||""}</div></div>
+    row.innerHTML=`<div><div class="split-cat">${esc(p.categoria)}</div><div class="split-desc">${esc(p.descripcion||"")}</div></div>
       <div class="split-amount"><input type="number" step="0.01" value="${Number(p.importe).toFixed(2)}"
         onchange="splitData.partidas[${i}].importe=parseFloat(this.value)||0;updateSplitDiff()"></div>
       <button class="split-del" onclick="splitData.partidas.splice(${i},1);renderSplitRows()" title="Eliminar">✕</button>`;
@@ -4742,20 +4747,20 @@ function renderPresupuesto(){
       ? `<div style="margin-top:8px">
           <div style="font-size:11px;color:var(--txt2);margin-bottom:4px">Presupuesto semanal:</div>
           <div style="display:flex;gap:6px;align-items:center">
-            <button onclick="saveSingleBudget('${cat}')" style="flex-shrink:0;padding:5px 10px;background:var(--vd);color:white;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;line-height:1">✓</button>
+            <button onclick="saveSingleBudget('${escAttrJs(cat)}')" style="flex-shrink:0;padding:5px 10px;background:var(--vd);color:white;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;line-height:1">✓</button>
             <input class="bcard-input" id="bp_${cat.replace(/\W/g,'_')}" type="number" value="${presupSemanal||''}" placeholder="0" style="flex:1;min-width:0;width:100%" oninput="actualizarTotalPresupuesto()">
           </div>
         </div>`
       : "";
     const controles = puedeEditar
       ? `<span style="float:right;display:flex;gap:4px">
-          <button title="Renombrar o fusionar" onclick="renombrarCategoria('${cat.replace(/'/g,"\\'")}')" style="border:none;background:none;cursor:pointer;font-size:12px;padding:0 2px;opacity:.65">✏️</button>
-          <button title="Eliminar categoría" onclick="eliminarCategoria('${cat.replace(/'/g,"\\'")}')" style="border:none;background:none;cursor:pointer;font-size:12px;padding:0 2px;opacity:.65">🗑️</button>
+          <button title="Renombrar o fusionar" onclick="renombrarCategoria('${escAttrJs(cat)}')" style="border:none;background:none;cursor:pointer;font-size:12px;padding:0 2px;opacity:.65">✏️</button>
+          <button title="Eliminar categoría" onclick="eliminarCategoria('${escAttrJs(cat)}')" style="border:none;background:none;cursor:pointer;font-size:12px;padding:0 2px;opacity:.65">🗑️</button>
         </span>`
       : "";
     const suelta = !catsActuales().includes(cat);
-    div.innerHTML=`<div class="bcard-name">${controles}${cat || "(sin categoría)"}${suelta?`<span title="Esta categoría no está en tu lista: son gastos sueltos" style="font-size:10px;color:var(--do);font-weight:600;margin-left:6px">suelta</span>`:""}</div>
-      <div class="bcard-nums"><span class="bcard-gastado" onclick="editarGastosCategoria('${cat.replace(/'/g,"\\'")}')" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" title="Ver y reclasificar las facturas de esta categoría en Auditoría">${fmt(gastado)}</span><span class="bcard-presup">/ ${fmt(presup)}</span></div>
+    div.innerHTML=`<div class="bcard-name">${controles}${esc(cat) || "(sin categoría)"}${suelta?`<span title="Esta categoría no está en tu lista: son gastos sueltos" style="font-size:10px;color:var(--do);font-weight:600;margin-left:6px">suelta</span>`:""}</div>
+      <div class="bcard-nums"><span class="bcard-gastado" onclick="editarGastosCategoria('${escAttrJs(cat)}')" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" title="Ver y reclasificar las facturas de esta categoría en Auditoría">${fmt(gastado)}</span><span class="bcard-presup">/ ${fmt(presup)}</span></div>
       <div class="bcard-bar-wrap"><div class="bcard-bar ${over?'over':''}" style="width:${pct}%"></div></div>
       ${over?`<div style="font-size:11px;color:var(--red);font-weight:600">⚠ Excedido en ${fmt(gastado-presup)}</div>`:""}
       ${editor}`;
@@ -4893,7 +4898,7 @@ function renderSeguimientoVista(gastos, label){
     const pct=pres>0?Math.min((gastado/pres)*100,100):(gastado>0?100:0), over=gastado>pres&&pres>0;
     // El renglón lleva al detalle de esas facturas en Auditoría. Sin esto, ver un monto en una
     // categoría no daba forma de averiguar de qué facturas venía.
-    html+=`<div class="chart-row" style="margin-bottom:10px;cursor:pointer" title="Ver las facturas de esta categoría en Auditoría" onclick="editarGastosCategoria('${String(cat).replace(/'/g,"\\'")}')">
+    html+=`<div class="chart-row" style="margin-bottom:10px;cursor:pointer" title="Ver las facturas de esta categoría en Auditoría" onclick="editarGastosCategoria('${escAttrJs(cat)}')">
       <div style="width:160px;font-size:12px;color:var(--txt2);text-align:right;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(cat)||"(sin categoría)"}">${esc(cat)||`<em style="color:var(--do)">(sin categoría)</em>`}</div>
       <div style="flex:1;background:#E8F5E1;border-radius:20px;height:24px;overflow:hidden;margin:0 10px">
         <div style="height:100%;border-radius:20px;width:${pct}%;background:${over?'linear-gradient(90deg,var(--red),#E74C3C)':'linear-gradient(90deg,var(--vm),#5DA832)'};display:flex;align-items:center;padding-left:10px;font-size:11px;font-weight:700;color:white;white-space:nowrap;min-width:${gastado>0?'60px':'0'}">${gastado>0?fmt(gastado):''}</div>
@@ -4907,8 +4912,8 @@ function renderSeguimientoVista(gastos, label){
     <colgroup><col style="width:10%"><col style="width:22%"><col style="width:16%"><col style="width:13%"><col style="width:18%"><col style="width:14%"><col style="width:7%"></colgroup>
     <thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th>No. Factura</th><th>Forma de pago</th><th style="text-align:right">Importe</th><th style="text-align:center">Acción</th></tr></thead><tbody>`;
   gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{
-    html+=`<tr><td>${fmtDate(g.fecha)}</td><td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${g.proveedor}"><strong>${g.proveedor}</strong></td><td><span class="cat-badge">${g.categoria}</span></td>
-      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.factura||"—"}</td>
+    html+=`<tr><td>${fmtDate(g.fecha)}</td><td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(g.proveedor)}"><strong>${esc(g.proveedor)}</strong></td><td><span class="cat-badge">${esc(g.categoria)}</span></td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.factura||"—")}</td>
       <td>${formaPagoSelectHtml(g)}</td>
       <td class="amount-cell">${fmt(g.importe)}</td>
       <td style="text-align:center"><button onclick="eliminarGasto('${g.id.replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button></td></tr>`;
@@ -5181,7 +5186,7 @@ function renderAll(){
   gastosWk.forEach(g=>(g._partidas||[]).forEach(p=>catsSet.add(p.categoria)));
   const cats=[...catsSet].sort();
   const fc=document.getElementById("filtrocat");
-  if(fc){ const prev=fc.value; fc.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${c}" ${c===prev?"selected":""}>${c}</option>`).join(""); }
+  if(fc){ const prev=fc.value; fc.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${esc(c)}" ${c===prev?"selected":""}>${esc(c)}</option>`).join(""); }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5504,7 +5509,7 @@ async function renderCfdisStore(){
   const totalCfdis=_cfdisStore.length;
   if(resumen) resumen.textContent = totalCfdis ? `${totalCfdis} CFDI en ${meses.length} mes(es)` : "Aún no hay CFDIs guardados";
   const prev=sel.value;
-  sel.innerHTML = meses.length ? meses.map(m=>`<option value="${m}">${nombreMes(m)} — ${grupos[m].length} CFDI</option>`).join("") : `<option value="">— sin CFDIs guardados —</option>`;
+  sel.innerHTML = meses.length ? meses.map(m=>`<option value="${esc(m)}">${esc(nombreMes(m))} — ${grupos[m].length} CFDI</option>`).join("") : `<option value="">— sin CFDIs guardados —</option>`;
   if(prev && meses.includes(prev)) sel.value=prev; else if(meses.length) sel.value=meses[0];
   const btnBorrar=document.getElementById("btnBorrarMesCfdi");
   if(btnBorrar) btnBorrar.style.display = (meses.length && typeof currentRole!=="undefined" && currentRole==="admin") ? "inline-flex" : "none";
@@ -5853,10 +5858,10 @@ function renderConciliacion(r){
   document.getElementById("satFaltantesCount").textContent=r.faltantes.length;
   document.getElementById("satFaltantesBody").innerHTML=r.faltantes.map(c=>`<tr style="background:#FFF8F6">
     <td style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--txt2)">${c.folio?.slice(0,18)||"—"}…</td>
-    <td><strong>${c.proveedor||"—"}</strong></td><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${c.rfc||"—"}</td>
+    <td><strong>${esc(c.proveedor||"—")}</strong></td><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.rfc||"—")}</td>
     <td>${fmtDate(c.fecha)||"—"}</td><td class="amount-cell" style="color:var(--red)">${fmt(c.total)}</td>
-    <td style="white-space:nowrap"><button class="btn btn-light" style="padding:4px 10px;font-size:11px" onclick="preLlenarCaptura('${(c.proveedor||'').replace(/'/g,"\\'")}','${c.fecha||''}','${c.folio||''}',${c.total||0},'${(c.uuid||c.folio||'').replace(/'/g,"\\'")}')">➕ Capturar</button>
-    <button class="btn btn-light" style="padding:4px 8px;font-size:11px;margin-left:4px;color:var(--red)" title="No es un gasto: quítalo de la conciliación para siempre" onclick="descartarCfdi('${(c.uuid||c.folio||'').replace(/'/g,"\\'")}','${(c.rfc||'').replace(/'/g,"\\'")}','${(c.proveedor||'').replace(/'/g,"\\'")}')">🚫 No es gasto</button></td></tr>`).join("");
+    <td style="white-space:nowrap"><button class="btn btn-light" style="padding:4px 10px;font-size:11px" onclick="preLlenarCaptura('${escAttrJs(c.proveedor||"")}','${escAttrJs(c.fecha||"")}','${escAttrJs(c.folio||"")}',${c.total||0},'${escAttrJs(c.uuid||c.folio||"")}')">➕ Capturar</button>
+    <button class="btn btn-light" style="padding:4px 8px;font-size:11px;margin-left:4px;color:var(--red)" title="No es un gasto: quítalo de la conciliación para siempre" onclick="descartarCfdi('${escAttrJs(c.uuid||c.folio||"")}','${escAttrJs(c.rfc||"")}','${escAttrJs(c.proveedor||"")}')">🚫 No es gasto</button></td></tr>`).join("");
   document.getElementById("satDiferenciasCard").style.display=r.diferencias.length>0?"block":"none";
   document.getElementById("satDifCount").textContent=r.diferencias.length;
   document.getElementById("satDiferenciasBody").innerHTML=r.diferencias.map(d=>`<tr style="background:#FFFBEB">
@@ -5865,8 +5870,8 @@ function renderConciliacion(r){
     <td class="amount-cell" style="color:${d.diferencia>0?'var(--red)':'var(--vm)'}">${d.diferencia>0?'+':''}${fmt(d.diferencia)}</td></tr>`).join("");
   document.getElementById("satOkCard").style.display=r.conciliadas.length>0?"block":"none";
   document.getElementById("satOkCount").textContent=r.conciliadas.length;
-  document.getElementById("satOkBody").innerHTML=r.conciliadas.map(c=>`<tr><td><strong>${c.proveedor||"—"}</strong></td>
-    <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${c.rfc||"—"}</td>
+  document.getElementById("satOkBody").innerHTML=r.conciliadas.map(c=>`<tr><td><strong>${esc(c.proveedor||"—")}</strong></td>
+    <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.rfc||"—")}</td>
     <td>${fmtDate(c.fecha)||"—"}</td><td class="amount-cell" style="color:var(--vm)">${fmt(c.total)}</td></tr>`).join("");
   setStatus("satStatus",`✅ Conciliación completada — ${r.conciliadas.length} ok · ${r.faltantes.length} faltantes · ${r.diferencias.length} diferencias`,"ok");
 }
@@ -5926,7 +5931,7 @@ function renderCatalogo(){
   lista.innerHTML=provs.map(prov=>{
     const s=stats[prov]||{total:0,count:0}, aliList=aliases[prov]||[];
     const aliHtml=aliList.map(a=>`<div class="alias-tag">${a}<span class="alias-del" onclick="eliminarAlias('${prov.replace(/'/g,"\\'")}','${a.replace(/'/g,"\\'")}')">✕</span></div>`).join("");
-    const mergeOpts=provs.filter(p=>p!==prov).map(p=>`<option value="${p.replace(/"/g,"&quot;")}">${p}</option>`).join("");
+    const mergeOpts=provs.filter(p=>p!==prov).map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join("");
     return`<div class="prov-card"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <div class="prov-main">${prov}</div>
       <div style="font-size:11px;color:var(--txt2)">${s.count} factura(s)</div>
@@ -5989,7 +5994,7 @@ async function renderCatalogoProductos(forzar){
   if(selProv){
     const prevVal = selProv.value;
     const nombres = [...new Set(_catalogoProveedores.map(p=>p.nombre).concat(_catalogoProductos.map(p=>p.proveedor_nombre).filter(Boolean)))].sort();
-    selProv.innerHTML = '<option value="">Todos los proveedores</option>' + nombres.map(n=>`<option value="${n.replace(/"/g,"&quot;")}" ${n===prevVal?"selected":""}>${n}</option>`).join("");
+    selProv.innerHTML = '<option value="">Todos los proveedores</option>' + nombres.map(n=>`<option value="${esc(n)}" ${n===prevVal?"selected":""}>${esc(n)}</option>`).join("");
   }
 
   const buscar = (document.getElementById("catProdBuscar")?.value||"").toLowerCase().trim();
@@ -6047,9 +6052,9 @@ async function renderCatalogoProductos(forzar){
       ? `${fmt(_calc.precio)}<div style="font-size:10px;color:var(--txt2);font-weight:400">por ${_calc.unidadBase} · paq ${fmt(parseFloat(p.precio_actual)||0)}</div>`
       : (p.precio_actual!=null ? `${fmt(p.precio_actual)}<div style="font-size:10px;color:var(--txt2);font-weight:400">paquete (falta dato)</div>` : "—");
     tr.innerHTML = `
-      <td><strong>${p.nombre_comercial||""}</strong>${p.ingrediente_generico?`<span class="cat-badge" style="margin-left:6px;background:#EDE7F6;color:#5E35B1" title="Clave de sincronización a Menú">🔑 ${p.ingrediente_generico}</span>`:""}<div style="font-size:11px;color:var(--txt2)">${(p.alias_factura||[]).join(" · ")}</div>${duplicados.has(p.id)?`<div style="font-size:11px;color:var(--naranja)">⚠ ¿Es lo mismo que ${duplicados.get(p.id).map(d=>`<a href="#" onclick="event.preventDefault();abrirEditorProducto('${d.id.replace(/'/g,"\\'")}')" style="color:var(--naranja);text-decoration:underline">${d.nombre}</a>`).join(", ")}?</div>`:""}</td>
-      <td style="font-size:12px">${p.proveedor_nombre||"—"}</td>
-      <td style="font-size:12px">${p.presentacion||"—"}${p.contenido_cantidad&&p.contenido_unidad?` (${p.contenido_cantidad} ${p.contenido_unidad})`:""}</td>
+      <td><strong>${esc(p.nombre_comercial||"")}</strong>${p.ingrediente_generico?`<span class="cat-badge" style="margin-left:6px;background:#EDE7F6;color:#5E35B1" title="Clave de sincronización a Menú">🔑 ${esc(p.ingrediente_generico)}</span>`:""}<div style="font-size:11px;color:var(--txt2)">${(p.alias_factura||[]).map(esc).join(" · ")}</div>${duplicados.has(p.id)?`<div style="font-size:11px;color:var(--naranja)">⚠ ¿Es lo mismo que ${duplicados.get(p.id).map(d=>`<a href="#" onclick="event.preventDefault();abrirEditorProducto('${d.id.replace(/'/g,"\\'")}')" style="color:var(--naranja);text-decoration:underline">${d.nombre}</a>`).join(", ")}?</div>`:""}</td>
+      <td style="font-size:12px">${esc(p.proveedor_nombre||"—")}</td>
+      <td style="font-size:12px">${esc(p.presentacion||"—")}${p.contenido_cantidad&&p.contenido_unidad?` (${esc(p.contenido_cantidad)} ${esc(p.contenido_unidad)})`:""}</td>
       <td class="amount-cell">${precioCell}</td>
       <td style="font-size:12px">${p.unidad_base||"—"}</td>
       <td>${badgeEstado[p.estado]||p.estado||""}</td>
@@ -6346,7 +6351,7 @@ function renderRevisionDuplicados(){
       </div>`;
     }).join("");
     const btnConsolidar = gr.consolidable
-      ? `<button onclick="consolidarFacturaDividida('${String(gr.proveedor).replace(/'/g,"\\'")}','${String(gr.folioReal||gr.folio).replace(/'/g,"\\'")}')" style="padding:5px 12px;background:#E8F5E9;color:var(--vm);border:1px solid var(--vm);border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;margin-top:8px">⚙ Consolidar en 1 factura dividida</button>
+      ? `<button onclick="consolidarFacturaDividida('${escAttrJs(gr.proveedor)}','${String(gr.folioReal||gr.folio).replace(/'/g,"\\'")}')" style="padding:5px 12px;background:#E8F5E9;color:var(--vm);border:1px solid var(--vm);border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;margin-top:8px">⚙ Consolidar en 1 factura dividida</button>
          <div style="font-size:10px;color:var(--txt2);margin-top:3px">Deja UN registro con el total y las categorías juntas (conserva la categoría de compra). Elimina las copias.</div>`
       : "";
     return `<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
@@ -6895,7 +6900,7 @@ function abrirEditorProducto(id){
   }
   document.getElementById("pcBtnEliminar").style.display = id ? "inline-flex" : "none";
   const dl = document.getElementById("pcProveedorList");
-  if(dl) dl.innerHTML = _catalogoProveedores.map(pr=>`<option value="${(pr.nombre||"").replace(/"/g,"&quot;")}">`).join("");
+  if(dl) dl.innerHTML = _catalogoProveedores.map(pr=>`<option value="${esc(pr.nombre||"")}">`).join("");
   document.getElementById("productoModal").classList.add("open");
 }
 function closeProductoModal(){ document.getElementById("productoModal").classList.remove("open"); }
@@ -7001,7 +7006,7 @@ async function syncBajar(){
 function renderAprobaciones(gastos){
   const pending=gastos.filter(g=>g.aprobado==="pendiente"),tbody=document.getElementById("sheetsAprobBody"),empty=document.getElementById("sheetsAprobEmpty");
   if(!tbody)return;tbody.innerHTML="";empty.style.display=pending.length===0?"block":"none";
-  pending.forEach(g=>{const tr=document.createElement("tr");tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td><strong style="color:var(--vm)">${g._usuario||"—"}</strong></td><td>${g.proveedor}</td><td><span class="cat-badge">${g.categoria}</span></td><td class="amount-cell">${fmt(g.importe)}</td><td>⏳ Pendiente</td><td style="display:flex;gap:6px"><button class="btn btn-gold" style="padding:4px 10px;font-size:11px" onclick="aprobarGasto('${g.id}','aprobado')">✅ Aprobar</button><button class="btn btn-red" style="padding:4px 10px;font-size:11px" onclick="aprobarGasto('${g.id}','rechazado')">❌ Rechazar</button></td>`;tbody.appendChild(tr);});
+  pending.forEach(g=>{const tr=document.createElement("tr");tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td><strong style="color:var(--vm)">${esc(g._usuario||"—")}</strong></td><td>${esc(g.proveedor)}</td><td><span class="cat-badge">${esc(g.categoria)}</span></td><td class="amount-cell">${fmt(g.importe)}</td><td>⏳ Pendiente</td><td style="display:flex;gap:6px"><button class="btn btn-gold" style="padding:4px 10px;font-size:11px" onclick="aprobarGasto('${g.id}','aprobado')">✅ Aprobar</button><button class="btn btn-red" style="padding:4px 10px;font-size:11px" onclick="aprobarGasto('${g.id}','rechazado')">❌ Rechazar</button></td>`;tbody.appendChild(tr);});
 }
 async function aprobarGasto(id,estado){
 }
@@ -7275,16 +7280,16 @@ function renderReportes(){
   const gastos=gastosFiltradosReporte(),total=gastos.reduce((s,g)=>s+g.importe,0),gastosExp=partidasExpandidas(gastos);
   const porCat={};gastosExp.forEach(g=>{porCat[g.categoria]=(porCat[g.categoria]||0)+g.importe;});
   const maxCat=Object.entries(porCat).sort((a,b)=>b[1]-a[1])[0],provs=[...new Set(gastos.map(g=>g.proveedor))].length;
-  document.getElementById("rKpis").innerHTML=`<div class="scard"><div class="scard-label">Total del período</div><div class="scard-val">${fmt(total)}</div><div class="scard-sub">${gastos.length} facturas</div></div><div class="scard"><div class="scard-label">Proveedores</div><div class="scard-val">${provs}</div></div><div class="scard"><div class="scard-label">Categorías</div><div class="scard-val">${Object.keys(porCat).length}</div></div><div class="scard"><div class="scard-label">Mayor categoría</div><div class="scard-val" style="font-size:18px">${maxCat?maxCat[0]:"—"}</div><div class="scard-sub">${maxCat?fmt(maxCat[1]):""}</div></div>`;
+  document.getElementById("rKpis").innerHTML=`<div class="scard"><div class="scard-label">Total del período</div><div class="scard-val">${fmt(total)}</div><div class="scard-sub">${gastos.length} facturas</div></div><div class="scard"><div class="scard-label">Proveedores</div><div class="scard-val">${provs}</div></div><div class="scard"><div class="scard-label">Categorías</div><div class="scard-val">${Object.keys(porCat).length}</div></div><div class="scard"><div class="scard-label">Mayor categoría</div><div class="scard-val" style="font-size:18px">${maxCat?esc(maxCat[0]):"—"}</div><div class="scard-sub">${maxCat?fmt(maxCat[1]):""}</div></div>`;
   const maxVal=Math.max(...Object.values(porCat),1);
-  document.getElementById("rChartCat").innerHTML=Object.entries(porCat).sort((a,b)=>b[1]-a[1]).map(([cat,val])=>`<div class="chart-row"><div class="chart-label" title="${cat}">${cat}</div><div class="chart-bar-bg"><div class="chart-bar-fill" style="width:${(val/maxVal)*100}%">${fmt(val)}</div></div><div style="font-size:11px;color:var(--txt2);width:60px;text-align:right;flex-shrink:0">${((val/total)*100).toFixed(1)}%</div></div>`).join("");
+  document.getElementById("rChartCat").innerHTML=Object.entries(porCat).sort((a,b)=>b[1]-a[1]).map(([cat,val])=>`<div class="chart-row"><div class="chart-label" title="${esc(cat)}">${esc(cat)}</div><div class="chart-bar-bg"><div class="chart-bar-fill" style="width:${(val/maxVal)*100}%">${fmt(val)}</div></div><div style="font-size:11px;color:var(--txt2);width:60px;text-align:right;flex-shrink:0">${((val/total)*100).toFixed(1)}%</div></div>`).join("");
   const porProv={};gastos.forEach(g=>{if(!porProv[g.proveedor])porProv[g.proveedor]={total:0,count:0,cats:{}};porProv[g.proveedor].total+=g.importe;porProv[g.proveedor].count++;});
   gastosExp.forEach(g=>{if(!porProv[g.proveedor])porProv[g.proveedor]={total:0,count:0,cats:{}};porProv[g.proveedor].cats[g.categoria]=(porProv[g.proveedor].cats[g.categoria]||0)+g.importe;});
   const tbody=document.getElementById("rBodyProveedores");tbody.innerHTML="";
-  Object.entries(porProv).sort((a,b)=>b[1].total-a[1].total).forEach(([prov,d],i)=>{const catP=Object.entries(d.cats).sort((a,b)=>b[1]-a[1])[0]?.[0]||"—";const tr=document.createElement("tr");tr.innerHTML=`<td style="font-weight:700;color:var(--vd)">${i+1}</td><td><strong>${prov}</strong></td><td style="text-align:center">${d.count}</td><td><span class="cat-badge">${catP}</span></td><td class="amount-cell">${fmt(d.total)}</td>`;tbody.appendChild(tr);});
+  Object.entries(porProv).sort((a,b)=>b[1].total-a[1].total).forEach(([prov,d],i)=>{const catP=Object.entries(d.cats).sort((a,b)=>b[1]-a[1])[0]?.[0]||"—";const tr=document.createElement("tr");tr.innerHTML=`<td style="font-weight:700;color:var(--vd)">${i+1}</td><td><strong>${esc(prov)}</strong></td><td style="text-align:center">${d.count}</td><td><span class="cat-badge">${esc(catP)}</span></td><td class="amount-cell">${fmt(d.total)}</td>`;tbody.appendChild(tr);});
   const tbody2=document.getElementById("rBodyDetalle");tbody2.innerHTML="";
   document.getElementById("rEmpty").style.display=gastos.length===0?"block":"none";
-  gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{const tr=document.createElement("tr");tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td>${g.proveedor}</td><td>${categoriaSelectHtml(g)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${g.factura||"—"}</td><td style="font-size:12px;color:var(--txt2)">${formaPagoLabel(g)}</td><td class="amount-cell">${fmt(g.importe)}</td><td style="text-align:center"><button onclick="eliminarGasto('${g.id.replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button></td>`;tbody2.appendChild(tr);});
+  gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{const tr=document.createElement("tr");tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td>${esc(g.proveedor)}</td><td>${categoriaSelectHtml(g)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${esc(g.factura||"—")}</td><td style="font-size:12px;color:var(--txt2)">${formaPagoLabel(g)}</td><td class="amount-cell">${fmt(g.importe)}</td><td style="text-align:center"><button onclick="eliminarGasto('${g.id.replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button></td>`;tbody2.appendChild(tr);});
 }
 // El <select> de categorías de Auditoría era una lista FIJA escrita a mano en el HTML: no traía
 // las categorías que el equipo agregó después (IMSS, agua purificada, renta depto…) ni una
@@ -7302,7 +7307,7 @@ function poblarCategoriasReporte(){
     + (haySin?`<option value="${CAT_SIN}" ${prev===CAT_SIN?"selected":""}>(sin categoría)</option>`:"")
     + cats.map(c=>`<option value="${esc(c)}" ${c===prev?"selected":""}>${esc(c)}</option>`).join("");
 }
-function poblarProveedores(){const sel=document.getElementById("rProveedor");if(!sel)return;const prev=sel.value,provs=[...new Set(allGastosAllWeeks().map(g=>g.proveedor).filter(Boolean))].sort();sel.innerHTML='<option value="">Todos los proveedores</option>'+provs.map(p=>`<option value="${p}" ${p===prev?"selected":""}>${p}</option>`).join("");}
+function poblarProveedores(){const sel=document.getElementById("rProveedor");if(!sel)return;const prev=sel.value,provs=[...new Set(allGastosAllWeeks().map(g=>g.proveedor).filter(Boolean))].sort();sel.innerHTML='<option value="">Todos los proveedores</option>'+provs.map(p=>`<option value="${esc(p)}" ${p===prev?"selected":""}>${esc(p)}</option>`).join("");}
 // El filtro (fechas/categoría/proveedor) de "Reportes" se reiniciaba a "mes actual, todo" cada
 // vez que se abría la pestaña — incluso sin recargar — perdiendo la vista de trabajo mientras
 // se revisan/borran duplicados. Ahora se restaura lo último usado; solo aplica el default de
@@ -7715,7 +7720,7 @@ function renderPagos(){
       :`<span style="color:#ccc;font-size:12px">—</span>`;
     const actions=g.estadoPago==="pendiente"&&g.formaPago==="credito"?`<button class="btn btn-gold" style="padding:5px 12px;font-size:11px" onclick="openPagoModal('${g.id}')">💳 Pagar</button>`:g.estadoPago==="pagado"&&g.formaPago==="credito"&&!g.comprobantePago?`<button class="btn btn-light" style="padding:5px 12px;font-size:11px" onclick="openPagoModal('${g.id}')">📎 Comprobante</button>`:`<span style="color:var(--vm);font-size:12px">✅</span>`;
     const tr=document.createElement("tr");tr.className=rowClass;
-    tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td><strong>${g.proveedor}</strong><br><span style="font-size:11px;color:var(--txt2)">${g._weekLabel||""}</span></td><td>${fpCell}</td><td>${estadoCell}</td><td>${vencCell}</td><td class="amount-cell">${fmt(g.importe)}</td><td>${compCell}</td><td>${actions}</td>`;
+    tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td><strong>${esc(g.proveedor)}</strong><br><span style="font-size:11px;color:var(--txt2)">${esc(g._weekLabel||"")}</span></td><td>${fpCell}</td><td>${estadoCell}</td><td>${vencCell}</td><td class="amount-cell">${fmt(g.importe)}</td><td>${compCell}</td><td>${actions}</td>`;
     tbody.appendChild(tr);
   });
   pendientesThumb.forEach(p=>cargarThumbReal(p.id, p.url, p.elId));
