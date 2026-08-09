@@ -74,6 +74,7 @@ const FUNCS = [
   "balanceOperativo", "ingresosDetalle",
   "fetchStorage", "esImagenRespaldo",
   "gastosFiltradosReporte",
+  "resumenEstado", "_estadoValido", "podarRespaldos",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
@@ -98,6 +99,7 @@ for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
 vm.runInContext("const TOL_DIVIDIDA = 0.05;", sandbox);
 vm.runInContext("let _storageAuthScheme = null;", sandbox);   // memo del esquema que funcionó
 vm.runInContext('const CAT_SIN = "__SIN__";', sandbox);       // centinela de "sin categoría"
+vm.runInContext('const RESPALDO_PREFIJO = "respaldo-"; const RESPALDOS_A_CONSERVAR = 30;', sandbox);
 for (const f of FUNCS) vm.runInContext(extractFunction(f), sandbox);
 const S = sandbox;
 
@@ -107,6 +109,12 @@ function t(name, fn) {
   catch (e) { fail++; console.error("  FAIL - " + name + "\n        " + e.message); }
 }
 const close = (a, b, eps = 0.01) => assert.ok(Math.abs(a - b) < eps, `esperaba ${b}, salió ${a}`);
+// t() es síncrona: si fn devuelve una promesa rechazada, el try/catch no la ve y la corrida se
+// cae con un stack en vez de contar un FAIL. Las pruebas asíncronas usan tAsync.
+async function tAsync(name, fn) {
+  try { await fn(); pass++; console.log("  ok - " + name); }
+  catch (e) { fail++; console.error("  FAIL - " + name + "\n        " + e.message); }
+}
 
 console.log("\n== precioPorUnidadBase / contenidoTotalGramos ==");
 t("kg con merma: Rollo de Res $92.90, 1kg, 30% → $132.71/kg", () => {
@@ -1346,6 +1354,34 @@ function fetchQueAcepta(esquema) {
 // ── Filtro de categoría en Auditoría ────────────────────────────────────
 // El bug: "" ya significaba "todas", así que al saltar desde Presupuesto a las facturas SIN
 // categoría el filtro llegaba vacío y la pantalla mostraba TODO. Ahora va un centinela.
+// ── Respaldos ───────────────────────────────────────────────────────────
+// Toda la contabilidad vive en un solo documento que se reescribe completo. Sin copias, un
+// borrado o una fusión mala eran irreversibles.
+console.log("\n== Respaldos ==");
+const estadoCon = (gastos, cortes) => ({ weeks: [
+  { id: "w1", gastos: gastos.slice(0, Math.ceil(gastos.length / 2)), cortes: cortes || [], retiros: [] },
+  { id: "w2", gastos: gastos.slice(Math.ceil(gastos.length / 2)), cortes: [], retiros: [] },
+]});
+t("el resumen cuenta gastos e importe de TODAS las semanas", () => {
+  const r = S.resumenEstado(estadoCon(
+    [{ importe: 100 }, { importe: 250.5 }, { importe: 49.5 }], [{ monto: 1 }, { monto: 2 }]));
+  assert.equal(r.semanas, 2); assert.equal(r.gastos, 3);
+  close(r.importe, 400); assert.equal(r.cortes, 2);
+});
+t("un estado vacío da cero, no explota", () => {
+  assert.deepEqual(S.resumenEstado({ weeks: [] }), { semanas: 0, gastos: 0, cortes: 0, importe: 0 });
+  assert.equal(S.resumenEstado(null).gastos, 0);
+  assert.equal(S.resumenEstado({}).gastos, 0);
+});
+t("un importe corrupto no contamina el total", () => {
+  const r = S.resumenEstado({ weeks: [{ gastos: [{ importe: 100 }, { importe: "x" }, { importe: null }] }] });
+  assert.equal(r.gastos, 3); close(r.importe, 100);
+});
+t("solo pasa por respaldo válido lo que tiene semanas", () => {
+  assert.equal(S._estadoValido({ weeks: [] }), true);
+  ["", null, undefined, 42, "texto", {}, { weeks: "no" }, []].forEach(x =>
+    assert.equal(S._estadoValido(x), false, JSON.stringify(x) + " no debería pasar"));
+});
 console.log("\n== Filtro de categoría en Auditoría ==");
 const GASTOS_CAT = [
   { id: "a", fecha: "2026-07-05", proveedor: "POLLO", categoria: "Cárnicos", importe: 100 },
@@ -1385,13 +1421,42 @@ t("el filtro de proveedor se combina con el centinela", () => {
   assert.deepEqual(S.gastosFiltradosReporte().map(g => g.id), ["b"]);
 });
 
-console.log("\n== Autenticación con Firebase Storage ==");
+console.log("\n== Respaldos (asíncrono) ==");
 
 async function pruebasStorage() {
-  const T = async (name, fn) => {
-    try { await fn(); pass++; console.log("  ok - " + name); }
-    catch (e) { fail++; console.error("  FAIL - " + name + "\n        " + e.message); }
-  };
+  const T = tAsync;
+
+  await T("la poda conserva los 30 más recientes y borra el resto", async () => {
+    const borrados = [];
+    S.fbDeleteDoc = async (col, id) => { borrados.push(col + "/" + id); };
+    // listarRespaldos ya entrega del más nuevo al más viejo
+    const lista = Array.from({ length: 40 }, (_, i) =>
+      ({ id: "respaldo-2026-06-" + String(40 - i).padStart(2, "0") }));
+    const n = await S.podarRespaldos(lista);
+    assert.equal(n, 10, "40 - 30 conservados");
+    assert.equal(borrados.length, 10);
+    assert.ok(borrados.every(b => b.startsWith("estado/respaldo-")));
+    assert.ok(borrados.includes("estado/respaldo-2026-06-01"), "borra el más viejo");
+    assert.ok(!borrados.includes("estado/respaldo-2026-06-40"), "conserva el más nuevo");
+  });
+
+  await T("la poda NUNCA borra el documento vivo, aunque venga en la lista", async () => {
+    const borrados = [];
+    S.fbDeleteDoc = async (col, id) => { borrados.push(id); };
+    const lista = Array.from({ length: 35 }, (_, i) => ({ id: "respaldo-" + i }));
+    lista.push({ id: "cicsa" });                     // el estado vivo, al final de todo
+    await S.podarRespaldos(lista);
+    assert.ok(!borrados.includes("cicsa"), "estado/cicsa jamás se borra");
+  });
+
+  await T("con 30 o menos no borra nada", async () => {
+    const borrados = [];
+    S.fbDeleteDoc = async (col, id) => { borrados.push(id); };
+    const n = await S.podarRespaldos(Array.from({ length: 30 }, (_, i) => ({ id: "respaldo-" + i })));
+    assert.equal(n, 0); assert.equal(borrados.length, 0);
+  });
+
+  console.log("\n== Autenticación con Firebase Storage ==");
 
   await T("usa «Firebase <token>» — el esquema del SDK oficial, no «Bearer»", async () => {
     setScheme(null);

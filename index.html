@@ -677,6 +677,18 @@ body.snav-min .side-theme span { display:none; }
     <button class="btn btn-light" onclick="abrirActividadModal()">👁 Ver actividad</button>
 
     <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
+    <h4 style="margin:0 0 6px;color:var(--vd)">🛟 Respaldos</h4>
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Cada día se guarda solo una copia de toda la información, en cuanto alguien entra a la app. Se conservan los últimos 30 días. Descarga un archivo de vez en cuando y guárdalo fuera de la computadora: es la única copia que sobrevive si se pierde el proyecto de Firebase entero.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn btn-light" onclick="descargarRespaldoAhora()">💾 Descargar archivo</button>
+      <button class="btn btn-light" onclick="crearRespaldoManual()">☁️ Respaldar ahora</button>
+      <button class="btn btn-light" onclick="document.getElementById('archivoRespaldo').click()">📂 Restaurar desde archivo</button>
+      <input type="file" id="archivoRespaldo" accept=".json,application/json" style="display:none" onchange="restaurarDesdeArchivo(this)">
+    </div>
+    <div id="respaldosLista"></div>
+    <div class="status" id="respaldoStatus" style="margin-top:8px"></div>
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
     <h4 style="margin:0 0 6px;color:var(--vd)">🗜️ Mantenimiento</h4>
     <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Mueve las imágenes de facturas viejas que todavía viven dentro del estado hacia Firebase Storage. Aligera la app y baja el uso de memoria. Es seguro y puedes correrlo cuando quieras.</div>
     <button class="btn btn-light" id="btnMigrarRespaldos" onclick="ejecutarMigracionRespaldos()">🗜️ Optimizar imágenes guardadas</button>
@@ -1912,7 +1924,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-08-b";
+const APP_BUILD = "2026-08-09-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2295,6 +2307,131 @@ async function fbSet(path, data) {
     })
   });
 }
+// ═══════════════════════════════════════════════════════════════════
+// RESPALDOS
+// ═══════════════════════════════════════════════════════════════════
+// Toda la contabilidad vive en UN documento (estado/cicsa) que se reescribe completo en cada
+// guardado, con una fusión hecha en el navegador. Si ese documento se corrompe —un error de la
+// app, un borrado en masa, una fusión mala— no había de dónde regresar: no existía ninguna copia.
+//
+// Las copias se guardan como estado/respaldo-AAAA-MM-DD, es decir en la MISMA colección que el
+// documento vivo. Es a propósito: la regla `match /estado/{doc}` que ya existe las cubre, así que
+// los respaldos empiezan a funcionar sin tocar la consola de Firebase.
+const RESPALDO_PREFIJO = "respaldo-";
+const RESPALDOS_A_CONSERVAR = 30;
+
+// Cifras de control de un estado. Se guardan aparte del volcado para poder listar los respaldos
+// sin bajarse varios megas por cada uno.
+function resumenEstado(st){
+  const weeks = (st && Array.isArray(st.weeks)) ? st.weeks : [];
+  let gastos=0, importe=0, cortes=0;
+  weeks.forEach(w=>{
+    (w.gastos||[]).forEach(g=>{ gastos++; importe += parseFloat(g.importe)||0; });
+    cortes += (w.cortes||[]).length;
+  });
+  return { semanas: weeks.length, gastos, cortes, importe: Math.round(importe*100)/100 };
+}
+
+async function guardarRespaldo(id, st){
+  const meta = resumenEstado(st);
+  const r = await fetch(`${FB_BASE}/estado/${encodeURIComponent(id)}?key=${FB_KEY}`, {
+    method: "PATCH",
+    headers: {"Content-Type":"application/json", ...(await fbAuthHeader())},
+    body: JSON.stringify({ fields: {
+      json: { stringValue: JSON.stringify(st) },
+      ts:   { stringValue: new Date().toISOString() },
+      meta: { stringValue: JSON.stringify(meta) },
+    }})
+  });
+  if(!r.ok) throw new Error(`Firestore respondió ${r.status}`);
+  return meta;
+}
+
+// Lista SOLO ts y meta con mask.fieldPaths. Sin la máscara, listar la colección bajaría el
+// volcado completo de cada respaldo (megas por copia) nada más para pintar la tabla.
+async function listarRespaldos(){
+  try{
+    const headers = await fbAuthHeader();
+    const url = `${FB_BASE}/estado?pageSize=100&mask.fieldPaths=ts&mask.fieldPaths=meta&key=${FB_KEY}`;
+    const r = await fetch(url, { headers });
+    if(!r.ok) return [];
+    const d = await r.json();
+    return (d.documents||[])
+      .map(doc=>{
+        const id = doc.name.split("/").pop();
+        let meta = {};
+        try{ meta = JSON.parse(doc.fields?.meta?.stringValue || "{}"); }catch(_){}
+        return { id, ts: doc.fields?.ts?.stringValue || "", ...meta };
+      })
+      .filter(x=>x.id.startsWith(RESPALDO_PREFIJO))
+      .sort((a,b)=>a.id<b.id?1:-1);            // el más reciente primero
+  }catch(e){ console.warn("listarRespaldos:", e); return []; }
+}
+
+// Conserva los más recientes. Nunca toca estado/cicsa: el filtro por prefijo lo garantiza.
+async function podarRespaldos(lista){
+  const sobran = (lista||[]).slice(RESPALDOS_A_CONSERVAR);
+  for(const r of sobran){
+    if(!r.id.startsWith(RESPALDO_PREFIJO)) continue;   // cinturón y tirantes
+    await fbDeleteDoc("estado", r.id);
+  }
+  return sobran.length;
+}
+
+// Una copia al día, la toma quien entre primero. No hace falta que sea el admin: si dependiera
+// de que él abra la app, habría días sin respaldo.
+async function respaldoAutomatico(){
+  try{
+    const ahora = resumenEstado(state);
+    if(ahora.gastos === 0) return;                   // nada que respaldar todavía
+    const hoy = todayStr();
+    const lista = await listarRespaldos();
+    if(lista.some(x=>x.id === RESPALDO_PREFIJO+hoy)) return;   // ya hay uno de hoy
+    // Salvaguarda: si el estado de hoy trae mucho menos de lo que había, algo se perdió. En vez
+    // de congelar esa pérdida en un respaldo (y que a los 30 días desplace a los buenos), no se
+    // guarda y se avisa. Un respaldo que copia el desastre no sirve de nada.
+    const ultimo = lista[0];
+    if(ultimo && ultimo.gastos > 0 && ahora.gastos < ultimo.gastos * 0.5){
+      console.warn(`respaldoAutomatico: ${ahora.gastos} gastos ahora vs ${ultimo.gastos} en ${ultimo.id}. No se respalda.`);
+      window._respaldoAlerta = { ahora: ahora.gastos, antes: ultimo.gastos, id: ultimo.id };
+      if(currentRole === "admin"){
+        alert(`⚠ ATENCIÓN\n\nAhora mismo la app ve ${ahora.gastos} gastos, pero el respaldo del ${ultimo.id.replace(RESPALDO_PREFIJO,"")} tenía ${ultimo.gastos}.\n\n`+
+          `NO se hizo el respaldo de hoy, para no perder el bueno.\n\nRevisa en Usuarios → Respaldos antes de seguir capturando.`);
+      }
+      return;
+    }
+    await guardarRespaldo(RESPALDO_PREFIJO+hoy, state);
+    await podarRespaldos([{id:RESPALDO_PREFIJO+hoy, ...ahora}, ...lista]);
+  }catch(e){ console.warn("respaldoAutomatico:", e); }
+}
+
+// Escribe el estado SIN pasar por la fusión. El guardado normal une lo local con lo remoto (para
+// que dos capturas simultáneas no se pisen), pero al restaurar eso es justo lo contrario de lo
+// que se quiere: la fusión resucitaría lo que el respaldo no trae.
+async function escribirEstadoDirecto(st){
+  clearTimeout(_syncTimer); _syncPending = false;
+  let vueltas = 0;
+  while(_syncing && vueltas++ < 100) await new Promise(r=>setTimeout(r, 100));   // deja terminar el que ya iba
+  state = st;
+  localStorage.setItem("cicsa_egresos", JSON.stringify(state));
+  await fbSet("estado/cicsa", state);
+}
+
+// Una sola puerta para recargar: deja el punto de recarga en un lugar nombrado y aislable.
+function recargarApp(){ location.reload(); }
+function _estadoValido(st){ return !!(st && typeof st === "object" && Array.isArray(st.weeks)); }
+
+// Deja todo el estado en un archivo que el usuario se lleva. Es la única copia que sobrevive a
+// perder el proyecto de Firebase entero.
+function descargarEstadoComoArchivo(st, nombre){
+  const blob = new Blob([JSON.stringify(st, null, 2)], { type:"application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = nombre;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>{ try{ URL.revokeObjectURL(url); }catch(_){} }, 5000);
+}
+
 const CATS = [
   "Cárnicos","Lácteos / Cremería","Frutas y Verduras","Tortilla",
   "Abarrotes / Secos","Refrescos / Pepsi","Hielo","Gas",
@@ -2497,6 +2634,8 @@ async function initState() {
   // una semana nueva.
   if(state.weeks.length===0) createNewWeek(true);
   localStorage.setItem("cicsa_egresos", JSON.stringify(state));
+  // Sin await: el respaldo no debe retrasar la entrada a la app.
+  respaldoAutomatico();
 }
 
 // Renombra categorías en los DATOS existentes al cargar, para que los gastos históricos no
@@ -8056,6 +8195,114 @@ async function abrirAdminModal() {
   if(currentRole !== "admin") return;
   document.getElementById("adminModal").classList.add("open");
   cargarUsuarios();
+  renderRespaldos();
+}
+
+function _fechaRespaldo(id){ return String(id||"").replace(RESPALDO_PREFIJO,""); }
+
+async function renderRespaldos(){
+  const cont = document.getElementById("respaldosLista");
+  if(!cont) return;
+  cont.innerHTML = `<div style="color:#9DB89D;font-size:13px">Cargando respaldos…</div>`;
+  const lista = await listarRespaldos();
+  const ahora = resumenEstado(state);
+  if(!lista.length){
+    cont.innerHTML = `<div style="font-size:13px;color:var(--txt2);padding:8px 0">Todavía no hay respaldos en la nube. Se crea uno solo cada día en cuanto alguien entra a la app.</div>`;
+    return;
+  }
+  cont.innerHTML = `
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:8px">Ahora mismo la app tiene <strong>${ahora.gastos}</strong> gastos por <strong>${fmt(ahora.importe)}</strong>.</div>
+    <div class="tbl-wrap" style="max-height:260px;overflow:auto"><table style="width:100%">
+    <thead><tr><th>Fecha</th><th style="text-align:right">Gastos</th><th style="text-align:right">Importe</th><th></th></tr></thead><tbody>
+    ${lista.map(r=>{
+      // Un respaldo con menos movimientos que el actual es normal (es más viejo). Se marca el
+      // caso contrario: ahí es donde se ve que hoy falta algo que ayer sí estaba.
+      const perdida = (r.gastos||0) > ahora.gastos;
+      return `<tr>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${esc(_fechaRespaldo(r.id))}</td>
+        <td class="amount-cell" style="${perdida?"color:var(--red);font-weight:700":""}">${r.gastos||0}</td>
+        <td class="amount-cell">${fmt(r.importe||0)}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn btn-light" style="padding:4px 8px;font-size:11px" title="Bajar este respaldo como archivo" onclick="descargarRespaldoNube('${esc(r.id)}')">⬇️</button>
+          <button class="btn btn-light" style="padding:4px 8px;font-size:11px" title="Volver a este respaldo" onclick="restaurarRespaldoNube('${esc(r.id)}')">↩️ Restaurar</button>
+        </td></tr>`;
+    }).join("")}
+    </tbody></table></div>`;
+}
+
+function descargarRespaldoAhora(){
+  const r = resumenEstado(state);
+  descargarEstadoComoArchivo(state, `cicsa-respaldo-${todayStr()}.json`);
+  setStatus("respaldoStatus", `✅ Descargado: ${r.gastos} gastos por ${fmt(r.importe)}. Guárdalo fuera de la computadora.`, "ok");
+}
+
+async function crearRespaldoManual(){
+  const r = resumenEstado(state);
+  if(!r.gastos){ setStatus("respaldoStatus", "⚠ No hay nada que respaldar.", "warn"); return; }
+  setStatus("respaldoStatus", "Guardando respaldo…", "");
+  try{
+    // Con hora, para que un respaldo manual no pise el automático del día.
+    const sello = new Date().toISOString().slice(11,16).replace(":","");
+    await guardarRespaldo(`${RESPALDO_PREFIJO}${todayStr()}-${sello}`, state);
+    setStatus("respaldoStatus", `✅ Respaldo guardado: ${r.gastos} gastos por ${fmt(r.importe)}.`, "ok");
+    renderRespaldos();
+  }catch(e){ setStatus("respaldoStatus", `❌ No se pudo guardar: ${e.message||e}`, "error"); }
+}
+
+async function descargarRespaldoNube(id){
+  setStatus("respaldoStatus", "Bajando respaldo…", "");
+  const st = await fbGet("estado/"+id);
+  if(!_estadoValido(st)){ setStatus("respaldoStatus", "❌ Ese respaldo no se pudo leer.", "error"); return; }
+  descargarEstadoComoArchivo(st, `cicsa-${id}.json`);
+  setStatus("respaldoStatus", "✅ Descargado.", "ok");
+}
+
+// Restaurar es destructivo, así que antes de pisar nada se guarda un respaldo del estado ACTUAL:
+// si la restauración fue un error, se deshace restaurando ese.
+async function _restaurarEstado(st, origen){
+  if(currentRole !== "admin"){ alert("🔒 Solo un administrador puede restaurar un respaldo."); return false; }
+  if(!_estadoValido(st)){ alert("Ese archivo no tiene la forma de un respaldo de CICSA."); return false; }
+  const antes = resumenEstado(state), despues = resumenEstado(st);
+  const aviso = despues.gastos < antes.gastos
+    ? `\n\n⚠ El respaldo tiene ${antes.gastos - despues.gastos} gasto(s) MENOS que lo que hay ahora. Restaurar los quita.`
+    : "";
+  if(!confirm(`Restaurar desde ${origen}.\n\n`+
+    `AHORA:     ${antes.gastos} gastos · ${fmt(antes.importe)}\n`+
+    `RESPALDO:  ${despues.gastos} gastos · ${fmt(despues.importe)}${aviso}\n\n`+
+    `Antes de cambiar nada se guarda un respaldo de lo que hay ahora, para poder deshacerlo.\n\n¿Continuar?`)) return false;
+  setStatus("respaldoStatus", "Restaurando…", "");
+  try{
+    const sello = new Date().toISOString().slice(0,16).replace(/[:T]/g,"").slice(0,13);
+    await guardarRespaldo(`${RESPALDO_PREFIJO}${todayStr()}-antes-de-restaurar-${sello.slice(-4)}`, state);
+    await escribirEstadoDirecto(st);
+    setStatus("respaldoStatus", `✅ Restaurado: ${despues.gastos} gastos por ${fmt(despues.importe)}.`, "ok");
+    renderRespaldos();
+    alert("✅ Listo. La app se va a recargar para que todas las pantallas tomen los datos restaurados.");
+    recargarApp();
+    return true;
+  }catch(e){
+    setStatus("respaldoStatus", `❌ No se pudo restaurar: ${e.message||e}`, "error");
+    return false;
+  }
+}
+
+async function restaurarRespaldoNube(id){
+  const st = await fbGet("estado/"+id);
+  await _restaurarEstado(st, `el respaldo del ${_fechaRespaldo(id)}`);
+}
+
+function restaurarDesdeArchivo(input){
+  const f = input.files && input.files[0];
+  input.value = "";                     // permite volver a elegir el mismo archivo
+  if(!f) return;
+  const lector = new FileReader();
+  lector.onload = async () => {
+    let st = null;
+    try{ st = JSON.parse(lector.result); }
+    catch(e){ alert("Ese archivo no es un JSON válido."); return; }
+    await _restaurarEstado(st, `el archivo ${f.name}`);
+  };
+  lector.readAsText(f);
 }
 
 function closeAdminModal() {
