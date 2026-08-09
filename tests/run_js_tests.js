@@ -92,6 +92,8 @@ const sandbox = {
     setItem: (k, v) => { m[k] = String(v); }, removeItem: k => { delete m[k]; } }; })(),
   // fetchStorage habla con Firebase Storage: se le pone una sesión y un fetch de mentira.
   auth: { currentUser: { getIdToken: async () => "TOKEN" } },
+  FB_BASE: "https://firestore/x", FB_KEY: "K",
+  fbSet: async () => {}, fbDeleteDoc: async () => {},
   fetch: async () => ({ ok: true, status: 200 }),
 };
 vm.createContext(sandbox);
@@ -100,6 +102,8 @@ vm.runInContext("const TOL_DIVIDIDA = 0.05;", sandbox);
 vm.runInContext("let _storageAuthScheme = null;", sandbox);   // memo del esquema que funcionó
 vm.runInContext('const CAT_SIN = "__SIN__";', sandbox);       // centinela de "sin categoría"
 vm.runInContext('const RESPALDO_PREFIJO = "respaldo-"; const RESPALDOS_A_CONSERVAR = 30;', sandbox);
+vm.runInContext('const RESPALDOS_COL = "respaldos"; const RESPALDO_INDICE = "_indice";', sandbox);
+vm.runInContext('var currentRole = "admin";', sandbox);   // var: reasignable desde las pruebas
 for (const f of FUNCS) vm.runInContext(extractFunction(f), sandbox);
 const S = sandbox;
 
@@ -1426,32 +1430,60 @@ console.log("\n== Respaldos (asíncrono) ==");
 async function pruebasStorage() {
   const T = tAsync;
 
-  await T("la poda conserva los 30 más recientes y borra el resto", async () => {
-    const borrados = [];
+  const espiarPoda = () => {
+    const borrados = [], indices = [];
     S.fbDeleteDoc = async (col, id) => { borrados.push(col + "/" + id); };
+    S.fbSet = async (path, data) => { indices.push({ path, data }); };
+    return { borrados, indices };
+  };
+  const setRol = (r) => vm.runInContext(`currentRole = ${JSON.stringify(r)};`, sandbox);
+
+  await T("la poda conserva los 30 más recientes y borra el resto", async () => {
+    setRol("admin");
+    const { borrados } = espiarPoda();
     // listarRespaldos ya entrega del más nuevo al más viejo
     const lista = Array.from({ length: 40 }, (_, i) =>
       ({ id: "respaldo-2026-06-" + String(40 - i).padStart(2, "0") }));
     const n = await S.podarRespaldos(lista);
     assert.equal(n, 10, "40 - 30 conservados");
     assert.equal(borrados.length, 10);
-    assert.ok(borrados.every(b => b.startsWith("estado/respaldo-")));
-    assert.ok(borrados.includes("estado/respaldo-2026-06-01"), "borra el más viejo");
-    assert.ok(!borrados.includes("estado/respaldo-2026-06-40"), "conserva el más nuevo");
+    assert.ok(borrados.every(b => b.startsWith("respaldos/respaldo-")));
+    assert.ok(borrados.includes("respaldos/respaldo-2026-06-01"), "borra el más viejo");
+    assert.ok(!borrados.includes("respaldos/respaldo-2026-06-40"), "conserva el más nuevo");
   });
 
-  await T("la poda NUNCA borra el documento vivo, aunque venga en la lista", async () => {
-    const borrados = [];
-    S.fbDeleteDoc = async (col, id) => { borrados.push(id); };
-    const lista = Array.from({ length: 35 }, (_, i) => ({ id: "respaldo-" + i }));
-    lista.push({ id: "cicsa" });                     // el estado vivo, al final de todo
+  await T("la poda deja el índice sin lo que borró", async () => {
+    setRol("admin");
+    const { indices } = espiarPoda();
+    const lista = Array.from({ length: 32 }, (_, i) =>
+      ({ id: "respaldo-2026-06-" + String(32 - i).padStart(2, "0") }));
     await S.podarRespaldos(lista);
-    assert.ok(!borrados.includes("cicsa"), "estado/cicsa jamás se borra");
+    assert.equal(indices.length, 1, "se reescribe el índice una vez");
+    assert.equal(indices[0].path, "respaldos/_indice");
+    assert.equal(indices[0].data.length, 30);
+    assert.ok(!indices[0].data.some(x => x.id === "respaldo-2026-06-01"), "el borrado sale del índice");
+  });
+
+  await T("el _indice nunca se borra: no lleva el prefijo", async () => {
+    setRol("admin");
+    const { borrados } = espiarPoda();
+    const lista = Array.from({ length: 35 }, (_, i) => ({ id: "respaldo-" + i }));
+    lista.push({ id: "_indice" });                   // al final, en la zona de poda
+    await S.podarRespaldos(lista);
+    assert.ok(!borrados.some(b => b.endsWith("/_indice")), "el índice jamás se borra");
+  });
+
+  await T("un operativo no poda nada — borrar es solo del admin en las reglas", async () => {
+    setRol("operativo");
+    const { borrados } = espiarPoda();
+    const n = await S.podarRespaldos(Array.from({ length: 40 }, (_, i) => ({ id: "respaldo-" + i })));
+    assert.equal(n, 0); assert.equal(borrados.length, 0);
+    setRol("admin");
   });
 
   await T("con 30 o menos no borra nada", async () => {
-    const borrados = [];
-    S.fbDeleteDoc = async (col, id) => { borrados.push(id); };
+    setRol("admin");
+    const { borrados } = espiarPoda();
     const n = await S.podarRespaldos(Array.from({ length: 30 }, (_, i) => ({ id: "respaldo-" + i })));
     assert.equal(n, 0); assert.equal(borrados.length, 0);
   });
