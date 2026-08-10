@@ -1944,7 +1944,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-10-a";
+const APP_BUILD = "2026-08-10-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -9084,12 +9084,52 @@ function foliosEgresoImportados(){
 //    "ignorar": la factura probablemente ya entró por Gmail o el SAT. Es la pista más valiosa.
 //  · Si no, manda la "clase" que capturó el usuario en Cortes: deposito → retiro, gasto → gasto.
 //  · Sin clase, se asume gasto (el caso más común); el usuario confirma.
+// ¿El comprobante parece folio de factura de proveedor, y no un vale interno de caja? Los vales
+// son numéricos cortos (0005, 0006, 131862); una factura casi siempre trae letras (el ticket de
+// Sam's «ICAJG470108»). Es solo una PISTA para revisar, no un veredicto.
+function _pareceFolioFactura(comprobante){
+  const c = String(comprobante||"").trim();
+  return !!c && /[A-Za-z]/.test(c);
+}
+
+// Busca un gasto YA capturado con el MISMO importe en fecha cercana, SIN exigir que el nombre
+// coincida. Es la defensa contra el doble conteo cuando la factura entró por Gmail/SAT con el
+// nombre fiscal («NUEVA WAL-MART») y el corte trae el del ticket («COMPRA SAMS»): findDuplicate no
+// los cruza porque exige mismo proveedor, pero el IMPORTE sí coincide al centavo.
+function gastoMismoImporte(monto, fecha, diasTol){
+  const imp = parseFloat(monto)||0;
+  if(imp <= 0) return null;
+  const dTol = (diasTol==null) ? 4 : diasTol;
+  const f0 = fecha ? new Date(fecha+"T12:00:00") : null;
+  const todos = (typeof allGastosAllWeeks === "function") ? allGastosAllWeeks() : [];
+  for(const g of todos){
+    if(g._folioEgreso) continue;   // no compararse contra otro renglón ya importado de un corte
+    if(Math.abs((parseFloat(g.importe)||0) - imp) > 0.01) continue;
+    if(f0 && g.fecha){ const gd=new Date(g.fecha+"T12:00:00"); if(Math.abs((f0-gd)/86400000) > dTol) continue; }
+    return g;
+  }
+  return null;
+}
+
 function clasificacionInicialEgreso(egreso){
+  // 1) Coincidencia fuerte (mismo proveedor+folio, o proveedor+importe+fecha): ya está capturado.
   const dup = (typeof findDuplicate === "function")
     ? findDuplicate(egreso.concepto, egreso.monto, egreso.fecha, egreso.comprobante) : null;
-  if(dup) return { clase:"ignorar", dup };
-  if(egreso.clase === "deposito") return { clase:"retiro", dup:null };
-  return { clase:"gasto", dup:null };
+  if(dup) return { clase:"ignorar", dup, aviso:null };
+  // 2) Mismo importe en fecha cercana AUNQUE el nombre no coincida: es el caso del SAMS, la factura
+  //    ya entró con su nombre fiscal. Se preselecciona «ignorar» pero se muestra para confirmar —
+  //    dos gastos reales del mismo monto el mismo día existen, y ahí el usuario decide.
+  const mismo = gastoMismoImporte(egreso.monto, egreso.fecha);
+  if(mismo) return { clase:"ignorar",
+    dup:{ gasto:mismo, reason:"Mismo importe en fecha cercana — ¿ya entró como factura?" }, aviso:null };
+  // 3) El comprobante parece folio de factura: puede que la factura no haya llegado aún. No se
+  //    cambia la clase, solo se avisa para que el usuario esté pendiente.
+  if(_pareceFolioFactura(egreso.comprobante)){
+    return { clase: egreso.clase==="deposito" ? "retiro" : "gasto", dup:null,
+      aviso:"El comprobante parece folio de factura de proveedor. Si esa factura entra por Gmail/SAT, márcalo «Ignorar» para no contarlo dos veces." };
+  }
+  if(egreso.clase === "deposito") return { clase:"retiro", dup:null, aviso:null };
+  return { clase:"gasto", dup:null, aviso:null };
 }
 
 // ── UI ──────────────────────────────────────────────────────────────
@@ -9146,7 +9186,7 @@ function cargarArchivoCortes(obj){
     const ini = clasificacionInicialEgreso(e);
     // Ya procesado antes (importado o ignorado) → arranca en «ignorar» para no repetirlo.
     return { ...e, _yaImportado:yaImp, _yaIgnorado:yaIgn,
-      _clase: (yaImp || yaIgn) ? "ignorar" : ini.clase, _cat: "Otro", _dup: ini.dup };
+      _clase: (yaImp || yaIgn) ? "ignorar" : ini.clase, _cat: "Otro", _dup: ini.dup, _aviso: ini.aviso||null };
   });
   _cortesImport = { obj, avisos: avisosControlCortes(obj), cortesNuevos, cortesDup, egresos };
   setStatus("cortesImportStatus", `✅ Archivo leído: ${cortesNuevos.length} corte(s) nuevo(s), ${egresos.length} egreso(s). Revisa abajo antes de importar.`, "ok");
@@ -9185,10 +9225,11 @@ function renderRevisionCortes(){
     const btn = (val,lbl)=>`<button type="button" onclick="_setClaseEgreso(${i},'${val}')" style="padding:3px 8px;font-size:11px;border-radius:6px;cursor:pointer;border:1.5px solid ${e._clase===val?'var(--vd)':'var(--border)'};background:${e._clase===val?'var(--vd)':'#fff'};color:${e._clase===val?'#fff':'var(--txt2)'};font-weight:${e._clase===val?'700':'400'}">${lbl}</button>`;
     const catSel = e._clase==="gasto" ? `<select onchange="_setCatEgreso(${i},this.value)" style="margin-left:6px;padding:3px 6px;font-size:11px;border:1px solid var(--border);border-radius:6px;max-width:150px">${catOpts(e._cat)}</select>` : "";
     const dupNota = e._dup ? `<div style="font-size:10px;color:var(--naranja);margin-top:3px">⚠ Ya existe: ${esc(e._dup.gasto.proveedor)} · ${fmt(e._dup.gasto.importe)} — ${esc(e._dup.reason)}</div>` : "";
+    const avisoNota = e._aviso ? `<div style="font-size:10px;color:var(--do);margin-top:3px">🧾 ${esc(e._aviso)}</div>` : "";
     const impNota = e._yaImportado ? `<div style="font-size:10px;color:var(--txt2);margin-top:3px">Ya se importó este folio antes.</div>`
       : (e._yaIgnorado ? `<div style="font-size:10px;color:var(--txt2);margin-top:3px">Ya lo marcaste como «ignorar» antes.</div>` : "");
     return `<tr><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(e.folio)}</td>`+
-      `<td>${esc(e.concepto)}${e.comprobante?` <span style="font-size:10px;color:var(--txt2)">#${esc(e.comprobante)}</span>`:""}${dupNota}${impNota}</td>`+
+      `<td>${esc(e.concepto)}${e.comprobante?` <span style="font-size:10px;color:var(--txt2)">#${esc(e.comprobante)}</span>`:""}${dupNota}${avisoNota}${impNota}</td>`+
       `<td class="amount-cell">${fmt(e.monto)}</td>`+
       `<td style="white-space:nowrap">${btn("gasto","Gasto")} ${btn("retiro","Retiro")} ${btn("ignorar","Ignorar")}${catSel}</td></tr>`;
   }).join("");
