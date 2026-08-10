@@ -1944,7 +1944,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-10-b";
+const APP_BUILD = "2026-08-10-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -9300,13 +9300,35 @@ function confirmarImportarCortes(){
     }
   });
 
+  // Saldo inicial del periodo: el corte trae con cuánto efectivo se abrió (lo que quedó a entregar
+  // del periodo anterior). Se fija solo, para que la conciliación encadene sin capturarlo a mano.
+  // Se permite CUALQUIER valor, incluido negativo: un periodo puede abrir en rojo si el anterior
+  // cerró en rojo. fijarSaldoInicialCaja (manual) exige >0, por eso aquí se escribe directo.
+  let saldoFijado = null;
+  const p = d.obj.periodo || {};
+  if(typeof d.obj.saldoInicial === "number" && isFinite(d.obj.saldoInicial) && _esFechaISO(p.ini)){
+    if(!state.cajaSaldoInicial) state.cajaSaldoInicial = {};
+    state.cajaSaldoInicial[p.ini] = {
+      valor: d.obj.saldoInicial, conteo: {}, fecha: todayStr(),
+      porEmail: "Manejo de Cortes", ts: new Date().toISOString(), _origenCorte: true,
+    };
+    saldoFijado = d.obj.saldoInicial;
+  }
+
   save();
   subirArchivoCortesAStorage(d.obj).catch(()=>{});   // archivar copia; no bloquea si falla
   _cortesImport = null;
   document.getElementById("cortesRevisionCard").style.display = "none";
   const inp = document.getElementById("cortesJsonFile"); if(inp) inp.value = "";
   const nom = document.getElementById("cortesJsonNombre"); if(nom) nom.textContent = "";
-  setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s). Revisa la conciliación abajo.`, "ok");
+  // Deja la conciliación de Caja en el periodo recién importado, para que no haya que buscarlo.
+  if(_esFechaISO(p.ini) && _esFechaISO(p.fin)){
+    const eIni=document.getElementById("cajaRangoIni"), eFin=document.getElementById("cajaRangoFin");
+    if(eIni) eIni.value = p.ini;
+    if(eFin) eFin.value = p.fin;
+  }
+  const saldoMsg = saldoFijado!=null ? ` Saldo inicial fijado en ${fmt(saldoFijado)}.` : "";
+  setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s).${saldoMsg} La conciliación de abajo ya quedó en el periodo ${fmtDate(p.ini)}–${fmtDate(p.fin)}.`, "ok");
   renderCaja();
 }
 

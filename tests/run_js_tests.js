@@ -1684,6 +1684,13 @@ const archivoBase = () => ({
   ],
 });
 
+t("saldoInicial negativo del corte sirve para abrir el periodo siguiente en rojo", () => {
+  // El importador escribe state.cajaSaldoInicial[periodo.ini] = { valor: saldoInicial }, y ese
+  // valor puede ser negativo. La validación NO lo rechaza (es dato, no error).
+  const a = archivoBase(); a.saldoInicial = -15563.83;
+  assert.equal(S.validarArchivoCortes(a).ok, true);
+  assert.ok(S._esNum(a.saldoInicial) && a.saldoInicial < 0, "un saldo negativo es un número válido");
+});
 t("un archivo bien formado pasa la validación", () => {
   assert.equal(S.validarArchivoCortes(archivoBase()).ok, true);
 });
