@@ -125,6 +125,7 @@ body.snav-min .week-badge { padding:7px 4px; font-size:10px; }
 .sat-drop { transition:border-color .15s, box-shadow .15s, transform .15s; }
 .sat-drop.dragover { border-color:var(--naranja)!important; box-shadow:0 0 0 3px rgba(245,120,20,.22); transform:translateY(-2px); }
 #page-sat.sat-drag .sat-drop { border-style:dashed; }
+#page-caja.sat-drag .sat-drop { border-style:dashed; }
 .sat-drop-hint { font-size:11px; color:var(--txt2); margin-top:6px; }
 .sat-drop-nom { font-size:11px; font-weight:600; color:var(--vd); margin-top:4px; word-break:break-word; }
 #imgPreview { max-width:100%; max-height:280px; border-radius:8px;
@@ -1883,6 +1884,25 @@ body.snav-min .side-theme span { display:none; }
     <div class="status" id="retiroStatus"></div>
   </div>
 
+  <!-- Importar corte de Manejo de Cortes -->
+  <div class="card" style="margin-bottom:20px">
+    <h3 style="color:var(--vd);margin:0 0 6px">📥 Importar corte de Manejo de Cortes</h3>
+    <p style="color:var(--txt2);font-size:12px;margin:0 0 14px">Arrastra el archivo <strong>.json</strong> que exporta la app de cortes. Los ingresos de caja entran solos; cada egreso lo clasificas como gasto, retiro o «ya facturado». No se duplica lo que ya importaste antes.</p>
+    <div class="sat-drop" data-cajazona="json" style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
+      <label class="btn btn-light" style="cursor:pointer;margin:0">📄 Elegir archivo
+        <input type="file" id="cortesJsonFile" accept=".json,application/json" style="display:none" onchange="_cajaArchivoElegido(this.files)">
+      </label>
+      <div class="sat-drop-hint">o <strong>arrastra aquí</strong> el .json del corte</div>
+      <div class="sat-drop-nom" id="cortesJsonNombre"></div>
+    </div>
+    <div class="status" id="cortesImportStatus"></div>
+  </div>
+
+  <!-- Revisión antes de importar (oculto hasta que se cargue un archivo) -->
+  <div class="card" id="cortesRevisionCard" style="margin-bottom:20px;display:none">
+    <div id="cortesRevisionContenido"></div>
+  </div>
+
   <!-- Periodo de trabajo -->
   <div class="card" style="margin-bottom:20px">
     <h3 style="color:var(--vd);margin:0 0 16px">🔍 Periodo</h3>
@@ -1924,7 +1944,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-09-c";
+const APP_BUILD = "2026-08-10-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2625,6 +2645,9 @@ function mergeEstados(remote, local){
     tombstones: [...tombMap.values()],
     budget: { ...(remote.budget||{}), ...(local.budget||{}) },
     cajaSaldoInicial: { ...(remote.cajaSaldoInicial||{}), ...(local.cajaSaldoInicial||{}) },
+    // Los folios de cortes ignorados se UNEN (no "gana el último"): si un dispositivo marcó un
+    // egreso como "ya facturado", esa decisión no se debe perder porque otro no la tenga.
+    cortesIgnorados: [...new Set([...(remote.cortesIgnorados||[]), ...(local.cortesIgnorados||[])].map(String))],
   };
 }
 // Marca un id como borrado para que la fusión no lo resucite desde una copia vieja de otro
@@ -3079,6 +3102,7 @@ function showPage(name,btn){
                            // Los CFDI viven en la nube: si aún no se cargan, se piden y se repinta.
                            if(!_cfdisStore && currentRole==="admin") cargarCfdisStore().then(()=>renderBalance()).catch(()=>{}); }
   if(name==="reporte"){    pintarSelectorPeriodoSP("reportePeriodoSel","renderReporteActual"); renderReporteActual(); }
+  if(name==="caja"){ try{ initCajaDropzone(); }catch(_){} }
   if(name==="gmail")       checkGmailStatus();
   if(name==="pagos")       { restaurarPagosPeriodo(); renderPagos(); }
   if(name==="reportes")    initReporteDates();
@@ -8962,6 +8986,300 @@ function guardarRetiro() {
   document.getElementById("retiroMonto").value = "";
   document.getElementById("retiroMotivo").value = "";
   setStatus("retiroStatus", `✅ Retiro registrado: ${fmt(monto)}`, "ok");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// IMPORTAR CORTES DE MANEJO DE CORTES (contrato v2)
+// ═══════════════════════════════════════════════════════════════════
+// La app de cortes exporta un JSON con los ingresos de caja del período y los egresos del
+// concentrado, tal como el usuario los capturó. Egresos NO audita: valida que el archivo se
+// pueda leer, evita duplicar por folio, y deja que el usuario clasifique cada egreso. La
+// conciliación (si el efectivo cuadra) es la pantalla de Caja que ya existe, con estos datos
+// dentro. Ver docs/CONTRATO_CORTES_A_EGRESOS.md.
+const CORTES_VERSIONES_OK = [1, 2];
+const CORTES_STORAGE_PREFIJO = "cortes";
+function _esFechaISO(s){ return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+function _esNum(x){ return typeof x === "number" && isFinite(x); }
+
+// Valida la FORMA del archivo. Rechaza solo lo que impide leerlo — nunca por criterio contable
+// (un saldo inicial negativo, por ejemplo, es un dato válido, no un error).
+function validarArchivoCortes(obj){
+  const err = [];
+  if(!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok:false, errores:["El archivo no tiene la forma de un corte (no es un objeto JSON)."] };
+  if(!CORTES_VERSIONES_OK.includes(obj.version)) err.push(`Versión de archivo no reconocida (${obj.version}). Se esperaba ${CORTES_VERSIONES_OK.join(" o ")}.`);
+  if(!obj.periodo || !_esFechaISO(obj.periodo.ini) || !_esFechaISO(obj.periodo.fin)) err.push("Falta el periodo (ini/fin en formato AAAA-MM-DD).");
+  const cortes = Array.isArray(obj.cortes) ? obj.cortes : null;
+  const egresos = Array.isArray(obj.egresos) ? obj.egresos : null;
+  if(!cortes) err.push("Falta la lista de cortes.");
+  if(!egresos) err.push("Falta la lista de egresos.");
+  const folios = new Map();   // folio -> cuántas veces aparece (dentro de ESTE archivo)
+  const marcaFolio = (f)=>{ const k=String(f); folios.set(k, (folios.get(k)||0)+1); };
+  (cortes||[]).forEach((c,i)=>{
+    const et = `Corte #${i+1}`;
+    if(!c || typeof c.folio !== "string" || !c.folio.trim()) err.push(`${et}: sin folio.`); else marcaFolio(c.folio.trim());
+    if(!_esFechaISO(c && c.fecha)) err.push(`${et} (${(c&&c.folio)||"?"}): fecha no válida.`);
+    ["boletos25","contratistas","otrosIngresos","terminal"].forEach(k=>{ if(!_esNum(c && c[k])) err.push(`${et} (${(c&&c.folio)||"?"}): ${k} no es un número.`); });
+  });
+  (egresos||[]).forEach((e,i)=>{
+    const et = `Egreso #${i+1}`;
+    if(!e || typeof e.folio !== "string" || !e.folio.trim()) err.push(`${et}: sin folio.`); else marcaFolio(e.folio.trim());
+    if(!_esFechaISO(e && e.fecha)) err.push(`${et} (${(e&&e.folio)||"?"}): fecha no válida.`);
+    if(!e || typeof e.concepto !== "string" || !e.concepto.trim()) err.push(`${et} (${(e&&e.folio)||"?"}): sin concepto.`);
+    if(!_esNum(e && e.monto)) err.push(`${et} (${(e&&e.folio)||"?"}): monto no es un número.`);
+  });
+  const repetidos = [...folios.entries()].filter(([,n])=>n>1).map(([f])=>f);
+  if(repetidos.length) err.push(`Folios repetidos dentro del archivo: ${repetidos.join(", ")}. Cada renglón necesita un folio único.`);
+  return { ok: err.length === 0, errores: err };
+}
+
+// Avisos que NO rechazan: se muestran para que el usuario decida. El caso típico es un archivo
+// que llegó incompleto (se cortó en la transferencia): los totales impresos no cuadran con la
+// suma de los renglones que sí llegaron.
+function avisosControlCortes(obj){
+  const av = [];
+  const t = obj.totales;
+  const suma = (arr, k)=>(arr||[]).reduce((s,x)=>s+(parseFloat(x[k])||0),0);
+  const cerca = (a,b)=>Math.abs((a||0)-(b||0)) < 0.01;
+  if(t){
+    const ef = suma(obj.cortes,"boletos25")+suma(obj.cortes,"contratistas")+suma(obj.cortes,"otrosIngresos");
+    if(_esNum(t.efectivo) && !cerca(ef, t.efectivo)) av.push(`El efectivo sumado de los cortes (${fmt(ef)}) no coincide con el total del archivo (${fmt(t.efectivo)}). ¿Llegó completo?`);
+    const eg = suma(obj.egresos,"monto");
+    if(_esNum(t.egresos) && !cerca(eg, t.egresos)) av.push(`Los egresos sumados (${fmt(eg)}) no coinciden con el total del archivo (${fmt(t.egresos)}).`);
+  }
+  const cont = obj.conteo;
+  if(cont && cont.capturado === true && _esNum(cont.total)){
+    const si = _esNum(obj.saldoInicial) ? obj.saldoInicial : 0;
+    const efReal = suma(obj.cortes,"boletos25")+suma(obj.cortes,"contratistas")+suma(obj.cortes,"otrosIngresos");
+    const egReal = suma(obj.egresos,"monto");
+    const aEntregar = si + efReal - egReal;
+    if(Math.abs(cont.total - aEntregar) >= 0.01) av.push(`El efectivo contado (${fmt(cont.total)}) difiere del efectivo a entregar calculado (${fmt(aEntregar)}) por ${fmt(Math.abs(cont.total-aEntregar))}. Es una diferencia a resolver, no un error del archivo.`);
+  }
+  return av;
+}
+
+// Folios ya presentes en el estado, para no volver a importar lo mismo. Los cortes importados
+// llevan _folioCorte; los egresos (ya sean gasto o retiro) llevan _folioEgreso.
+function foliosCorteImportados(){
+  const s = new Set();
+  (state.weeks||[]).forEach(w=>(w.cortes||[]).forEach(c=>{ if(c && c._folioCorte) s.add(String(c._folioCorte)); }));
+  return s;
+}
+// Folios que el usuario marcó «ignorar» (ya entraron por factura). No crean gasto ni retiro,
+// pero sí se recuerdan: sin esto, reimportar el mismo archivo los volvería a ofrecer y podrían
+// colarse. Reimportar tiene que ser idempotente también para lo que se decidió NO importar.
+function foliosCorteIgnorados(){
+  return new Set((state.cortesIgnorados||[]).map(String));
+}
+function foliosEgresoImportados(){
+  const s = new Set();
+  (state.weeks||[]).forEach(w=>{
+    (w.gastos||[]).forEach(g=>{ if(g && g._folioEgreso) s.add(String(g._folioEgreso)); });
+    (w.retiros||[]).forEach(r=>{ if(r && r._folioEgreso) s.add(String(r._folioEgreso)); });
+  });
+  return s;
+}
+
+// Clasificación con la que ARRANCA cada egreso en la revisión. El usuario siempre puede cambiarla.
+//  · Si ya existe un gasto que se le parece (misma factura, o proveedor+importe+fecha), se sugiere
+//    "ignorar": la factura probablemente ya entró por Gmail o el SAT. Es la pista más valiosa.
+//  · Si no, manda la "clase" que capturó el usuario en Cortes: deposito → retiro, gasto → gasto.
+//  · Sin clase, se asume gasto (el caso más común); el usuario confirma.
+function clasificacionInicialEgreso(egreso){
+  const dup = (typeof findDuplicate === "function")
+    ? findDuplicate(egreso.concepto, egreso.monto, egreso.fecha, egreso.comprobante) : null;
+  if(dup) return { clase:"ignorar", dup };
+  if(egreso.clase === "deposito") return { clase:"retiro", dup:null };
+  return { clase:"gasto", dup:null };
+}
+
+// ── UI ──────────────────────────────────────────────────────────────
+let _cortesImport = null;   // { obj, avisos, cortesNuevos, cortesDup, egresos:[{...egreso, _clase, _cat, _dup}] }
+
+function initCajaDropzone(){
+  const page = document.getElementById("page-caja");
+  if(!page || page.dataset.dropListo) return;
+  page.dataset.dropListo = "1";
+  const conArchivos=(e)=>{ try{ return [...((e.dataTransfer&&e.dataTransfer.types)||[])].includes("Files"); }catch(_){ return false; } };
+  const zona = page.querySelector('[data-cajazona="json"]');
+  let dentro = 0;
+  const apagar=()=>{ dentro=0; page.classList.remove("sat-drag"); if(zona) zona.classList.remove("dragover"); };
+  page.addEventListener("dragenter",e=>{ if(!conArchivos(e)) return; e.preventDefault(); dentro++; page.classList.add("sat-drag"); });
+  page.addEventListener("dragover",e=>{ if(!conArchivos(e)) return; e.preventDefault(); try{ e.dataTransfer.dropEffect="copy"; }catch(_){}; if(zona) zona.classList.add("dragover"); });
+  page.addEventListener("dragleave",e=>{ if(!conArchivos(e)) return; dentro--; if(dentro<=0) apagar(); });
+  page.addEventListener("drop",e=>{ if(!conArchivos(e)) return; e.preventDefault(); e.stopPropagation(); apagar(); _cajaArchivoElegido(e.dataTransfer.files); });
+  ["dragover","drop"].forEach(ev=>document.addEventListener(ev,e=>{
+    if(!page.classList.contains("active")) return;
+    if(e.target&&e.target.closest&&e.target.closest("#page-caja")) return;
+    if(conArchivos(e)) e.preventDefault();
+  }));
+}
+
+function _cajaArchivoElegido(files){
+  const f = files && files[0];
+  if(!f) return;
+  const nom = document.getElementById("cortesJsonNombre"); if(nom) nom.textContent = f.name;
+  const lector = new FileReader();
+  lector.onload = ()=>{
+    let obj = null;
+    try{ obj = JSON.parse(lector.result); }
+    catch(e){ setStatus("cortesImportStatus", "❌ El archivo no es un JSON válido.", "error"); return; }
+    cargarArchivoCortes(obj);
+  };
+  lector.readAsText(f);
+}
+
+function cargarArchivoCortes(obj){
+  const v = validarArchivoCortes(obj);
+  if(!v.ok){
+    setStatus("cortesImportStatus", "❌ El archivo no se puede importar:\n• " + v.errores.slice(0,8).join("\n• "), "error");
+    document.getElementById("cortesRevisionCard").style.display = "none";
+    _cortesImport = null;
+    return;
+  }
+  const foliosC = foliosCorteImportados(), foliosE = foliosEgresoImportados();
+  const cortesNuevos = [], cortesDup = [];
+  (obj.cortes||[]).forEach(c=>{ (foliosC.has(String(c.folio).trim()) ? cortesDup : cortesNuevos).push(c); });
+  const foliosIgn = foliosCorteIgnorados();
+  const egresos = (obj.egresos||[]).map(e=>{
+    const folio = String(e.folio).trim();
+    const yaImp = foliosE.has(folio), yaIgn = foliosIgn.has(folio);
+    const ini = clasificacionInicialEgreso(e);
+    // Ya procesado antes (importado o ignorado) → arranca en «ignorar» para no repetirlo.
+    return { ...e, _yaImportado:yaImp, _yaIgnorado:yaIgn,
+      _clase: (yaImp || yaIgn) ? "ignorar" : ini.clase, _cat: "Otro", _dup: ini.dup };
+  });
+  _cortesImport = { obj, avisos: avisosControlCortes(obj), cortesNuevos, cortesDup, egresos };
+  setStatus("cortesImportStatus", `✅ Archivo leído: ${cortesNuevos.length} corte(s) nuevo(s), ${egresos.length} egreso(s). Revisa abajo antes de importar.`, "ok");
+  renderRevisionCortes();
+}
+
+function _setClaseEgreso(i, clase){ if(_cortesImport){ _cortesImport.egresos[i]._clase = clase; renderRevisionCortes(); } }
+function _setCatEgreso(i, cat){ if(_cortesImport){ _cortesImport.egresos[i]._cat = cat; } }
+
+function renderRevisionCortes(){
+  const cont = document.getElementById("cortesRevisionContenido");
+  const card = document.getElementById("cortesRevisionCard");
+  if(!_cortesImport || !cont){ if(card) card.style.display="none"; return; }
+  card.style.display = "block";
+  const d = _cortesImport, p = d.obj.periodo;
+  const catOpts = (sel)=>catsActuales().map(c=>`<option value="${esc(c)}" ${c===sel?"selected":""}>${esc(c)}</option>`).join("");
+  let h = `<h3 style="color:var(--vd);margin:0 0 4px">🔎 Revisión — periodo ${esc(fmtDate(p.ini))} al ${esc(fmtDate(p.fin))}</h3>`;
+  if(d.avisos.length) h += `<div class="status warn" style="display:block;white-space:pre-line;margin:8px 0">⚠ ${d.avisos.map(esc).join("\n⚠ ")}</div>`;
+
+  // Ingresos
+  h += `<div style="font-weight:700;color:var(--vd);margin:16px 0 6px">💵 Ingresos de caja</div>`;
+  if(d.cortesDup.length) h += `<div style="font-size:12px;color:var(--txt2);margin-bottom:6px">${d.cortesDup.length} corte(s) ya estaban importados y se omiten.</div>`;
+  if(d.cortesNuevos.length){
+    const totC = d.cortesNuevos.reduce((s,c)=>s+(parseFloat(c.boletos25)||0)+(parseFloat(c.contratistas)||0)+(parseFloat(c.otrosIngresos)||0),0);
+    h += `<div class="tbl-wrap"><table style="width:100%"><thead><tr><th>Folio</th><th>Fecha</th><th>Cajera</th><th style="text-align:right">Efectivo</th></tr></thead><tbody>`;
+    h += d.cortesNuevos.map(c=>{ const ef=(parseFloat(c.boletos25)||0)+(parseFloat(c.contratistas)||0)+(parseFloat(c.otrosIngresos)||0);
+      return `<tr><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.folio)}</td><td>${esc(fmtDate(c.fecha))}</td><td>${esc(c.cajera||"—")}</td><td class="amount-cell">${fmt(ef)}</td></tr>`; }).join("");
+    h += `<tr style="border-top:2px solid var(--border)"><td colspan="3"><strong>Total a ingresar</strong></td><td class="amount-cell" style="font-weight:700;color:var(--vm)">${fmt(totC)}</td></tr>`;
+    h += `</tbody></table></div>`;
+  } else h += `<div style="font-size:13px;color:var(--txt2)">No hay cortes nuevos que ingresar.</div>`;
+
+  // Egresos — clasificación
+  h += `<div style="font-weight:700;color:var(--vd);margin:20px 0 6px">📤 Egresos del concentrado — clasifica cada uno</div>`;
+  h += `<div class="tbl-wrap"><table style="width:100%"><thead><tr><th>Folio</th><th>Concepto</th><th style="text-align:right">Monto</th><th>Clasificación</th></tr></thead><tbody>`;
+  h += d.egresos.map((e,i)=>{
+    const btn = (val,lbl)=>`<button type="button" onclick="_setClaseEgreso(${i},'${val}')" style="padding:3px 8px;font-size:11px;border-radius:6px;cursor:pointer;border:1.5px solid ${e._clase===val?'var(--vd)':'var(--border)'};background:${e._clase===val?'var(--vd)':'#fff'};color:${e._clase===val?'#fff':'var(--txt2)'};font-weight:${e._clase===val?'700':'400'}">${lbl}</button>`;
+    const catSel = e._clase==="gasto" ? `<select onchange="_setCatEgreso(${i},this.value)" style="margin-left:6px;padding:3px 6px;font-size:11px;border:1px solid var(--border);border-radius:6px;max-width:150px">${catOpts(e._cat)}</select>` : "";
+    const dupNota = e._dup ? `<div style="font-size:10px;color:var(--naranja);margin-top:3px">⚠ Ya existe: ${esc(e._dup.gasto.proveedor)} · ${fmt(e._dup.gasto.importe)} — ${esc(e._dup.reason)}</div>` : "";
+    const impNota = e._yaImportado ? `<div style="font-size:10px;color:var(--txt2);margin-top:3px">Ya se importó este folio antes.</div>`
+      : (e._yaIgnorado ? `<div style="font-size:10px;color:var(--txt2);margin-top:3px">Ya lo marcaste como «ignorar» antes.</div>` : "");
+    return `<tr><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(e.folio)}</td>`+
+      `<td>${esc(e.concepto)}${e.comprobante?` <span style="font-size:10px;color:var(--txt2)">#${esc(e.comprobante)}</span>`:""}${dupNota}${impNota}</td>`+
+      `<td class="amount-cell">${fmt(e.monto)}</td>`+
+      `<td style="white-space:nowrap">${btn("gasto","Gasto")} ${btn("retiro","Retiro")} ${btn("ignorar","Ignorar")}${catSel}</td></tr>`;
+  }).join("");
+  h += `</tbody></table></div>`;
+
+  // Resumen de lo que se va a hacer
+  const nG = d.egresos.filter(e=>e._clase==="gasto").length;
+  const nR = d.egresos.filter(e=>e._clase==="retiro").length;
+  const nI = d.egresos.filter(e=>e._clase==="ignorar").length;
+  h += `<div style="margin-top:18px;display:flex;gap:20px;flex-wrap:wrap;align-items:center">`+
+    `<div style="font-size:13px;color:var(--txt2)">Entrarán: <strong>${d.cortesNuevos.length}</strong> cortes · <strong>${nG}</strong> gastos · <strong>${nR}</strong> retiros · <strong>${nI}</strong> ignorados</div>`+
+    `<button class="btn btn-primary" onclick="confirmarImportarCortes()" style="margin-left:auto">✅ Importar al periodo</button>`+
+    `<button class="btn btn-light" onclick="cancelarImportarCortes()">Cancelar</button></div>`;
+  cont.innerHTML = h;
+}
+
+function cancelarImportarCortes(){
+  _cortesImport = null;
+  document.getElementById("cortesRevisionCard").style.display = "none";
+  const nom = document.getElementById("cortesJsonNombre"); if(nom) nom.textContent = "";
+  const inp = document.getElementById("cortesJsonFile"); if(inp) inp.value = "";
+  setStatus("cortesImportStatus", "", "");
+  document.getElementById("cortesImportStatus").style.display = "none";
+}
+
+function confirmarImportarCortes(){
+  if(!_cortesImport) return;
+  const d = _cortesImport;
+  const week = getActiveWeek();
+  if(!week){ alert("No hay una semana activa donde guardar. Crea o selecciona una semana primero."); return; }
+  if(!week.cortes) week.cortes = [];
+  if(!week.gastos) week.gastos = [];
+  if(!week.retiros) week.retiros = [];
+  let nC=0, nG=0, nR=0;
+  const base = Date.now();
+  let seq = 0;
+  const nuevoId = ()=>String(base + (seq++));
+
+  // Ingresos: cada corte nuevo, con su folio para no volver a importarlo.
+  d.cortesNuevos.forEach(c=>{
+    const monto = (parseFloat(c.boletos25)||0)+(parseFloat(c.contratistas)||0)+(parseFloat(c.otrosIngresos)||0);
+    const label = (typeof diaSemanaLabel==="function") ? diaSemanaLabel(c.fecha) : "";
+    week.cortes.push({ id:nuevoId(), fecha:c.fecha, tipo:(label||"").toLowerCase(), monto, label,
+      _folioCorte:String(c.folio).trim(), _origenCorte:true, cajera:c.cajera||"", turno:c.turno||"", terminal:parseFloat(c.terminal)||0 });
+    nC++;
+  });
+
+  // Egresos: según la clasificación del usuario.
+  if(!Array.isArray(state.cortesIgnorados)) state.cortesIgnorados = [];
+  const yaIgn = new Set(state.cortesIgnorados.map(String));
+  d.egresos.forEach(e=>{
+    const folio = String(e.folio).trim();
+    if(e._clase === "ignorar"){
+      // Se recuerda para que la próxima reimportación no lo vuelva a ofrecer como nuevo.
+      if(!yaIgn.has(folio)){ state.cortesIgnorados.push(folio); yaIgn.add(folio); }
+      return;
+    }
+    if(e._clase === "retiro"){
+      week.retiros.push({ id:nuevoId(), fecha:e.fecha, monto:parseFloat(e.monto)||0, motivo:e.concepto||"", _folioEgreso:folio });
+      nR++;
+    } else {   // gasto en efectivo
+      week.gastos.push({ id:nuevoId(), proveedor:canonizarProveedor(e.concepto||""), fecha:e.fecha,
+        factura:String(e.comprobante||"").trim(), importe:parseFloat(e.monto)||0,
+        categoria:canonizarCategoria(e._cat||"Otro"), notas:e.autoriza?("Autoriza: "+e.autoriza):"", esOtro:false,
+        respaldo:null, formaPago:"caja_cortes", vencimiento:"", estadoPago:"pagado",
+        comprobantePago:null, fechaPago:null, referenciaPago:null, _folioEgreso:folio });
+      nG++;
+    }
+  });
+
+  save();
+  subirArchivoCortesAStorage(d.obj).catch(()=>{});   // archivar copia; no bloquea si falla
+  _cortesImport = null;
+  document.getElementById("cortesRevisionCard").style.display = "none";
+  const inp = document.getElementById("cortesJsonFile"); if(inp) inp.value = "";
+  const nom = document.getElementById("cortesJsonNombre"); if(nom) nom.textContent = "";
+  setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s). Revisa la conciliación abajo.`, "ok");
+  renderCaja();
+}
+
+// Guarda el .json original en el bucket de Egresos, como archivo histórico del período. Lo sube
+// Egresos (que ya tiene la sesión), no Cortes: así no hay que cruzar proyectos de Firebase.
+async function subirArchivoCortesAStorage(obj){
+  try{
+    const p = obj.periodo || {};
+    const nombre = `${CORTES_STORAGE_PREFIJO}/${p.ini||"sin-ini"}_${p.fin||"sin-fin"}.json`;
+    const blob = new Blob([JSON.stringify(obj)], { type:"application/json" });
+    const r = await fetchStorage(`https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o?uploadType=media&name=${encodeURIComponent(nombre)}`,
+      { method:"POST", headers:{ "Content-Type":"application/json" }, body: blob });
+    if(!r.ok) console.warn("subirArchivoCortesAStorage:", r.status);
+  }catch(e){ console.warn("subirArchivoCortesAStorage:", e); }
 }
 
 function eliminarRetiro(id) {
