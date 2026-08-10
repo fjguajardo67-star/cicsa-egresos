@@ -1944,7 +1944,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-10-d";
+const APP_BUILD = "2026-08-10-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4804,7 +4804,10 @@ function renderPresupuesto(){
       prop.innerHTML=`📅 Rango de <strong>${F.dias} día${F.dias===1?"":"s"}</strong> = <strong>${F.factor.toFixed(2)} semanas</strong>. Las metas de abajo son tu presupuesto semanal <strong>× ${F.factor.toFixed(2)}</strong>; los campos siguen editando el <strong>semanal</strong>.`;
     } else prop.style.display="none";
   }
-  const bar=document.getElementById("presupTotalBar"); if(bar) bar.style.display = puedeEditar ? "grid" : "none";
+  // El resumen (Suma de categorías, Total gastado, Disponible) es información de solo lectura:
+  // el admin lo ve SIEMPRE, esté la edición abierta o bloqueada. Antes se ocultaba entero al
+  // bloquear y parecía que se perdía el presupuesto vs lo ejercido.
+  const bar=document.getElementById("presupTotalBar"); if(bar) bar.style.display = esAdmin ? "grid" : "none";
   const acciones=document.getElementById("presupAcciones"); if(acciones) acciones.style.display = puedeEditar ? "flex" : "none";
   const candado=document.getElementById("presupCandado");
   if(candado){
@@ -4820,13 +4823,20 @@ function renderPresupuesto(){
   const nota=document.getElementById("presupNotaAdmin");
   if(nota) nota.style.display = esAdmin ? "none" : "block";
   const obj=document.getElementById("presupObjetivo");
-  if(obj) obj.value = (typeof state.budgetObjetivo === "number" && state.budgetObjetivo > 0)
-    ? state.budgetObjetivo
-    : Object.values(state.budget).reduce((s,v)=>s+(parseFloat(v)||0),0);
+  if(obj){
+    obj.value = (typeof state.budgetObjetivo === "number" && state.budgetObjetivo > 0)
+      ? state.budgetObjetivo
+      : Object.values(state.budget).reduce((s,v)=>s+(parseFloat(v)||0),0);
+    // Bloqueado: se ve el número pero no se edita (solo lectura, sin disparar guardado).
+    obj.readOnly = !puedeEditar;
+    obj.style.opacity = puedeEditar ? "1" : ".75";
+  }
   // Gasto real del periodo (mismas cifras que las tarjetas, sumadas). Se guarda para que la
   // barra pueda recolorearse en vivo al mover el presupuesto asignado, sin recalcular gastos.
   _presupGastadoPeriodo = Object.values(totals).reduce((s,v)=>s+(parseFloat(v)||0),0);
-  if(puedeEditar) actualizarTotalPresupuesto();
+  // Siempre se recalcula el resumen: bloqueado también, tomando la suma del presupuesto guardado
+  // (no de los inputs por tarjeta, que no existen en modo lectura).
+  if(esAdmin) actualizarTotalPresupuesto();
 }
 // Barra de referencia: suma EN VIVO los inputs de las tarjetas (sin guardar) y la compara
 // contra el objetivo, para repartir el presupuesto hasta cuadrar sin andar sumando a mano.
@@ -4837,8 +4847,15 @@ function actualizarTotalPresupuesto(){
   // Los campos guardan la cifra SEMANAL; para comparar contra el gasto del periodo hay que
   // llevar ambos lados a la misma escala.
   const F=factorPresupuestoPeriodo();
+  // Editando: suma EN VIVO los inputs de las tarjetas (para cuadrar sin guardar). Bloqueado: esos
+  // inputs no existen, así que la suma sale del presupuesto ya guardado en el estado.
   let sumaSemanal=0;
-  document.querySelectorAll("[id^='bp_']").forEach(el=>{ sumaSemanal += parseFloat(el.value)||0; });
+  const inputs=document.querySelectorAll("[id^='bp_']");
+  if(inputs.length){
+    inputs.forEach(el=>{ sumaSemanal += parseFloat(el.value)||0; });
+  } else {
+    sumaSemanal = Object.values(state.budget||{}).reduce((s,v)=>s+(parseFloat(v)||0),0);
+  }
   const suma=sumaSemanal*F.factor;
   const objetivo=(parseFloat(document.getElementById("presupObjetivo")?.value)||0)*F.factor;
   const dif=objetivo-suma;
