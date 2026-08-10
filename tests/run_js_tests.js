@@ -110,6 +110,7 @@ const FUNCS = [
   "esc", "escAttrJs",
   "_esFechaISO", "_esNum", "validarArchivoCortes", "avisosControlCortes",
   "foliosCorteImportados", "foliosEgresoImportados", "foliosCorteIgnorados", "clasificacionInicialEgreso",
+  "_pareceFolioFactura", "gastoMismoImporte",
   "findDuplicate",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
@@ -1727,6 +1728,54 @@ t("sin totales no inventa avisos", () => {
   assert.deepEqual(S.avisosControlCortes(archivoBase()), []);
 });
 
+t("_pareceFolioFactura distingue folio de proveedor de vale interno", () => {
+  assert.equal(S._pareceFolioFactura("ICAJG470108"), true);   // ticket de Sam's
+  assert.equal(S._pareceFolioFactura("A-88213"), true);
+  assert.equal(S._pareceFolioFactura("0005"), false);         // vale interno
+  assert.equal(S._pareceFolioFactura("0007"), false);
+  assert.equal(S._pareceFolioFactura("131862"), false);       // adelanto de nómina (numérico)
+  assert.equal(S._pareceFolioFactura(""), false);
+  assert.equal(S._pareceFolioFactura(null), false);
+});
+t("gastoMismoImporte caza por monto en fecha cercana AUNQUE el nombre difiera", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"g1", proveedor:"NUEVA WAL-MART DE MEXICO", factura:"A-88213", importe:5124, fecha:"2026-08-06" }
+  ]}]};
+  const m = S.gastoMismoImporte(5124, "2026-08-07");   // un día de diferencia
+  assert.ok(m && m.id==="g1", "encuentra el gasto por importe, sin exigir el nombre");
+});
+t("gastoMismoImporte NO cruza contra otros renglones ya importados de un corte", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"c1", proveedor:"X", importe:5124, fecha:"2026-08-06", _folioEgreso:"EGR-1" }
+  ]}]};
+  assert.equal(S.gastoMismoImporte(5124, "2026-08-06"), null);
+});
+t("gastoMismoImporte ignora si la fecha está lejos", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"g1", proveedor:"X", importe:5124, fecha:"2026-07-01" }
+  ]}]};
+  assert.equal(S.gastoMismoImporte(5124, "2026-08-06"), null);
+});
+t("el SAMS se caza al importar aunque la factura tenga nombre fiscal distinto", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"gmail", proveedor:"NUEVA WAL-MART DE MEXICO", factura:"A-88213", importe:5124, fecha:"2026-08-06" }
+  ]}]};
+  const c = S.clasificacionInicialEgreso({ concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06", clase:"gasto" });
+  assert.equal(c.clase, "ignorar");
+  assert.ok(c.dup, "trae el gasto que ya existía por factura");
+});
+t("un egreso con comprobante de factura pero sin duplicado se avisa, no se ignora", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[] }] };
+  const c = S.clasificacionInicialEgreso({ concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06", clase:"gasto" });
+  assert.equal(c.clase, "gasto");     // la factura quizá no ha llegado aún
+  assert.ok(c.aviso, "avisa que el comprobante parece factura");
+});
+t("un vale interno normal no dispara ni ignore ni aviso", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[] }] };
+  const c = S.clasificacionInicialEgreso({ concepto:"RECARGA CELULAR", comprobante:"0005", monto:100, fecha:"2026-08-05", clase:"gasto" });
+  assert.equal(c.clase, "gasto");
+  assert.ok(!c.aviso, "sin aviso para un vale interno");
+});
 t("clasificación inicial respeta la clase capturada", () => {
   S.state = { budget:{}, weeks:[{ id:"w1", gastos:[], cortes:[], retiros:[] }] };
   const a = archivoBase();
