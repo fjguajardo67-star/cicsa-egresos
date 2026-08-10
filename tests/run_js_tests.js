@@ -108,6 +108,9 @@ const FUNCS = [
   "gastosFiltradosReporte",
   "resumenEstado", "_estadoValido", "podarRespaldos",
   "esc", "escAttrJs",
+  "_esFechaISO", "_esNum", "validarArchivoCortes", "avisosControlCortes",
+  "foliosCorteImportados", "foliosEgresoImportados", "foliosCorteIgnorados", "clasificacionInicialEgreso",
+  "findDuplicate",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
 ];
 
@@ -132,6 +135,7 @@ const sandbox = {
 vm.createContext(sandbox);
 for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
 vm.runInContext("const TOL_DIVIDIDA = 0.05;", sandbox);
+vm.runInContext('const CORTES_VERSIONES_OK = [1, 2]; const CORTES_STORAGE_PREFIJO = "cortes";', sandbox);
 vm.runInContext("let _storageAuthScheme = null;", sandbox);   // memo del esquema que funcionó
 vm.runInContext('const CAT_SIN = "__SIN__";', sandbox);       // centinela de "sin categoría"
 vm.runInContext('const RESPALDO_PREFIJO = "respaldo-"; const RESPALDOS_A_CONSERVAR = 30;', sandbox);
@@ -1655,6 +1659,123 @@ async function pruebasStorage() {
 }
 
 pruebasStorage().then(() => {
-  console.log(`\n${pass} pasaron, ${fail} fallaron`);
+  // ── Importar cortes de Manejo de Cortes (contrato v2) ───────────────────
+console.log("\n== Importar cortes de Manejo de Cortes ==");
+
+// El ejemplo real del contrato v2 (recortado a lo esencial, mismos totales).
+const archivoBase = () => ({
+  version: 2, app: "cicsa-cortes-caja",
+  periodo: { ini: "2026-08-01", fin: "2026-08-04" },
+  emitido: "2026-08-05T18:24:00.000Z", saldoInicial: 9983.42,
+  cortes: [
+    { folio: "RCE-2026-00123", fecha: "2026-08-01", cajera: "JANE", turno: "1ERO",
+      boletos25: 2725, contratistas: 960, otrosIngresos: 3065, terminal: 100, total: 6750 },
+    { folio: "RCE-2026-00124", fecha: "2026-08-01", cajera: "KIKE", turno: "RUTA 1",
+      boletos25: 925, contratistas: 240, otrosIngresos: 5, terminal: 0, total: 1170 },
+  ],
+  egresos: [
+    { folio: "EGR-2026-00001", fecha: "2026-08-01", concepto: "RECARGA CELULAR", comprobante: "0001",
+      autoriza: "DIANA IBARRA", monto: 100, clase: "gasto" },
+    { folio: "EGR-2026-00005", fecha: "2026-08-03", concepto: "COMPRAS SAMS", comprobante: "ICAJG469779",
+      autoriza: "XAVIER MINJAREZ", monto: 29487, clase: "gasto" },
+    { folio: "EGR-2026-00003", fecha: "2026-08-01", concepto: "PAGO VUELO", comprobante: "0001",
+      autoriza: "FRANCISCO GUAJARDO", monto: 10876, clase: "deposito" },
+  ],
+});
+
+t("un archivo bien formado pasa la validación", () => {
+  assert.equal(S.validarArchivoCortes(archivoBase()).ok, true);
+});
+t("rechaza versión desconocida", () => {
+  const a = archivoBase(); a.version = 99;
+  const r = S.validarArchivoCortes(a);
+  assert.equal(r.ok, false); assert.ok(r.errores.some(e => /Versi/.test(e)));
+});
+t("rechaza un corte sin folio — es lo que evita duplicar", () => {
+  const a = archivoBase(); delete a.cortes[0].folio;
+  assert.equal(S.validarArchivoCortes(a).ok, false);
+});
+t("rechaza fecha en formato equivocado", () => {
+  const a = archivoBase(); a.cortes[0].fecha = "01/08/2026";
+  assert.equal(S.validarArchivoCortes(a).ok, false);
+});
+t("rechaza una columna de ingreso no numérica", () => {
+  const a = archivoBase(); a.cortes[0].boletos25 = "$2,725.00";
+  assert.equal(S.validarArchivoCortes(a).ok, false);
+});
+t("rechaza folios repetidos dentro del archivo", () => {
+  const a = archivoBase(); a.egresos[1].folio = "EGR-2026-00001";
+  const r = S.validarArchivoCortes(a);
+  assert.equal(r.ok, false); assert.ok(r.errores.some(e => /repetid/i.test(e)));
+});
+t("un saldo inicial NEGATIVO es válido, no un error", () => {
+  const a = archivoBase(); a.saldoInicial = -15563.83;
+  assert.equal(S.validarArchivoCortes(a).ok, true);
+});
+t("acepta también la versión 1 del contrato", () => {
+  const a = archivoBase(); a.version = 1;
+  assert.equal(S.validarArchivoCortes(a).ok, true);
+});
+
+t("avisa si los totales no cuadran (archivo incompleto)", () => {
+  const a = archivoBase();
+  a.totales = { efectivo: 56067, egresos: 62121 };   // el archivo trae solo 2 cortes / 3 egresos
+  const av = S.avisosControlCortes(a);
+  assert.ok(av.length >= 1, "debe avisar que no cuadra");
+});
+t("sin totales no inventa avisos", () => {
+  assert.deepEqual(S.avisosControlCortes(archivoBase()), []);
+});
+
+t("clasificación inicial respeta la clase capturada", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", gastos:[], cortes:[], retiros:[] }] };
+  const a = archivoBase();
+  assert.equal(S.clasificacionInicialEgreso(a.egresos[0]).clase, "gasto");     // clase:gasto
+  assert.equal(S.clasificacionInicialEgreso(a.egresos[2]).clase, "retiro");    // clase:deposito
+});
+t("clasificación inicial sugiere 'ignorar' si ya existe un gasto igual", () => {
+  // El SAMS ya está capturado (misma factura + proveedor): la factura entró por otro lado.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"g1", proveedor:"COMPRAS SAMS", factura:"ICAJG469779", importe:29487, fecha:"2026-08-03" }
+  ]}]};
+  const a = archivoBase();
+  const c = S.clasificacionInicialEgreso(a.egresos[1]);
+  assert.equal(c.clase, "ignorar");
+  assert.ok(c.dup, "trae el gasto que ya existía");
+});
+t("sin clase y sin duplicado, arranca como gasto", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", gastos:[], cortes:[], retiros:[] }] };
+  const e = { folio:"EGR-9", fecha:"2026-08-01", concepto:"X", monto:50 };
+  assert.equal(S.clasificacionInicialEgreso(e).clase, "gasto");
+});
+
+t("mergeEstados UNE los cortes ignorados de ambos dispositivos", () => {
+  const r = S.mergeEstados(
+    { weeks:[], cortesIgnorados:["EGR-1","EGR-2"] },
+    { weeks:[], cortesIgnorados:["EGR-2","EGR-3"] });
+  assert.deepEqual([...r.cortesIgnorados].sort(), ["EGR-1","EGR-2","EGR-3"]);
+});
+t("los folios ignorados se recuerdan, para que reimportar no los reofrezca", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", gastos:[], cortes:[], retiros:[] }],
+    cortesIgnorados:["EGR-2026-00005"] };
+  assert.ok(S.foliosCorteIgnorados().has("EGR-2026-00005"));
+  assert.ok(!S.foliosCorteIgnorados().has("EGR-2026-00001"));
+});
+t("sin nada ignorado, el set queda vacío (no truena con estado limpio)", () => {
+  S.state = { budget:{}, weeks:[] };
+  assert.equal(S.foliosCorteIgnorados().size, 0);
+});
+t("los folios ya importados se detectan para no repetir", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1",
+    cortes:[{ id:"c1", _folioCorte:"RCE-2026-00123" }],
+    gastos:[{ id:"g1", _folioEgreso:"EGR-2026-00001" }],
+    retiros:[{ id:"r1", _folioEgreso:"EGR-2026-00003" }] }]};
+  assert.ok(S.foliosCorteImportados().has("RCE-2026-00123"));
+  assert.ok(S.foliosEgresoImportados().has("EGR-2026-00001"));
+  assert.ok(S.foliosEgresoImportados().has("EGR-2026-00003"));
+  assert.ok(!S.foliosCorteImportados().has("RCE-2026-99999"));
+});
+
+console.log(`\n${pass} pasaron, ${fail} fallaron`);
   process.exit(fail ? 1 : 0);
 });
