@@ -287,7 +287,16 @@ REGLAS:
 - precio_unitario es el precio por unidad (kg, lt, pz), NO el importe total del renglón.
 - Si no muestra precio unitario, calcula precio_unitario = importe / cantidad.
 - Incluye TODOS los productos del documento sin omitir ninguno (facturas grandes pueden traer
-  20-30+). Si es un ticket simple sin detalle de productos, devuelve "productos": [].''',
+  20-30+ renglones).
+- Un renglón CON descripción y (cantidad o precio) SÍ es un producto, aunque sea el ÚNICO del
+  documento. Una factura o CFDI de un solo concepto (ej: "905 KILOGRAMOS DE TORTILLAS" a $25/kg)
+  es UN producto — NO la trates como "ticket simple sin detalle".
+- Devuelve "productos": [] ÚNICAMENTE cuando el documento no tiene ningún renglón de mercancía
+  (solo un total, o un servicio sin producto: renta, honorarios, flete, comisión, etc.).
+- En "nombre" pon el producto real, no la unidad ni el empaque. Si la descripción está redactada
+  como unidad (ej: "KILOGRAMOS DE TORTILLAS", "CAJAS DE HUEVO", "PIEZAS DE PAN"), extrae el
+  producto: "Tortilla", "Huevo", "Pan". Para tortilla distingue "Tortilla de maíz" o "Tortilla de
+  harina"; si no se especifica, usa "Tortilla de maíz".''',
             max_tokens=8000)   # facturas de 2+ hojas: 30-40 renglones no caben en 5000
         return jsonify(data)
     except (json.JSONDecodeError, KeyError):
@@ -681,7 +690,14 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
 REGLAS:
 - unidad debe ser: kg, lt, pz, cja, paq
 - nombre debe ser el producto específico, no la marca ni el proveedor
-- Si no puedes extraer productos individuales (ticket simple sin detalle), devuelve "productos": []
+- Un renglón CON descripción y (cantidad o precio) SÍ es un producto, aunque sea el ÚNICO del
+  documento. Una factura o CFDI de un solo concepto (ej: "905 KILOGRAMOS DE TORTILLAS" a $25/kg)
+  es UN producto — NO la trates como "ticket simple sin detalle".
+- Devuelve "productos": [] ÚNICAMENTE cuando el documento no tiene ningún renglón de mercancía
+  (solo un total, o un servicio sin producto: renta, honorarios, flete, comisión, etc.).
+- Si la descripción está redactada como unidad (ej: "KILOGRAMOS DE TORTILLAS", "CAJAS DE HUEVO"),
+  extrae el producto real ("Tortilla", "Huevo"). Para tortilla distingue "Tortilla de maíz" o
+  "Tortilla de harina"; si no se especifica, usa "Tortilla de maíz".
 - precio_unitario es el precio por unidad (kg, lt, pz) — NO el importe total
 - Es MUY IMPORTANTE que incluyas TODOS los productos del documento, sin omitir ninguno,
   incluso si son muchos (facturas grandes pueden tener 20-30+ productos distintos).
