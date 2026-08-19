@@ -99,7 +99,10 @@ def revoke_and_reauthorize():
     return build("gmail", "v1", credentials=creds)
 
 
-# ── Persistencia de mensajes ya procesados ────────────────────────────────
+# ── Registro de "vistos" — LEGADO, ya no se usa al leer el buzón ──────────
+# Se conserva solo porque /gmail-reset-seen todavía borra el archivo en instalaciones viejas.
+# fetch_invoice_attachments ya NO filtra con esto: era un archivo del servidor compartido por
+# todo el equipo, así que el primero en revisar Gmail dejaba sin facturas a los demás.
 
 def load_seen() -> set:
     if SEEN_FILE.exists():
@@ -183,12 +186,23 @@ def is_inline_part(part: dict, filename: str) -> bool:
 # ── Función principal ─────────────────────────────────────────────────────
 
 def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -> list:
-    # include_seen=True ignora el registro de "vistos" y devuelve TODOS los adjuntos del rango
-    # (para re-procesar facturas ya capturadas con la IA). El cliente las marca "ya capturada"
-    # y ofrece "Leer igual". No depende de borrar gmail_seen.json, que es frágil en Railway
-    # (filesystem efímero/solo-lectura).
+    """Devuelve TODOS los adjuntos del rango. Quién ya capturó qué lo decide el cliente.
+
+    Antes esto filtraba con gmail_seen.json, un archivo del SERVIDOR compartido por todos, y
+    marcaba el correo como visto en cuanto lo DESCARGABA — no cuando alguien lo capturaba.
+    Resultado: el primero que apretaba "Revisar Gmail" se consumía las facturas para el resto
+    del equipo, y a los demás les llegaba la bandeja vacía. Como cada quien guarda su lista en
+    el navegador, el que las bajó primero no notaba nada raro.
+
+    La pregunta correcta no es "¿el servidor ya vio este correo?" sino "¿ya se capturó esta
+    factura?", y eso vive en Firestore, compartido de verdad: el cliente cruza cada adjunto
+    contra los gastos ya capturados (por msg_id y por huella del archivo) y contra el registro
+    de revisados del equipo, y marca "ya capturada" / "ya descartada" sin quitársela a nadie.
+
+    include_seen se sigue aceptando por compatibilidad con clientes viejos, pero ya no cambia
+    nada: siempre se devuelve el rango completo.
+    """
     INBOX_DIR.mkdir(exist_ok=True)
-    seen    = load_seen()
     results = []
 
     try:
@@ -214,8 +228,6 @@ def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -
 
     for msg_ref in messages:
         msg_id = msg_ref["id"]
-        if msg_id in seen and not include_seen:
-            continue
 
         try:
             msg     = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
@@ -225,7 +237,6 @@ def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -
             date    = headers.get("date", "")
 
             if not is_whitelisted_sender(sender):
-                seen.add(msg_id)
                 continue
 
             payload = msg["payload"]
@@ -273,13 +284,10 @@ def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -
                     "msg_id":    msg_id,
                 })
 
-            seen.add(msg_id)
-
         except Exception as e:
             print(f"  ⚠ Error procesando mensaje {msg_id}: {e}")
             continue
 
-    save_seen(seen)
     return [r for r in results if "error" not in r] or results
 
 
