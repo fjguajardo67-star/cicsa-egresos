@@ -1189,7 +1189,7 @@ body.snav-min .side-theme span { display:none; }
     <div class="btn-row">
       <button class="btn btn-green" id="btnGmailFetch" onclick="fetchGmail()">📥 Revisar Gmail ahora</button>
       <button class="btn btn-light" id="btnGmailRenovar" onclick="renovarGmail()">🔄 Renovar autorización Gmail</button>
-      <button class="btn btn-light" onclick="resetGmailSeen()" title="Trae también las facturas ya revisadas/capturadas para re-procesarlas con IA (Leer igual). No borra nada.">📥 Incluir ya revisadas</button>
+      <button class="btn btn-light" onclick="resetGmailSeen()" title="Vuelve a listar el rango completo, incluidas las ya capturadas, para re-procesarlas con IA (Leer igual). No borra nada.">📥 Volver a listar todas</button>
     </div>
     <div class="status" id="gmailStatus"></div>
   </div>
@@ -1958,7 +1958,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-d";
+const APP_BUILD = "2026-08-19-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -8005,6 +8005,19 @@ async function checkGmailStatus(){
   bar.className="api-bar ok";dot.className="dot g";msg.textContent="✅ Gmail conectado y autorizado.";setup.style.display="none";
   }catch{document.getElementById("gmailBar").className="api-bar bad";document.getElementById("gmailDot").className="dot r";document.getElementById("gmailMsg").textContent="❌ Servidor no activo.";}
 }
+// Antes los tres casos se veían igual ("No se encontraron facturas"), y por eso el equipo daba
+// por hecho que Gmail no había cargado cuando en realidad sí había respondido. Hay que decir
+// cuál de los tres es: buzón vacío en el rango, todo ya capturado por alguien más, o hay
+// trabajo nuevo. Pura, para poder probarla.
+function resumenGmail(enRango, nuevas, yaRevisadas, dias){
+  if(!enRango)
+    return `📭 Gmail respondió, pero <strong>no hay ningún adjunto</strong> en los últimos ${dias} día(s). Si esperabas facturas, súbele a los días o revisa que hayan llegado al buzón.`;
+  if(!nuevas)
+    return `✅ ${enRango} adjunto(s) en el rango — <strong>ya están todos capturados o descartados</strong> por el equipo. No hay nada nuevo que capturar.`;
+  return `✅ <strong>${nuevas} factura(s) nueva(s)</strong> por capturar` +
+         (yaRevisadas ? ` · ${yaRevisadas} ya revisadas antes (puedes ocultarlas o “Leer igual”)` : "") + ".";
+}
+
 async function fetchGmail(includeSeen=false){
   document.getElementById("btnGmailFetch").disabled=true;
   setStatus("gmailStatus", includeSeen?"📬 Revisando Gmail (incluyendo ya revisadas)…":"📬 Revisando Gmail…","loading");
@@ -8019,8 +8032,11 @@ async function fetchGmail(includeSeen=false){
     gmailItems=[...previos, ...nuevos];
     guardarGmailItemsLocal();
     await cargarGmailRevisados(true);   // fresco: otro del equipo pudo revisarlas hace un minuto
-    if(gmailItems.length===0)setStatus("gmailStatus","✅ No se encontraron facturas.","ok");
-    else{const yaCap=filterGmailDuplicates(gmailItems).filter(i=>i._isDup).length;setStatus("gmailStatus",`✅ <strong>${gmailItems.length} adjunto(s)</strong>${yaCap?` — ${yaCap} ya revisados antes (puedes ocultarlos o "Leer igual")`:" nuevos"}.`,"ok");renderGmailInbox();document.getElementById("gmailInboxCard").style.display="block";}}catch(err){setStatus("gmailStatus","❌ "+err.message,"err");}
+    const _marcados = filterGmailDuplicates(gmailItems);
+    const _yaRev = _marcados.filter(i=>i._isDup).length;
+    setStatus("gmailStatus", resumenGmail(gmailItems.length, _marcados.length - _yaRev, _yaRev, days), "ok");
+    if(gmailItems.length){ renderGmailInbox(); document.getElementById("gmailInboxCard").style.display="block"; }
+  }catch(err){setStatus("gmailStatus","❌ "+err.message,"err");}
   document.getElementById("btnGmailFetch").disabled=false;
 }
 

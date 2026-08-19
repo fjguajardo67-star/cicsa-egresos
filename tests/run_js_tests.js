@@ -94,6 +94,7 @@ const FUNCS = [
   "variantesLlaveMenu", "llavesMenuDeFila",
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
+  "resumenGmail",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -876,6 +877,30 @@ t("una fila 'no es insumo' no se convierte en producto por tener nombre", () => 
   const idx = S._indiceNombresCatalogo(CAT2);
   const r = S.decidirDestinoIdent({ tipo: "ignorar", desc: "UNIFORMES", nombre: "Puré de tomate" }, idx);
   assert.equal(r.tipo, "ignorar", "omitir gana sobre cualquier coincidencia de nombre");
+});
+
+console.log("\n== Gmail: decir POR QUÉ la bandeja está vacía ==");
+t("buzón sin adjuntos en el rango: se aclara que Gmail SÍ respondió", () => {
+  const m = S.resumenGmail(0, 0, 0, 30);
+  assert.ok(/no hay ningún adjunto/i.test(m));
+  assert.ok(/30 día/.test(m), "dice el rango que se consultó");
+  assert.ok(!/no se encontraron facturas/i.test(m), "el texto viejo hacía asumir que no cargó");
+});
+t("todo ya capturado por el equipo NO se reporta como bandeja vacía", () => {
+  // Es el caso que confundía: llegaron 12, pero alguien más ya las capturó.
+  const m = S.resumenGmail(12, 0, 12, 30);
+  assert.ok(/12 adjunto/.test(m), "se dice cuántas llegaron");
+  assert.ok(/ya están todos capturados o descartados/i.test(m));
+});
+t("con trabajo nuevo se cuentan por separado las nuevas y las ya revisadas", () => {
+  const m = S.resumenGmail(12, 5, 7, 30);
+  assert.ok(/5 factura\(s\) nueva\(s\)/.test(m));
+  assert.ok(/7 ya revisadas/.test(m));
+});
+t("si no hay ya revisadas, no se menciona la parte de ya revisadas", () => {
+  const m = S.resumenGmail(5, 5, 0, 15);
+  assert.ok(/5 factura\(s\) nueva\(s\)/.test(m));
+  assert.ok(!/ya revisadas/.test(m));
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
