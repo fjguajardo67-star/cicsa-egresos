@@ -153,13 +153,19 @@ def call_claude(client, b64, mime, prompt, max_tokens=2000):
             {"type":"text","text":prompt}
         ]}]
     )
+    return _json_de_respuesta(resp)
+
+
+# La reparación del JSON es idéntica venga la respuesta de una imagen o de puro texto, así que
+# vive aparte en vez de duplicarse: Claude a veces envuelve el JSON en ```json o le antepone
+# una frase.
+def _json_de_respuesta(resp):
     raw = resp.content[0].text.strip().replace("```json","").replace("```","").strip()
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         # Claude pudo haber añadido texto antes/después del JSON.
         # Extraer el primer objeto JSON balanceado de la respuesta.
-        import re
         start = raw.find("{")
         if start != -1:
             depth = 0
@@ -179,6 +185,21 @@ def call_claude(client, b64, mime, prompt, max_tokens=2000):
                              "Sube las hojas por separado o captura manualmente.")
         # Si no, relanzar para que el endpoint responda 422
         raise
+
+
+def call_claude_texto(client, prompt, max_tokens=4000):
+    """Igual que call_claude pero SIN imagen: la entrada es solo texto.
+
+    La imagen es el costo dominante de tokens. Para identificar descripciones de renglones que
+    ya vinieron en el XML no aporta nada, porque los números exactos (cantidad, precio unitario)
+    salen del propio comprobante fiscal: lo único que falta es saber QUÉ producto es.
+    """
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return _json_de_respuesta(resp)
 
 # ── Serve HTML files ───────────────────────────────────────────────────────────
 @app.route("/")
@@ -707,6 +728,70 @@ REGLAS:
         return jsonify(data)
     except (json.JSONDecodeError, KeyError):
         return jsonify({"error": "No pude extraer productos individuales.", "productos": []}), 422
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ── /identificar-productos  (capa 2: qué producto es cada descripción del CFDI) ─
+@app.route("/identificar-productos", methods=["POST"])
+@require_auth
+def identificar_productos():
+    """
+    Identifica descripciones de renglones de CFDI que el catálogo todavía no sabe emparejar.
+
+    La entrada es TEXTO (las descripciones), no la imagen de la factura: los números exactos ya
+    vinieron del XML, así que mandar la imagen sería pagar el costo dominante de tokens para
+    obtener un dato que ya se tiene. Solo se pregunta por descripciones NUEVAS — una vez
+    identificada, se guarda como alias del producto y no se vuelve a preguntar nunca.
+    """
+    try:
+        d = request.get_json() or {}
+        desc = [str(x).strip() for x in (d.get("descripciones") or []) if str(x).strip()]
+        if not desc:
+            return jsonify({"productos": []})
+        desc = desc[:120]                # tope por llamada; el frontend manda por tandas
+        conocidos = [str(x).strip() for x in (d.get("catalogo") or []) if str(x).strip()][:400]
+        client = get_client()
+        lista   = "\n".join("- " + x for x in desc)
+        cat_txt = "\n".join("- " + x for x in conocidos) if conocidos else "(el catálogo está vacío)"
+        data = call_claude_texto(client, f'''Ordenas el catálogo de insumos de un comedor industrial en México.
+
+Abajo hay descripciones tal como vienen en los renglones de facturas (CFDI). Vienen abreviadas,
+en mayúsculas y con claves internas del proveedor: "MM PASTA TOM", "BC 3K SPAGU", "1PZ2.5KG HOP".
+Para CADA descripción di qué producto es en realidad.
+
+PRODUCTOS QUE YA EXISTEN EN EL CATÁLOGO:
+{cat_txt}
+
+DESCRIPCIONES A IDENTIFICAR:
+{lista}
+
+Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
+{{
+  "productos": [
+    {{
+      "descripcion": "la descripción TAL CUAL te la di, sin cambiarle nada",
+      "producto": "nombre limpio del ingrediente (ej: Pasta de tomate)",
+      "existente": "nombre EXACTO de la lista del catálogo si es el mismo producto, o null",
+      "unidad": "kg",
+      "es_insumo": true,
+      "confianza": "alta"
+    }}
+  ]
+}}
+REGLAS:
+- "descripcion" va IDÉNTICA a como te la di: es la llave con la que se guarda el resultado.
+- "existente" SOLO si es el mismo producto, no uno parecido. "MM QUESO AME" sí es "Queso
+  americano"; "Queso Oaxaca" y "Queso americano" son distintos. Ante la duda pon null: crear un
+  producto de más se arregla en un clic, mezclar dos productos corrompe el costeo de las recetas.
+- "unidad" debe ser una de: kg, lt, pz, cja, paq.
+- "es_insumo": false para lo que NO es alimento ni consumible de cocina (uniformes, renta,
+  fletes, papelería, servicios). Eso no va al catálogo de ingredientes.
+- "confianza": "alta", "media" o "baja". Pon "baja" si la abreviatura no alcanza para saberlo.
+  Es válido no saber — lo revisa una persona antes de guardarse. NO inventes.
+- Incluye TODAS las descripciones que te di y ninguna de más.''', max_tokens=8000)
+        return jsonify(data)
+    except (json.JSONDecodeError, KeyError):
+        return jsonify({"error": "No pude identificar los productos.", "productos": []}), 422
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

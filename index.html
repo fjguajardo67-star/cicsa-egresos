@@ -1958,7 +1958,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-b";
+const APP_BUILD = "2026-08-19-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5818,6 +5818,8 @@ async function analizarPreciosCfdi(){
   }
   const { identificados, porIdentificar } = resolverPreciosCatalogo(precios, _catalogoProductos);
   _cfdiPreciosIdent = identificados;
+  _cfdiPreciosPorIdent = porIdentificar;
+  _cfdiAcciones = [];
   const filas = (arr, ident) => arr.slice(0, 40).map(p=>`<div style="display:grid;grid-template-columns:1fr 110px 90px;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
       <div>${esc(p.desc)}${ident?`<div style="font-size:10.5px;color:var(--vd)">→ ${esc(p.producto.nombre_comercial||"")}</div>`:`<div style="font-size:10.5px;color:var(--txt2)">${esc(p.proveedor)} · ${esc(p.fecha)}</div>`}</div>
       <div class="amount-cell" style="font-family:'JetBrains Mono',monospace">${fmt(p.precio)}</div>
@@ -5831,9 +5833,157 @@ async function analizarPreciosCfdi(){
     </div>
     ${identificados.length?`<details open><summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--vd)">✅ Se pueden actualizar ya (${identificados.length})</summary><div style="margin-top:6px">${filas(identificados,true)}</div>${identificados.length>40?`<div style="font-size:11px;color:var(--txt2);margin-top:4px">…y ${identificados.length-40} más</div>`:""}</details>`:""}
     ${porIdentificar.length?`<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--naranja)">❓ Por identificar (${porIdentificar.length})</summary>
-      <div style="font-size:11.5px;color:var(--txt2);margin:6px 0">Nadie ha dicho todavía qué producto es cada una. Abre el producto en <strong>Productos</strong> y agrega la descripción como alias de factura: se aprende una vez y no se vuelve a preguntar.</div>
+      <div style="font-size:11.5px;color:var(--txt2);margin:6px 0">Nadie ha dicho todavía qué producto es cada una. Se aprende una vez y no se vuelve a preguntar: puedes identificarlas con IA aquí abajo (manda solo el <strong>texto</strong>, no la imagen de la factura) o a mano, agregando la descripción como alias en <strong>Productos</strong>.</div>
+      <button class="btn btn-light" style="padding:6px 10px;font-size:12px;margin-bottom:6px" onclick="identificarConIA()">🤖 Identificar con IA (solo texto)</button>
+      <div id="cfdiIdentBody"></div>
       <div>${filas(porIdentificar,false)}</div>${porIdentificar.length>40?`<div style="font-size:11px;color:var(--txt2);margin-top:4px">…y ${porIdentificar.length-40} más</div>`:""}</details>`:""}`;
   if(btn) btn.style.display = identificados.length ? "inline-flex" : "none";
+}
+
+// ── Capa 2: qué hacer con lo que la IA propone ──────────────────────────────
+// La IA solo PROPONE; esto traduce cada propuesta a una acción concreta y el humano confirma
+// antes de que se escriba nada. Es pura a propósito: la decisión de si algo se convierte en
+// alias de un producto existente o en producto nuevo se puede probar sin red y sin DOM.
+// Una propuesta que no corresponde a ningún renglón real se tira: si la IA inventa una
+// descripción que no estaba en el CFDI, no debe acabar en el catálogo.
+function planIdentificacion(propuestas, precios, catalogo){
+  const porDesc = new Map();
+  (precios||[]).forEach(p=>{ const k = normalizarParaComparar(p && p.desc); if(k) porDesc.set(k, p); });
+  const porNombre = new Map();
+  (catalogo||[]).forEach(p=>{
+    [p.nombre_comercial, p.ingrediente_generico, p.nombre_normalizado].forEach(n=>{
+      const k = normalizarParaComparar(n);
+      if(k && !porNombre.has(k)) porNombre.set(k, p);
+    });
+  });
+  const acciones = [], vistos = new Set();
+  (propuestas||[]).forEach(pr=>{
+    const desc = String((pr && pr.descripcion) || "").trim();
+    const k = normalizarParaComparar(desc);
+    if(!k || vistos.has(k)) return;          // la IA repitió una descripción
+    const precio = porDesc.get(k);
+    if(!precio) return;                      // no corresponde a ningún renglón del CFDI
+    vistos.add(k);
+    const confianza = String((pr && pr.confianza) || "media").toLowerCase();
+    const nombreIA = String((pr && pr.producto) || desc).trim();
+    if(pr && pr.es_insumo === false){
+      // Uniformes, fletes, papelería: no son ingrediente y no deben ensuciar el catálogo.
+      acciones.push({ tipo:"ignorar", desc, precio, confianza, nombre: nombreIA });
+      return;
+    }
+    const ex = (pr && pr.existente) ? porNombre.get(normalizarParaComparar(pr.existente)) : null;
+    if(ex) acciones.push({ tipo:"alias", desc, precio, confianza, producto: ex,
+                           nombre: ex.nombre_comercial || ex.nombre_normalizado || String(pr.existente) });
+    else   acciones.push({ tipo:"nuevo", desc, precio, confianza, nombre: nombreIA,
+                           unidad: String((pr && pr.unidad) || precio.unidad || "") });
+  });
+  return acciones;
+}
+
+// Solo se propone marcado lo que la IA dio por seguro. Lo de confianza media o baja entra
+// destildado: es válido que la IA no sepa, y en ese caso decide la persona.
+function _identSugerida(a){ return a.tipo!=="ignorar" && a.confianza==="alta"; }
+
+let _cfdiPreciosPorIdent = [];
+let _cfdiAcciones = [];
+async function identificarConIA(){
+  const out = document.getElementById("cfdiIdentBody");
+  const pend = _cfdiPreciosPorIdent || [];
+  if(!out || !pend.length) return;
+  out.innerHTML = `<div style="font-size:12px;color:var(--txt2)"><span class="spin"></span> Identificando ${pend.length} descripción(es)…</div>`;
+  // Se manda el catálogo para que la IA pueda decir "esto ya existe" en vez de duplicar.
+  const nombres = (_catalogoProductos||[])
+    .map(p=>p.ingrediente_generico || p.nombre_comercial).filter(Boolean);
+  const propuestas = [];
+  try{
+    for(let i=0;i<pend.length;i+=60){
+      const tanda = pend.slice(i, i+60);
+      const r = await fetch(SERVER+"/identificar-productos", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ descripciones: tanda.map(p=>p.desc), catalogo: nombres })
+      });
+      const data = await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(data.error || `El servidor respondió ${r.status}`);
+      (data.productos||[]).forEach(x=>propuestas.push(x));
+    }
+  }catch(e){
+    out.innerHTML = `<div style="font-size:12px;color:var(--red)">No se pudo identificar: ${esc(e.message||"error")}</div>`;
+    return;
+  }
+  _cfdiAcciones = planIdentificacion(propuestas, pend, _catalogoProductos);
+  _cfdiAcciones.forEach(a=>{ a._sel = _identSugerida(a); });
+  renderIdentificacion();
+}
+
+function renderIdentificacion(){
+  const out = document.getElementById("cfdiIdentBody");
+  if(!out) return;
+  const acc = _cfdiAcciones || [];
+  if(!acc.length){ out.innerHTML = `<div style="font-size:12px;color:var(--txt2)">La IA no pudo identificar ninguna.</div>`; return; }
+  const badge = c => c==="alta" ? `<span style="color:var(--vd)">alta</span>`
+                   : c==="baja" ? `<span style="color:var(--red)">baja</span>`
+                                : `<span style="color:var(--naranja)">media</span>`;
+  const filas = acc.map((a,i)=>{
+    const destino = a.tipo==="alias" ? `→ <strong>${esc(a.nombre)}</strong> <span style="color:var(--txt2)">(ya existe)</span>`
+                  : a.tipo==="nuevo" ? `→ <strong>${esc(a.nombre)}</strong> <span style="color:var(--txt2)">(producto nuevo)</span>`
+                                     : `<span style="color:var(--txt2)">no es insumo de cocina — se omite</span>`;
+    return `<div style="display:grid;grid-template-columns:28px 1fr 100px;gap:8px;align-items:start;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <input type="checkbox" ${a._sel?"checked":""} ${a.tipo==="ignorar"?"disabled":""} style="width:15px;height:15px;cursor:pointer;accent-color:var(--vd)"
+        onchange="_cfdiAcciones[${i}]._sel=this.checked">
+      <div><div>${esc(a.desc)}</div><div style="font-size:11px;margin-top:1px">${destino} · confianza ${badge(a.confianza)}</div></div>
+      <div class="amount-cell" style="font-family:'JetBrains Mono',monospace">${fmt(a.precio.precio)}</div>
+    </div>`;
+  }).join("");
+  const n = acc.filter(a=>a._sel).length;
+  out.innerHTML = `<div style="font-size:12px;color:var(--txt2);margin:6px 0">La IA <strong>propone</strong>; tú confirmas. Viene marcado solo lo de confianza alta — revisa lo demás antes de guardarlo.</div>
+    <div style="max-height:260px;overflow:auto">${filas}</div>
+    <button class="btn btn-gold" style="padding:7px 12px;font-size:12px;margin-top:8px" onclick="aplicarIdentificacion()">✅ Guardar los ${n} seleccionado(s)</button>`;
+}
+
+// Escribe lo confirmado: alias sobre un producto que ya existe, o producto nuevo en "pendiente"
+// (nunca "validado" — la unidad y la presentación las pone una persona antes de costear).
+async function aplicarIdentificacion(){
+  const sel = (_cfdiAcciones||[]).filter(a=>a._sel && a.tipo!=="ignorar");
+  if(!sel.length) return;
+  let alias = 0, nuevos = 0, errores = 0;
+  for(const a of sel){
+    try{
+      if(a.tipo==="alias"){
+        const p = a.producto;
+        if(!p || !p.id) continue;
+        const ya = (p.alias_factura||[]).some(x=>normalizarParaComparar(x)===normalizarParaComparar(a.desc));
+        if(!ya) p.alias_factura = [...(p.alias_factura||[]), a.desc];
+        if((p.fecha_precio||"") <= (a.precio.fecha||"")){
+          p.precio_actual = a.precio.precio;
+          p.fecha_precio  = a.precio.fecha;
+          if(a.precio.folio)     p.factura_origen   = a.precio.folio;
+          if(a.precio.proveedor) p.proveedor_nombre = a.precio.proveedor;
+        }
+        const { id, ...datos } = p;
+        await fbUpdateDoc(CATALOGO_COL, id, datos);
+        alias++;
+      } else {
+        const nuevo = {
+          proveedor_id: null, proveedor_nombre: a.precio.proveedor || "",
+          nombre_comercial: a.nombre, alias_factura: [a.desc, a.nombre], sinonimos_menu: [],
+          nombre_normalizado: a.nombre, marca: "", familia: "", categoria: "", presentacion: "",
+          unidad_factura: a.unidad || "", contenido_cantidad: null, contenido_unidad: null,
+          piezas_por_presentacion: null, peso_pieza_valor: null, peso_pieza_unidad: null,
+          unidad_base: null, porcion_valor: null, porcion_unidad: null, merma_pct: null,
+          estado: "pendiente", precio_actual: a.precio.precio, fecha_precio: a.precio.fecha || "",
+          factura_origen: a.precio.folio || "", notas: "Identificado desde el CFDI"
+        };
+        const id = await fbCreateDoc(CATALOGO_COL, nuevo);
+        if(id){ _catalogoProductos.push({ id, ...nuevo }); nuevos++; }
+      }
+    }catch(e){ console.warn("aplicarIdentificacion:", e); errores++; }
+  }
+  const out = document.getElementById("cfdiIdentBody");
+  if(out) out.innerHTML = `<div class="status ok" style="display:block">✅ ${alias} alias agregado(s) · ${nuevos} producto(s) nuevo(s) en pendientes` +
+    (errores?` · <span style="color:var(--red)">${errores} con error</span>`:"") +
+    `<br><span style="font-size:11.5px;color:var(--txt2)">Ya no se te volverán a preguntar: quedaron aprendidas como alias.</span></div>`;
+  try{ renderCatalogoProductos(true); }catch(_){}
+  analizarPreciosCfdi();
 }
 
 // Escribe al catálogo SOLO lo identificado por match exacto. Un XML viejo no debe pisar un precio
