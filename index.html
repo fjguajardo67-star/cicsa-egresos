@@ -622,6 +622,8 @@ body.snav-min .side-theme span { display:none; }
 </style>
 </head>
 <body>
+<div id="syncBadge" onclick="sincronizarAhora()" title="Última sincronización con la nube — toca para sincronizar y refrescar ahora"
+  style="position:fixed;bottom:22px;right:7px;font-size:10px;color:var(--txt2);background:rgba(255,255,255,.85);border:1px solid var(--border);border-radius:6px;padding:2px 7px;z-index:99999;cursor:pointer;font-family:'JetBrains Mono',monospace">⟳ …</div>
 <div id="buildBadge" onclick="recargarSinCache()" title="Versión instalada — toca para recargar la última versión"
   style="position:fixed;bottom:3px;right:7px;font-size:10px;color:var(--txt2);background:rgba(255,255,255,.85);border:1px solid var(--border);border-radius:6px;padding:2px 7px;z-index:99999;cursor:pointer;font-family:'JetBrains Mono',monospace">v…</div>
 <!-- ── Login Screen ─────────────────────────────────────────────── -->
@@ -1958,7 +1960,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-e";
+const APP_BUILD = "2026-08-19-f";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2672,9 +2674,45 @@ function marcarBorrado(id){
   state.tombstones.push({ id:String(id), ts:Date.now() });
 }
 
+// Firma de lo que se MUESTRA en pantalla. Sirve para saber si la fusión con la nube trajo algo
+// nuevo y hay que repintar, sin repintar cada minuto porque sí. Pura y probada.
+function _firmaEstado(st){
+  try{ return JSON.stringify([st && st.weeks, st && st.budget, st && st.cajaSaldoInicial]); }
+  catch(_){ return ""; }
+}
+function _paginaActiva(){
+  const el = document.querySelector(".page.active");
+  return el ? String(el.id||"").replace(/^page-/, "") : "";
+}
+// Si alguien está escribiendo, repintar le borraría lo que lleva tecleado. Se deja para el
+// siguiente ciclo: más vale ver los números un minuto tarde que perder una captura.
+function _usuarioEscribiendo(){
+  const a = document.activeElement;
+  return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName||""));
+}
+// Repinta SOLO la vista que se está viendo. "captura" nunca entra aquí: es un formulario en
+// curso, no una vista de datos.
+// Antes la sincronización de cada minuto traía a memoria los movimientos de los demás pero nadie
+// repintaba, así que se seguían viendo los totales viejos hasta cambiar de pestaña — dos personas
+// con los mismos datos veían cifras distintas.
+function refrescarVistaActual(forzar){
+  if(!forzar && _usuarioEscribiendo()) return false;
+  try{ renderAll(); }catch(e){ console.warn("refrescarVistaActual/renderAll:", e); }
+  const p = _paginaActiva();
+  try{
+    if(p==="gastos")            renderGastos();
+    else if(p==="presupuesto")  renderPresupuesto();
+    else if(p==="balance")      renderBalance();
+    else if(p==="reporte")      renderReporteActual();
+    else if(p==="pagos")        renderPagos();
+    else if(p==="caja")         renderCaja();
+  }catch(e){ console.warn("refrescarVistaActual:", e); }
+  return true;
+}
+
 // Guardado a Firestore serializado + con rebote: lee-fusiona-escribe, uno a la vez, para que
 // dos guardados rápidos (o de dos dispositivos) no se pisen.
-let _syncTimer=null, _syncing=false, _syncPending=false;
+let _syncTimer=null, _syncing=false, _syncPending=false, _syncUltimo=0;
 function programarSync(){ _syncPending=true; clearTimeout(_syncTimer); _syncTimer=setTimeout(ejecutarSync, 350); }
 async function ejecutarSync(){
   if(_syncing || !_syncPending) return;
@@ -2682,9 +2720,15 @@ async function ejecutarSync(){
   try{
     let remote=null;
     try{ remote = await fbGet('estado/cicsa'); }catch(_){}
+    const _antes = _firmaEstado(state);
     if(remote && Array.isArray(remote.weeks)) state = mergeEstados(remote, state);
+    const _trajoAlgo = _firmaEstado(state) !== _antes;
     await fbSet('estado/cicsa', state);
     localStorage.setItem("cicsa_egresos", JSON.stringify(state));
+    _syncUltimo = Date.now();
+    // Solo se repinta si la nube trajo algo que no teníamos.
+    if(_trajoAlgo) refrescarVistaActual();
+    pintarSyncBadge();
   }catch(e){
     console.warn("sync error:", e);
     try{ await fbSet('estado/cicsa', state); }catch(_){}   // al menos sube lo local
@@ -2707,6 +2751,38 @@ function save() {
   programarSync();
 }
 setInterval(()=>{ if(state.weeks&&state.weeks.length>0) save(); }, 60000);
+
+// Cuánto hace que este dispositivo habló con la nube. Antes no había forma de saberlo: si otro
+// capturaba algo, no aparecía y no había manera de distinguir "no hay nada" de "no me he
+// sincronizado".
+function textoSync(ultimo, ahora){
+  if(!ultimo) return "⟳ sin sincronizar";
+  const min = Math.floor(Math.max(0, (ahora - ultimo)) / 60000);
+  if(min <= 0) return "⟳ al día";
+  if(min === 1) return "⟳ hace 1 min";
+  return `⟳ hace ${min} min`;
+}
+function pintarSyncBadge(){
+  const el = document.getElementById("syncBadge");
+  if(el) el.textContent = textoSync(_syncUltimo, Date.now());
+}
+setInterval(pintarSyncBadge, 30000);
+
+// Sincronizar a mano: además del estado, refresca los catálogos de la nube (que si no, se cargan
+// una sola vez por sesión) y repinta aunque el cursor esté en un campo — aquí lo pidió la persona.
+async function sincronizarAhora(){
+  const el = document.getElementById("syncBadge");
+  if(el) el.textContent = "⟳ sincronizando…";
+  try{
+    _syncPending = true;
+    await ejecutarSync();
+    try{ await cargarCatalogo(true); }catch(_){}
+    try{ if(_cfdisStore) await cargarCfdisStore(true); }catch(_){}
+    try{ if(_gmailRevisados) await cargarGmailRevisados(true); }catch(_){}
+    refrescarVistaActual(true);
+  }catch(e){ console.warn("sincronizarAhora:", e); }
+  pintarSyncBadge();
+}
 window.addEventListener("beforeunload",()=>{
   const json=JSON.stringify(state);
   localStorage.setItem("cicsa_egresos",json);
@@ -3127,8 +3203,12 @@ function showPage(name,btn){
   if(name==="pagos")       { restaurarPagosPeriodo(); renderPagos(); }
   if(name==="reportes")    initReporteDates();
   if(name==="catalogo")    renderCatalogo();
-  if(name==="catalogo-productos") renderCatalogoProductos();
-  if(name==="sat")       { initSatDates(); initSatDropzones(); const _r=document.getElementById("satRfcPropio"); if(_r) _r.value=rfcPropio(); reconciliarSiHay(); }
+  // Los catálogos de la nube se cargaban UNA sola vez por sesión: si otro daba de alta un
+  // producto o subía CFDIs, no aparecían hasta recargar la página entera. Al entrar a la pestaña
+  // se piden frescos.
+  if(name==="catalogo-productos") renderCatalogoProductos(true);
+  if(name==="sat")       { initSatDates(); initSatDropzones(); const _r=document.getElementById("satRfcPropio"); if(_r) _r.value=rfcPropio(); reconciliarSiHay();
+                           cargarCfdisStore(true).then(()=>renderCfdisStore()).catch(()=>{}); }
   try{ _actPestanaActual = _actLabelPestana(name); if(_actActivo) _actUltInteraccion = Date.now(); }catch(_){}
   document.body.classList.remove("snav-open"); // en móvil, cierra el menú al navegar
 }
