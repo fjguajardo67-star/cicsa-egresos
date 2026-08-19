@@ -94,7 +94,7 @@ const FUNCS = [
   "variantesLlaveMenu", "llavesMenuDeFila",
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
-  "resumenGmail",
+  "resumenGmail", "_firmaEstado", "textoSync",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -901,6 +901,40 @@ t("si no hay ya revisadas, no se menciona la parte de ya revisadas", () => {
   const m = S.resumenGmail(5, 5, 0, 15);
   assert.ok(/5 factura\(s\) nueva\(s\)/.test(m));
   assert.ok(!/ya revisadas/.test(m));
+});
+
+console.log("\n== sincronización visible entre usuarios ==");
+const W = (id, gastos) => ({ id, label: id, gastos, cortes: [], retiros: [] });
+t("si la nube trae un gasto que no tenías, la firma cambia y hay que repintar", () => {
+  const antes = S._firmaEstado({ weeks: [W("w1", [{ id: "1", importe: 100 }])] });
+  const despues = S._firmaEstado({ weeks: [W("w1", [{ id: "1", importe: 100 }, { id: "2", importe: 50 }])] });
+  assert.notEqual(antes, despues);
+});
+t("si no cambió nada, la firma es igual y NO se repinta de balde", () => {
+  const a = { weeks: [W("w1", [{ id: "1", importe: 100 }])], budget: { total: 10 } };
+  const b = { weeks: [W("w1", [{ id: "1", importe: 100 }])], budget: { total: 10 } };
+  assert.equal(S._firmaEstado(a), S._firmaEstado(b));
+});
+t("cambiar el presupuesto o el saldo inicial también cuenta como cambio visible", () => {
+  const base = { weeks: [], budget: { total: 10 }, cajaSaldoInicial: { w1: 5 } };
+  assert.notEqual(S._firmaEstado(base), S._firmaEstado({ ...base, budget: { total: 20 } }));
+  assert.notEqual(S._firmaEstado(base), S._firmaEstado({ ...base, cajaSaldoInicial: { w1: 9 } }));
+});
+t("un estado corrupto no tumba la sincronización", () => {
+  const ciclico = { weeks: [] }; ciclico.weeks.push(ciclico);   // referencia circular
+  assert.equal(S._firmaEstado(ciclico), "", "devuelve vacío en vez de lanzar");
+  assert.equal(S._firmaEstado(null), JSON.stringify([undefined, undefined, undefined]));
+});
+t("el aviso de sincronización dice hace cuánto, no solo que existe", () => {
+  const ahora = 1_700_000_000_000;
+  assert.equal(S.textoSync(0, ahora), "⟳ sin sincronizar");
+  assert.equal(S.textoSync(ahora - 5000, ahora), "⟳ al día");
+  assert.equal(S.textoSync(ahora - 60_000, ahora), "⟳ hace 1 min");
+  assert.equal(S.textoSync(ahora - 7 * 60_000, ahora), "⟳ hace 7 min");
+});
+t("un reloj adelantado no produce 'hace -3 min'", () => {
+  const ahora = 1_700_000_000_000;
+  assert.equal(S.textoSync(ahora + 180_000, ahora), "⟳ al día");
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
