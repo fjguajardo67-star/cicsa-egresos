@@ -91,6 +91,7 @@ const FUNCS = [
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
+  "variantesLlaveMenu", "llavesMenuDeFila",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -363,7 +364,10 @@ t("los productos que ya no están validados desaparecen del documento", () => {
   const nuevo = S.construirMapaPreciosMenu(
     [filaSync("Papa a la francesa, papa frita", 54.69, "2026-07-28"), filaSync("Cebolla", 22.5, "2026-07-28")],
     previos, "28/07/2026");
-  assert.deepEqual(Object.keys(nuevo).sort(), ["Cebolla", "Papa a la francesa, papa frita"]);
+  // Cada producto ocupa varias llaves (mayúsculas/acentos), así que lo que se compara es el
+  // conjunto de ingredientes distintos, no el número de llaves.
+  const distintos = [...new Set(Object.keys(nuevo).map(S.normalizarParaComparar))].sort();
+  assert.deepEqual(distintos, ["cebolla", "papa a la francesa, papa frita"]);
   assert.ok(!("Papa lisa europea" in nuevo), "el producto borrado ya no cotiza en Menú");
   assert.ok(!("Jamón super pavo loyval" in nuevo), "el duplicado mal escrito se va");
   close(nuevo["Cebolla"].precio, 22.5);
@@ -385,8 +389,61 @@ t("productos que no se pueden costear (calc.ok=false) no entran", () => {
 t("mismo nombre en dos filas: gana la factura más reciente", () => {
   const nuevo = S.construirMapaPreciosMenu(
     [filaSync("Elote", 30, "2026-07-28"), filaSync("Elote", 10, "2026-06-01")], {}, "28/07/2026");
-  assert.equal(Object.keys(nuevo).length, 1);
+  assert.equal(Object.keys(nuevo).length, 2, "'Elote' y 'elote': una llave por variante");
   close(nuevo["Elote"].precio, 30);
+  close(nuevo["elote"].precio, 30);   // la variante trae el mismo precio, no el viejo
+});
+
+console.log("\n== llaves de Menú: mayúsculas, acentos y sinónimos ==");
+t("'Ajo' publica también 'ajo' — 53 recetas lo escriben de las dos formas", () => {
+  assert.deepEqual(S.variantesLlaveMenu("Ajo"), ["Ajo", "ajo"]);
+});
+t("desde la forma acentuada se cubren las dos escrituras", () => {
+  const v = S.variantesLlaveMenu("Orégano seco");
+  assert.ok(v.includes("Orégano seco") && v.includes("Oregano seco"), "con y sin acento");
+  assert.ok(v.includes("orégano seco") && v.includes("oregano seco"), "y en minúsculas");
+});
+t("frase larga recupera la inicial mayúscula sin tocar el resto", () => {
+  const v = S.variantesLlaveMenu("pierna y muslo deshuesado");
+  assert.ok(v.includes("Pierna y muslo deshuesado"), "la receta que lo capitaliza también conecta");
+});
+t("vacío, espacios o null no generan llaves", () => {
+  assert.deepEqual(S.variantesLlaveMenu(""), []);
+  assert.deepEqual(S.variantesLlaveMenu("   "), []);
+  assert.deepEqual(S.variantesLlaveMenu(null), []);
+});
+t("NO se inventan plurales: 'Papas' (fritas) no puede costearse con el precio de 'Papa'", () => {
+  assert.ok(!S.variantesLlaveMenu("Papa").includes("Papas"));
+});
+t("las llaves de una fila incluyen los sinónimos capturados a mano", () => {
+  const k = S.llavesMenuDeFila({ nombreSync: "Tortilla de maíz", producto: { sinonimos_menu: ["tortillas de maiz"] } });
+  assert.ok(k.includes("Tortilla de maíz") && k.includes("Tortilla de maiz"), "el nombre y su forma sin acento");
+  assert.ok(k.includes("tortillas de maiz") && k.includes("Tortillas de maiz"), "el plural entra por el sinónimo");
+});
+t("sin sinónimos no truena y no duplica llaves", () => {
+  assert.deepEqual(S.llavesMenuDeFila({ nombreSync: "Sal", producto: {} }), ["Sal", "sal"]);
+});
+t("el mapa publica el precio bajo cada variante y cada sinónimo", () => {
+  const rows = [{
+    nombreSync: "Ajo", incluir: true, calc: { ok: true, precio: 90, unidadBase: "kg" },
+    producto: { fecha_precio: "2026-08-18", sinonimos_menu: ["Ajo picado"] },
+  }];
+  const nuevo = S.construirMapaPreciosMenu(rows, {}, "18/08/2026");
+  ["Ajo", "ajo", "Ajo picado", "ajo picado"].forEach(k => {
+    assert.ok(k in nuevo, `falta la llave "${k}"`);
+    close(nuevo[k].precio, 90);
+  });
+});
+t("una fila destildada conserva TODAS sus llaves previas, no solo la principal", () => {
+  const previos = {
+    "Ajo": { precio: 80, unidad_base: "kg", fecha: "01/06/2026" },
+    "ajo": { precio: 80, unidad_base: "kg", fecha: "01/06/2026" },
+  };
+  const nuevo = S.construirMapaPreciosMenu([{
+    nombreSync: "Ajo", incluir: false, calc: { ok: true, precio: 90, unidadBase: "kg" },
+    producto: { fecha_precio: "2026-08-18", sinonimos_menu: [] },
+  }], previos, "18/08/2026");
+  assert.deepEqual(nuevo, previos, "ni se actualizan ni se pierden");
 });
 
 console.log("\n== saldo de caja del periodo (fuente única: Caja, su PDF y el Resumen) ==");

@@ -1482,6 +1482,11 @@ body.snav-min .side-theme span { display:none; }
       <input type="text" id="pcGenerico" placeholder='Ej: "Catsup" — como lo escribes en tus recetas'>
       <div style="font-size:11px;color:var(--txt2);margin-top:3px">La palabra con la que Menú conecta este precio a tus recetas — debe coincidir con cómo escribes el ingrediente en la receta. Déjalo vacío si este producto no va a Menú.</div>
     </div>
+    <div class="field" style="margin-bottom:14px">
+      <label>Otras formas en que lo escriben tus recetas (separadas por coma)</label>
+      <input type="text" id="pcSinonimos" placeholder='Ej: tortillas de maíz, Tortilla'>
+      <div style="font-size:11px;color:var(--txt2);margin-top:3px">Plurales o variantes con calificativo: “tortillas de maíz”, “Ajo picado”. Cada una conecta con este mismo precio. <strong>Mayúsculas y acentos no hace falta ponerlos</strong> — esos ya se conectan solos.</div>
+    </div>
     <button type="button" onclick="togglePcDetalles()" id="pcDetallesBtn" style="background:none;border:none;color:var(--vd);cursor:pointer;font-size:12.5px;font-weight:600;padding:4px 0;margin-bottom:10px">▸ Más detalles (proveedor, marca, categoría…)</button>
     <div id="pcDetalles" style="display:none">
       <div class="form-grid" style="margin-bottom:14px">
@@ -1944,7 +1949,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-10-e";
+const APP_BUILD = "2026-08-19-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3473,6 +3478,7 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
           proveedor_nombre: proveedorNombre || "",
           nombre_comercial: nombre,
           alias_factura: [nombre],
+          sinonimos_menu: [],
           nombre_normalizado: nombre,
           marca: "",
           familia: "",
@@ -6585,20 +6591,28 @@ function cambiarNombreSync(idx, valor){
   marcarColisionesSyncMenu();
   renderSyncMenuRows();
 }
-// Si dos productos del MISMO lote comparten nombreSync (ej. "Elote en lata" y "Elote
-// congelado" ambos etiquetados "Elote"), es intencional — el más reciente por fecha de
-// factura gana — pero debe ser una decisión visible, no una sorpresa silenciosa.
+// Si dos productos del MISMO lote comparten una llave (ej. "Elote en lata" y "Elote congelado"
+// ambos etiquetados "Elote", o uno con el sinónimo del otro), es intencional — el más reciente
+// por fecha de factura gana — pero debe ser una decisión visible, no una sorpresa silenciosa.
+// Se comparan TODAS las llaves publicadas, no solo el nombre principal: un sinónimo sobrescribe
+// igual que el nombre, y antes esa colisión no se veía.
 function marcarColisionesSyncMenu(){
   const grupos = {};
   _syncMenuRows.forEach(r=>{
     if(!r.calc.ok || !r.incluir || !r.nombreSync) return;
-    const key = normalizarParaComparar(r.nombreSync);
-    (grupos[key]=grupos[key]||[]).push(r);
+    llavesMenuDeFila(r).forEach(k=>{
+      const key = normalizarParaComparar(k);
+      const g = (grupos[key] = grupos[key] || []);
+      if(g.indexOf(r)===-1) g.push(r);
+    });
   });
   _syncMenuRows.forEach(r=> r.colision = null);
   Object.values(grupos).filter(g=>g.length>1).forEach(g=>{
     g.sort((a,b)=>(a.producto.fecha_precio||"") < (b.producto.fecha_precio||"") ? 1 : -1);
-    g.forEach((r,i)=>{ r.colision = i===0 ? "gana (factura más reciente)" : "pierde — se sobrescribe con el de arriba"; });
+    g.forEach((r,i)=>{
+      if(r.colision) return;   // ya marcada por otra llave: un solo aviso por fila basta
+      r.colision = i===0 ? "gana (factura más reciente)" : "pierde — se sobrescribe con el de arriba";
+    });
   });
 }
 
@@ -6614,6 +6628,9 @@ function renderSyncMenuRows(){
   listos.forEach((r,i)=>{
     const idx = _syncMenuRows.indexOf(r);
     const unidadLabel = UNIDAD_BASE_LABEL[r.calc.unidadBase] || r.calc.unidadBase;
+    // Las llaves extra (mayúsculas/acentos + sinónimos) se listan para que se vea con qué otras
+    // formas de escribir el ingrediente va a conectar este precio.
+    const extras = llavesMenuDeFila(r).filter(k=>k!==String(r.nombreSync||"").trim());
     html += `<div style="display:grid;grid-template-columns:32px 1fr 120px;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)">
       <input type="checkbox" ${r.incluir?"checked":""} style="width:16px;height:16px;cursor:pointer;accent-color:var(--vd)" onchange="_syncMenuRows[${idx}].incluir=this.checked;marcarColisionesSyncMenu();renderSyncMenuRows()">
       <div>
@@ -6621,6 +6638,7 @@ function renderSyncMenuRows(){
           style="border:1.5px solid var(--border);border-radius:6px;padding:5px 8px;font-size:13px;width:100%;font-family:'DM Sans',sans-serif"
           onchange="cambiarNombreSync(${idx}, this.value)">
         <div style="font-size:10.5px;color:var(--txt2);margin-top:2px">Factura: ${r.producto.nombre_comercial}</div>
+        ${extras.length?`<div style="font-size:10.5px;color:var(--txt2);margin-top:2px">También conecta con: ${extras.map(k=>esc(k)).join(" · ")}</div>`:""}
         ${r.parecido?`<div style="font-size:11px;color:var(--naranja)">⚠ ¿Es lo mismo que "<strong>${r.parecido}</strong>" ya en Menú?</div>`:""}
         ${r.colision?`<div style="font-size:11px;color:${r.colision.startsWith("gana")?"var(--vm)":"var(--red)"}">⚠ Mismo nombre que otra fila en este lote — ${r.colision}</div>`:""}
       </div>
@@ -6636,6 +6654,41 @@ function renderSyncMenuRows(){
     });
   }
   body.innerHTML = html;
+}
+
+// Menú conecta el ingrediente de la receta con su precio comparando el texto EXACTO contra la
+// llave del mapa. Por eso "Ajo" y "ajo" son DOS llaves distintas: hay 53 recetas que escriben el
+// ajo de las dos formas, y las que usaban minúscula se quedaban sin precio aunque el producto ya
+// estuviera validado y sincronizado. En vez de reescribir cientos de recetas, cada producto se
+// publica bajo varias formas de LA MISMA palabra: como se tecleó, en minúsculas, con la inicial
+// en mayúscula, y las tres sin acentos ("Orégano seco" cubre también "oregano seco"). Son la
+// misma palabra escrita distinto, así que no pueden pegarle a otro ingrediente.
+// Los plurales y las variantes con calificativo ("tortillas de maíz", "Ajo picado") NO se
+// generan solos: salen de sinonimos_menu, que se captura a mano por producto. Generarlos
+// automáticamente costearía "Papas" (fritas) con el precio de "Papa".
+function variantesLlaveMenu(nombre){
+  const base = String(nombre==null ? "" : nombre).trim();
+  if(!base) return [];
+  const sinAcentos = x => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const minus   = base.toLowerCase();
+  const capital = minus.charAt(0).toUpperCase() + minus.slice(1);
+  const out = [];
+  [base, minus, capital].forEach(f=>{
+    [f, sinAcentos(f)].forEach(v=>{ if(v && out.indexOf(v)===-1) out.push(v); });
+  });
+  return out;
+}
+
+// Todas las llaves con las que una fila del sincronizador queda publicada en Menú: el nombre de
+// receta y sus sinónimos, cada uno en sus variantes de mayúsculas/acentos. Pura, para poder
+// probarla y para que la pantalla muestre exactamente lo que se va a escribir.
+function llavesMenuDeFila(row){
+  const out = [];
+  const agregar = n => variantesLlaveMenu(n).forEach(v=>{ if(out.indexOf(v)===-1) out.push(v); });
+  agregar(row && row.nombreSync);
+  const sinon = (row && row.producto && row.producto.sinonimos_menu) || [];
+  (Array.isArray(sinon) ? sinon : []).forEach(agregar);
+  return out;
 }
 
 // Arma el mapa COMPLETO de precios para Menú a partir del catálogo (una llave por producto
@@ -6654,11 +6707,15 @@ function construirMapaPreciosMenu(rows, preciosActuales, fechaHoy){
     .slice()
     .sort((a,b)=> ((a.producto&&a.producto.fecha_precio)||"") < ((b.producto&&b.producto.fecha_precio)||"") ? -1 : 1)
     .forEach(r=>{
-      // La llave se escribe TAL CUAL la tecleó el usuario (solo trim). Un "Title Case" rompía
-      // acentos ("Atún"→"AtúN") y Menú matchea la llave EXACTA contra el ingrediente.
-      const key = String(r.nombreSync).trim();
-      if(r.incluir) nuevo[key] = { precio: Math.round(r.calc.precio*100)/100, unidad_base: r.calc.unidadBase, fecha: fechaHoy };
-      else if(preciosActuales && Object.prototype.hasOwnProperty.call(preciosActuales, key)) nuevo[key] = preciosActuales[key];
+      // Cada fila se publica bajo TODAS sus llaves (nombre de receta + sinónimos, cada uno en
+      // sus variantes de mayúsculas/acentos). El texto va tal cual se generó: un "Title Case"
+      // rompía acentos ("Atún"→"AtúN") y Menú matchea la llave EXACTA contra el ingrediente.
+      const entrada = { precio: Math.round(r.calc.precio*100)/100, unidad_base: r.calc.unidadBase, fecha: fechaHoy };
+      llavesMenuDeFila(r).forEach(key=>{
+        if(r.incluir) nuevo[key] = { ...entrada };
+        // Destildar es "hoy no lo toques", no "bórralo": la llave que ya existía se conserva.
+        else if(preciosActuales && Object.prototype.hasOwnProperty.call(preciosActuales, key)) nuevo[key] = preciosActuales[key];
+      });
     });
   return nuevo;
 }
@@ -6903,6 +6960,7 @@ function abrirEditorProducto(id){
   document.getElementById("pcProveedor").value = p?.proveedor_nombre || "";
   document.getElementById("pcAlias").value = (p?.alias_factura||[]).join(", ");
   document.getElementById("pcGenerico").value = p?.ingrediente_generico || "";
+  document.getElementById("pcSinonimos").value = (p?.sinonimos_menu||[]).join(", ");
   document.getElementById("pcMarca").value = p?.marca || "";
   document.getElementById("pcFamilia").value = p?.familia || "";
   document.getElementById("pcCategoria").value = p?.categoria || "";
@@ -6966,6 +7024,7 @@ async function guardarProducto(nuevoEstado){
   const alias = document.getElementById("pcAlias").value.split(",").map(a=>a.trim()).filter(Boolean);
   if(alias.length===0) alias.push(nombre);
   const generico = document.getElementById("pcGenerico").value.trim();
+  const sinonimos = document.getElementById("pcSinonimos").value.split(",").map(a=>a.trim()).filter(Boolean);
   const numOrNull = (v)=>{ const n = parseFloat(v); return (v===""||isNaN(n)) ? null : n; };
 
   // La merma tiene que ser un porcentaje real: negativa abarataría el producto por arte de
@@ -7003,6 +7062,7 @@ async function guardarProducto(nuevoEstado){
     nombre_comercial: nombre,
     alias_factura: alias,
     ingrediente_generico: generico || null,
+    sinonimos_menu: sinonimos,
     nombre_normalizado: nombre,
     marca: document.getElementById("pcMarca").value.trim(),
     familia: document.getElementById("pcFamilia").value.trim(),
