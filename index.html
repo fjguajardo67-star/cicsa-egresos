@@ -1958,7 +1958,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-c";
+const APP_BUILD = "2026-08-19-d";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5846,16 +5846,42 @@ async function analizarPreciosCfdi(){
 // alias de un producto existente o en producto nuevo se puede probar sin red y sin DOM.
 // Una propuesta que no corresponde a ningún renglón real se tira: si la IA inventa una
 // descripción que no estaba en el CFDI, no debe acabar en el catálogo.
+// Todos los nombres con los que se puede reconocer un producto del catálogo: su nombre
+// comercial, el de receta, el normalizado y sus alias de factura. Es el índice que evita
+// duplicados — si el nombre ya está aquí, el producto YA EXISTE.
+function _indiceNombresCatalogo(catalogo){
+  const idx = new Map();
+  (catalogo||[]).forEach(p=>{
+    [p.nombre_comercial, p.ingrediente_generico, p.nombre_normalizado, ...(p.alias_factura||[])].forEach(n=>{
+      const k = normalizarParaComparar(n);
+      if(k && !idx.has(k)) idx.set(k, p);
+    });
+  });
+  return idx;
+}
+
+// Decide a dónde va una fila según el nombre que tenga EN ESTE MOMENTO — la IA lo propuso, pero
+// la persona pudo corregirlo antes de guardar. Si ese nombre ya existe en el catálogo NO se crea
+// un duplicado: la descripción se agrega como alias del producto que ya está y se le actualiza el
+// precio. Esto es lo que impide que "Cebolla" entre por segunda vez solo porque una factura la
+// escribió distinto, y es también lo que hace que corregir el nombre a mano surta efecto.
+function decidirDestinoIdent(accion, idxNombres){
+  if(!accion || accion.tipo === "ignorar") return accion;
+  const idx = idxNombres || new Map();
+  const existente = idx.get(normalizarParaComparar(accion.nombre))
+                 || idx.get(normalizarParaComparar(accion.desc));
+  if(existente){
+    return { ...accion, tipo:"alias", producto: existente,
+             nombre: existente.nombre_comercial || existente.nombre_normalizado || accion.nombre };
+  }
+  const { producto, ...resto } = accion;
+  return { ...resto, tipo:"nuevo" };
+}
+
 function planIdentificacion(propuestas, precios, catalogo){
   const porDesc = new Map();
   (precios||[]).forEach(p=>{ const k = normalizarParaComparar(p && p.desc); if(k) porDesc.set(k, p); });
-  const porNombre = new Map();
-  (catalogo||[]).forEach(p=>{
-    [p.nombre_comercial, p.ingrediente_generico, p.nombre_normalizado].forEach(n=>{
-      const k = normalizarParaComparar(n);
-      if(k && !porNombre.has(k)) porNombre.set(k, p);
-    });
-  });
+  const porNombre = _indiceNombresCatalogo(catalogo);
   const acciones = [], vistos = new Set();
   (propuestas||[]).forEach(pr=>{
     const desc = String((pr && pr.descripcion) || "").trim();
@@ -5872,10 +5898,14 @@ function planIdentificacion(propuestas, precios, catalogo){
       return;
     }
     const ex = (pr && pr.existente) ? porNombre.get(normalizarParaComparar(pr.existente)) : null;
-    if(ex) acciones.push({ tipo:"alias", desc, precio, confianza, producto: ex,
-                           nombre: ex.nombre_comercial || ex.nombre_normalizado || String(pr.existente) });
-    else   acciones.push({ tipo:"nuevo", desc, precio, confianza, nombre: nombreIA,
-                           unidad: String((pr && pr.unidad) || precio.unidad || "") });
+    const base = ex
+      ? { tipo:"alias", desc, precio, confianza, producto: ex,
+          nombre: ex.nombre_comercial || ex.nombre_normalizado || String(pr.existente) }
+      : { tipo:"nuevo", desc, precio, confianza, nombre: nombreIA,
+          unidad: String((pr && pr.unidad) || precio.unidad || "") };
+    // Aunque la IA no haya reconocido el producto, si el nombre que propuso YA existe en el
+    // catálogo esto lo convierte en alias en vez de crear un duplicado.
+    acciones.push(decidirDestinoIdent(base, porNombre));
   });
   return acciones;
 }
@@ -5924,20 +5954,49 @@ function renderIdentificacion(){
                    : c==="baja" ? `<span style="color:var(--red)">baja</span>`
                                 : `<span style="color:var(--naranja)">media</span>`;
   const filas = acc.map((a,i)=>{
-    const destino = a.tipo==="alias" ? `→ <strong>${esc(a.nombre)}</strong> <span style="color:var(--txt2)">(ya existe)</span>`
-                  : a.tipo==="nuevo" ? `→ <strong>${esc(a.nombre)}</strong> <span style="color:var(--txt2)">(producto nuevo)</span>`
-                                     : `<span style="color:var(--txt2)">no es insumo de cocina — se omite</span>`;
+    if(a.tipo==="ignorar"){
+      return `<div style="display:grid;grid-template-columns:28px 1fr 100px;gap:8px;align-items:start;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;opacity:.6">
+        <input type="checkbox" disabled style="width:15px;height:15px">
+        <div><div>${esc(a.desc)}</div><div style="font-size:11px;color:var(--txt2);margin-top:1px">no es insumo de cocina — se omite</div></div>
+        <div class="amount-cell" style="font-family:'JetBrains Mono',monospace">${fmt(a.precio.precio)}</div>
+      </div>`;
+    }
+    const estado = a.tipo==="alias"
+      ? `<span style="color:var(--vd)">ya existe — solo se actualiza su precio</span>`
+      : `<span style="color:var(--naranja)">producto nuevo</span>`;
     return `<div style="display:grid;grid-template-columns:28px 1fr 100px;gap:8px;align-items:start;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
-      <input type="checkbox" ${a._sel?"checked":""} ${a.tipo==="ignorar"?"disabled":""} style="width:15px;height:15px;cursor:pointer;accent-color:var(--vd)"
+      <input type="checkbox" ${a._sel?"checked":""} style="width:15px;height:15px;cursor:pointer;accent-color:var(--vd)"
         onchange="_cfdiAcciones[${i}]._sel=this.checked">
-      <div><div>${esc(a.desc)}</div><div style="font-size:11px;margin-top:1px">${destino} · confianza ${badge(a.confianza)}</div></div>
+      <div>
+        <div>${esc(a.desc)}</div>
+        <div style="display:flex;gap:5px;align-items:center;margin-top:3px">
+          <span style="color:var(--txt2)">→</span>
+          <input type="text" value="${esc(a.nombre)}" onchange="cambiarNombreIdent(${i}, this.value)"
+            title="Corrige el nombre si hace falta. Si escribes uno que ya existe en el catálogo, se guarda ahí en vez de crear otro."
+            style="border:1.5px solid var(--border);border-radius:6px;padding:4px 7px;font-size:12px;flex:1;min-width:0;font-family:'DM Sans',sans-serif">
+        </div>
+        <div style="font-size:11px;margin-top:2px">${estado} · confianza ${badge(a.confianza)}</div>
+      </div>
       <div class="amount-cell" style="font-family:'JetBrains Mono',monospace">${fmt(a.precio.precio)}</div>
     </div>`;
   }).join("");
   const n = acc.filter(a=>a._sel).length;
-  out.innerHTML = `<div style="font-size:12px;color:var(--txt2);margin:6px 0">La IA <strong>propone</strong>; tú confirmas. Viene marcado solo lo de confianza alta — revisa lo demás antes de guardarlo.</div>
+  const nNuevos = acc.filter(a=>a._sel && a.tipo==="nuevo").length;
+  const nAlias  = acc.filter(a=>a._sel && a.tipo==="alias").length;
+  out.innerHTML = `<div style="font-size:12px;color:var(--txt2);margin:6px 0">La IA <strong>propone</strong>; tú confirmas. Viene marcado solo lo de confianza alta — revisa lo demás antes de guardarlo.<br><strong>Puedes corregir el nombre</strong>: si escribes uno que ya existe en el catálogo, la descripción se guarda como alias de ese producto y <strong>no se crea un duplicado</strong>.</div>
     <div style="max-height:260px;overflow:auto">${filas}</div>
-    <button class="btn btn-gold" style="padding:7px 12px;font-size:12px;margin-top:8px" onclick="aplicarIdentificacion()">✅ Guardar los ${n} seleccionado(s)</button>`;
+    <button class="btn btn-gold" style="padding:7px 12px;font-size:12px;margin-top:8px" onclick="aplicarIdentificacion()">✅ Guardar los ${n} seleccionado(s)</button>
+    <span style="font-size:11.5px;color:var(--txt2);margin-left:8px">${nAlias} a productos que ya existen · ${nNuevos} nuevo(s)</span>`;
+}
+
+// Al corregir el nombre a mano se vuelve a decidir el destino: escribir uno que ya existe
+// convierte la fila en alias del producto existente, sin crear otro.
+function cambiarNombreIdent(i, valor){
+  const a = (_cfdiAcciones||[])[i];
+  if(!a) return;
+  a.nombre = String(valor==null?"":valor).trim() || a.desc;
+  _cfdiAcciones[i] = decidirDestinoIdent(a, _indiceNombresCatalogo(_catalogoProductos));
+  renderIdentificacion();
 }
 
 // Escribe lo confirmado: alias sobre un producto que ya existe, o producto nuevo en "pendiente"
@@ -5946,8 +6005,24 @@ async function aplicarIdentificacion(){
   const sel = (_cfdiAcciones||[]).filter(a=>a._sel && a.tipo!=="ignorar");
   if(!sel.length) return;
   let alias = 0, nuevos = 0, errores = 0;
+  // Dos renglones distintos pueden apuntar al MISMO producto nuevo (dos claves de Walmart que son
+  // la misma cebolla). El primero lo crea y el segundo se cuelga de ese, en vez de crear un
+  // gemelo que después habría que fusionar a mano.
+  const creados = new Map();
   for(const a of sel){
     try{
+      if(a.tipo==="nuevo"){
+        const k = normalizarParaComparar(a.nombre);
+        const ya = creados.get(k);
+        if(ya){
+          const yaAlias = (ya.alias_factura||[]).some(x=>normalizarParaComparar(x)===normalizarParaComparar(a.desc));
+          if(!yaAlias) ya.alias_factura = [...(ya.alias_factura||[]), a.desc];
+          const { id, ...datos } = ya;
+          await fbUpdateDoc(CATALOGO_COL, id, datos);
+          alias++;
+          continue;
+        }
+      }
       if(a.tipo==="alias"){
         const p = a.producto;
         if(!p || !p.id) continue;
@@ -5974,7 +6049,12 @@ async function aplicarIdentificacion(){
           factura_origen: a.precio.folio || "", notas: "Identificado desde el CFDI"
         };
         const id = await fbCreateDoc(CATALOGO_COL, nuevo);
-        if(id){ _catalogoProductos.push({ id, ...nuevo }); nuevos++; }
+        if(id){
+          const doc = { id, ...nuevo };
+          _catalogoProductos.push(doc);
+          creados.set(normalizarParaComparar(a.nombre), doc);
+          nuevos++;
+        }
       }
     }catch(e){ console.warn("aplicarIdentificacion:", e); errores++; }
   }
