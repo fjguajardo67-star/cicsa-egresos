@@ -92,6 +92,7 @@ const FUNCS = [
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
   "variantesLlaveMenu", "llavesMenuDeFila",
+  "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -692,6 +693,86 @@ t("mismo día e importe SIN folio (compras reales repetidas) → NO se marca", (
     { id: "2", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-06", categoria: "Tortilla", importe: 1200.00 },
   ]);
   assert.equal(r.length, 0);
+});
+
+console.log("\n== precios desde los renglones del CFDI (dato fiscal, sin IA) ==");
+const CONCEPTO = (d, vu, extra = "") =>
+  `<cfdi:Concepto ClaveProdServ="50221300" Cantidad="905" ClaveUnidad="KGM" Descripcion="${d}" ValorUnitario="${vu}" Importe="100.00" ${extra}/>`;
+t("se extrae cada renglón con su valor unitario exacto", () => {
+  const c = S._cfdiConceptos("<x>" + CONCEPTO("KILOGRAMOS DE TORTILLAS", "25.00") + "</x>");
+  assert.equal(c.length, 1);
+  assert.equal(c[0].desc, "KILOGRAMOS DE TORTILLAS");
+  close(c[0].precio, 25);
+  assert.equal(c[0].unidad, "KGM", "la clave del SAT se guarda tal cual");
+  assert.equal(c[0].clave, "50221300");
+});
+t("las entidades XML se desescapan o el alias nunca casaría", () => {
+  const c = S._cfdiConceptos("<x>" + CONCEPTO("JUGO SAZONADOR M&amp;E BOT 1 L", "70") + "</x>");
+  assert.equal(c[0].desc, "JUGO SAZONADOR M&E BOT 1 L");
+  assert.equal(S._desescaparXml("A &lt;b&gt; &quot;c&quot;"), 'A <b> "c"');
+});
+t("un renglón sin descripción no entra (no hay nada que identificar)", () => {
+  assert.deepEqual(S._cfdiConceptos("<x>" + CONCEPTO("", "25") + "</x>"), []);
+});
+t("la unidad del SAT se traduce; lo desconocido se deja vacío, no se inventa", () => {
+  assert.equal(S.unidadDesdeClaveSAT("KGM"), "kg");
+  assert.equal(S.unidadDesdeClaveSAT("H87"), "pz");
+  assert.equal(S.unidadDesdeClaveSAT("XBX"), "cja");
+  assert.equal(S.unidadDesdeClaveSAT("ZZ"), "", "inventar la unidad costearía con un factor mil");
+  assert.equal(S.unidadDesdeClaveSAT(null), "");
+});
+
+const CFDI = (fecha, tipo, conceptos, rfcRec = "MIRFC") =>
+  ({ tipo, fecha, rfcReceptor: rfcRec, proveedor: "PROV", uuid: "U-" + fecha, conceptos });
+t("de una descripción repetida gana el renglón MÁS RECIENTE", () => {
+  const p = S.preciosDesdeCfdis([
+    CFDI("2026-07-05", "I", [{ desc: "LECHUGA ROMA", precio: 30, unidad: "KGM" }]),
+    CFDI("2026-07-28", "I", [{ desc: "LECHUGA ROMA", precio: 35.81, unidad: "KGM" }]),
+  ]);
+  assert.equal(p.length, 1);
+  close(p[0].precio, 35.81);
+  assert.equal(p[0].fecha, "2026-07-28");
+});
+t("solo cuentan las facturas de gasto: pago y nómina no traen precios", () => {
+  const p = S.preciosDesdeCfdis([
+    CFDI("2026-07-05", "P", [{ desc: "PAGO", precio: 100 }]),
+    CFDI("2026-07-06", "N", [{ desc: "SUELDO", precio: 100 }]),
+  ]);
+  assert.deepEqual(p, [], "un complemento de pago no es una compra");
+});
+t("una factura que YO emití es una venta, no una compra", () => {
+  const p = S.preciosDesdeCfdis([
+    CFDI("2026-07-05", "I", [{ desc: "COMIDA", precio: 90 }], "MIRFC"),
+    CFDI("2026-07-06", "I", [{ desc: "COMIDA", precio: 90 }], "MIRFC"),
+    CFDI("2026-07-07", "I", [{ desc: "SERVICIO DE COMEDOR", precio: 500 }], "OTRORFC"),
+  ]);
+  assert.deepEqual(p.map(x => x.desc), ["COMIDA"], "el receptor más frecuente es uno mismo");
+});
+t("un renglón sin precio no sirve para costear", () => {
+  assert.deepEqual(S.preciosDesdeCfdis([CFDI("2026-07-05", "I", [{ desc: "X", precio: 0 }])]), []);
+});
+t("el catálogo identifica por nombre y por alias, igual que al leer facturas", () => {
+  const cat = [
+    { id: "1", nombre_comercial: "Lechuga romana", alias_factura: ["LECHUGA ROMA"] },
+    { id: "2", nombre_comercial: "Tortilla de maíz", alias_factura: [] },
+  ];
+  const r = S.resolverPreciosCatalogo(
+    [{ desc: "LECHUGA ROMA", precio: 35 }, { desc: "tortilla de maiz", precio: 25 }, { desc: "MM PASTA TOM", precio: 157 }],
+    cat);
+  assert.equal(r.identificados.length, 2, "uno por alias, otro por nombre sin acentos");
+  assert.deepEqual(r.porIdentificar.map(x => x.desc), ["MM PASTA TOM"]);
+});
+t("NO se adivina por parecido: 'Ajo' jamás debe casar con 'UNIFORMES DE TRABAJO'", () => {
+  // Caso real de un mes de CFDIs: el emparejado difuso cazaba "Ajo" dentro de "trabAJO",
+  // "Sal" con "SALSA CATSUP" y "Mantequilla" con "MANTECA". Un precio equivocado costea mal
+  // y nadie se entera, así que lo dudoso se pregunta — nunca se aplica solo.
+  const cat = [{ id: "1", nombre_comercial: "Ajo", alias_factura: ["AJO"] },
+               { id: "2", nombre_comercial: "Sal", alias_factura: ["SAL"] }];
+  const r = S.resolverPreciosCatalogo(
+    [{ desc: "UNIFORMES DE TRABAJO", precio: 4357.3 }, { desc: "SALSA CATSUP SOBRE STAR VALU", precio: 95.86 }],
+    cat);
+  assert.equal(r.identificados.length, 0, "ninguno de los dos es un match real");
+  assert.equal(r.porIdentificar.length, 2);
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
