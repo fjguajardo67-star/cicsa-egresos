@@ -93,6 +93,7 @@ const FUNCS = [
   "fmt", "duplicadosSospechosos", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
   "variantesLlaveMenu", "llavesMenuDeFila",
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
+  "planIdentificacion", "_identSugerida",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -773,6 +774,65 @@ t("NO se adivina por parecido: 'Ajo' jamás debe casar con 'UNIFORMES DE TRABAJO
     cat);
   assert.equal(r.identificados.length, 0, "ninguno de los dos es un match real");
   assert.equal(r.porIdentificar.length, 2);
+});
+
+console.log("\n== identificación asistida: la IA propone, la persona confirma ==");
+const PRECIO = (desc, precio = 10, extra = {}) =>
+  ({ desc, precio, unidad: "kg", proveedor: "PROV", fecha: "2026-07-28", folio: "U1", ...extra });
+const CAT2 = [
+  { id: "1", nombre_comercial: "Queso americano", ingrediente_generico: "Queso americano", alias_factura: [] },
+  { id: "2", nombre_comercial: "Puré de tomate", ingrediente_generico: "Puré de tomate", alias_factura: [] },
+];
+t("si la IA reconoce un producto que ya existe, se vuelve alias — no un duplicado", () => {
+  const a = S.planIdentificacion(
+    [{ descripcion: "MM QUESO AME", producto: "Queso americano", existente: "Queso americano", confianza: "alta", es_insumo: true }],
+    [PRECIO("MM QUESO AME", 173.91)], CAT2);
+  assert.equal(a.length, 1);
+  assert.equal(a[0].tipo, "alias");
+  assert.equal(a[0].producto.id, "1");
+});
+t("si no reconoce ninguno existente, se propone producto nuevo", () => {
+  const a = S.planIdentificacion(
+    [{ descripcion: "BC 3K SPAGU", producto: "Espagueti", existente: null, unidad: "kg", confianza: "media", es_insumo: true }],
+    [PRECIO("BC 3K SPAGU", 92.07)], CAT2);
+  assert.equal(a[0].tipo, "nuevo");
+  assert.equal(a[0].nombre, "Espagueti");
+  assert.equal(a[0].unidad, "kg");
+});
+t("lo que no es insumo de cocina no ensucia el catálogo", () => {
+  const a = S.planIdentificacion(
+    [{ descripcion: "UNIFORMES DE TRABAJO", producto: "Uniformes", existente: null, es_insumo: false, confianza: "alta" }],
+    [PRECIO("UNIFORMES DE TRABAJO", 4357.3)], CAT2);
+  assert.equal(a[0].tipo, "ignorar");
+  assert.ok(!S._identSugerida(a[0]), "y ni siquiera viene marcado");
+});
+t("una propuesta que NO corresponde a ningún renglón del CFDI se descarta", () => {
+  // Si el modelo inventa una descripción que nunca estuvo en la factura, no debe llegar al catálogo.
+  const a = S.planIdentificacion(
+    [{ descripcion: "PRODUCTO QUE NO EXISTE", producto: "Fantasma", existente: null, es_insumo: true, confianza: "alta" }],
+    [PRECIO("MM QUESO AME")], CAT2);
+  assert.deepEqual(a, []);
+});
+t("si la IA repite una descripción, solo cuenta una vez", () => {
+  const a = S.planIdentificacion(
+    [{ descripcion: "MM QUESO AME", producto: "Queso americano", existente: "Queso americano", es_insumo: true, confianza: "alta" },
+     { descripcion: "MM QUESO AME", producto: "Otra cosa", existente: null, es_insumo: true, confianza: "baja" }],
+    [PRECIO("MM QUESO AME")], CAT2);
+  assert.equal(a.length, 1);
+  assert.equal(a[0].tipo, "alias", "gana la primera, no la duplicada");
+});
+t("un 'existente' que no está en el catálogo NO se da por bueno: se crea nuevo", () => {
+  const a = S.planIdentificacion(
+    [{ descripcion: "X", producto: "Chorizo", existente: "Chorizo argentino", es_insumo: true, confianza: "alta" }],
+    [PRECIO("X")], CAT2);
+  assert.equal(a[0].tipo, "nuevo", "no se inventa un producto al que apuntar");
+});
+t("solo lo de confianza ALTA viene premarcado; lo dudoso lo decide la persona", () => {
+  const alta = { descripcion: "A", producto: "P", existente: null, es_insumo: true, confianza: "alta" };
+  const baja = { descripcion: "B", producto: "Q", existente: null, es_insumo: true, confianza: "baja" };
+  const a = S.planIdentificacion([alta, baja], [PRECIO("A"), PRECIO("B")], CAT2);
+  assert.equal(S._identSugerida(a[0]), true);
+  assert.equal(S._identSugerida(a[1]), false, "confianza baja NO se guarda sin revisar");
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
