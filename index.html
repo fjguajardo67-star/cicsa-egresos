@@ -1960,7 +1960,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-f";
+const APP_BUILD = "2026-08-19-g";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5897,11 +5897,26 @@ async function analizarPreciosCfdi(){
     return;
   }
   const { identificados, porIdentificar } = resolverPreciosCatalogo(precios, _catalogoProductos);
+  // Todo viene marcado (son coincidencias exactas contra el catálogo), pero se puede destildar
+  // lo que no se quiera subir: antes la lista era de solo lectura y el botón aplicaba los 85
+  // aunque en pantalla solo cupieran 40.
+  identificados.forEach(p=>{ p._sel = true; });
   _cfdiPreciosIdent = identificados;
   _cfdiPreciosPorIdent = porIdentificar;
   _cfdiAcciones = [];
-  const filas = (arr, ident) => arr.slice(0, 40).map(p=>`<div style="display:grid;grid-template-columns:1fr 110px 90px;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
-      <div>${esc(p.desc)}${ident?`<div style="font-size:10.5px;color:var(--vd)">→ ${esc(p.producto.nombre_comercial||"")}</div>`:`<div style="font-size:10.5px;color:var(--txt2)">${esc(p.proveedor)} · ${esc(p.fecha)}</div>`}</div>
+  // Los identificados se listan COMPLETOS (con scroll) y con casilla: son los que se van a
+  // escribir al catálogo, así que hay que poder verlos todos y quitar los que no.
+  const filasIdent = arr => arr.map((p,i)=>`<div style="display:grid;grid-template-columns:26px 1fr 110px 80px;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <input type="checkbox" ${p._sel!==false?"checked":""} style="width:15px;height:15px;cursor:pointer;accent-color:var(--vd)"
+        onchange="_cfdiPreciosIdent[${i}]._sel=this.checked;_pintarBotonPrecios()">
+      <div>${esc(p.desc)}<div style="font-size:10.5px;color:var(--vd)">→ ${esc(p.producto.nombre_comercial||"")} · ${esc(p.proveedor)} · ${esc(p.fecha)}</div></div>
+      <div class="amount-cell" style="font-family:'JetBrains Mono',monospace">${fmt(p.precio)}</div>
+      <div style="color:var(--txt2)">${esc(p.unidad||"—")}</div>
+    </div>`).join("");
+  // Los de "por identificar" son informativos (todavía no se escribe nada de ellos), así que se
+  // recortan para no hacer la pantalla eterna.
+  const filasPend = arr => arr.slice(0, 40).map(p=>`<div style="display:grid;grid-template-columns:1fr 110px 90px;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <div>${esc(p.desc)}<div style="font-size:10.5px;color:var(--txt2)">${esc(p.proveedor)} · ${esc(p.fecha)}</div></div>
       <div class="amount-cell" style="font-family:'JetBrains Mono',monospace">${fmt(p.precio)}</div>
       <div style="color:var(--txt2)">${esc(p.unidad||"—")}</div>
     </div>`).join("");
@@ -5911,13 +5926,33 @@ async function analizarPreciosCfdi(){
       <span style="color:var(--vd)"><strong>${identificados.length}</strong> ya identificado(s)</span> ·
       <span style="color:var(--naranja)"><strong>${porIdentificar.length}</strong> por identificar</span>
     </div>
-    ${identificados.length?`<details open><summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--vd)">✅ Se pueden actualizar ya (${identificados.length})</summary><div style="margin-top:6px">${filas(identificados,true)}</div>${identificados.length>40?`<div style="font-size:11px;color:var(--txt2);margin-top:4px">…y ${identificados.length-40} más</div>`:""}</details>`:""}
+    ${identificados.length?`<details open><summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--vd)">✅ Se pueden actualizar ya (${identificados.length})</summary>
+      <div style="font-size:11.5px;color:var(--txt2);margin:6px 0">Destilda lo que <strong>no</strong> quieras subir. Solo se actualiza el precio de estos productos — ninguno se crea.
+        <a href="#" onclick="marcarTodosPrecios(true);return false" style="color:var(--vd);margin-left:6px">todos</a> ·
+        <a href="#" onclick="marcarTodosPrecios(false);return false" style="color:var(--vd)">ninguno</a></div>
+      <div id="cfdiPreciosLista" style="max-height:300px;overflow:auto">${filasIdent(identificados)}</div></details>`:""}
     ${porIdentificar.length?`<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--naranja)">❓ Por identificar (${porIdentificar.length})</summary>
       <div style="font-size:11.5px;color:var(--txt2);margin:6px 0">Nadie ha dicho todavía qué producto es cada una. Se aprende una vez y no se vuelve a preguntar: puedes identificarlas con IA aquí abajo (manda solo el <strong>texto</strong>, no la imagen de la factura) o a mano, agregando la descripción como alias en <strong>Productos</strong>.</div>
       <button class="btn btn-light" style="padding:6px 10px;font-size:12px;margin-bottom:6px" onclick="identificarConIA()">🤖 Identificar con IA (solo texto)</button>
       <div id="cfdiIdentBody"></div>
-      <div>${filas(porIdentificar,false)}</div>${porIdentificar.length>40?`<div style="font-size:11px;color:var(--txt2);margin-top:4px">…y ${porIdentificar.length-40} más</div>`:""}</details>`:""}`;
+      <div>${filasPend(porIdentificar)}</div>${porIdentificar.length>40?`<div style="font-size:11px;color:var(--txt2);margin-top:4px">…y ${porIdentificar.length-40} más (se procesan todas al identificar con IA)</div>`:""}</details>`:""}`;
   if(btn) btn.style.display = identificados.length ? "inline-flex" : "none";
+  _pintarBotonPrecios();
+}
+
+// El botón dice CUÁNTOS se van a escribir, para que nunca aplique más de lo que se ve marcado.
+function _pintarBotonPrecios(){
+  const btn = document.getElementById("btnAplicarPreciosCfdi");
+  if(!btn) return;
+  const n = (_cfdiPreciosIdent||[]).filter(p=>p._sel!==false).length;
+  btn.textContent = `✅ Actualizar catálogo (${n})`;
+  btn.disabled = n === 0;
+}
+function marcarTodosPrecios(v){
+  (_cfdiPreciosIdent||[]).forEach(p=>{ p._sel = v; });
+  const cont = document.getElementById("cfdiPreciosLista");
+  if(cont) cont.querySelectorAll("input[type=checkbox]").forEach(c=>{ c.checked = v; });
+  _pintarBotonPrecios();
 }
 
 // ── Capa 2: qué hacer con lo que la IA propone ──────────────────────────────
@@ -6149,7 +6184,7 @@ async function aplicarIdentificacion(){
 // Escribe al catálogo SOLO lo identificado por match exacto. Un XML viejo no debe pisar un precio
 // más nuevo: si el producto ya trae una fecha de precio posterior, ese renglón se salta.
 async function aplicarPreciosCfdiAlCatalogo(){
-  const items = _cfdiPreciosIdent || [];
+  const items = (_cfdiPreciosIdent || []).filter(it=>it._sel !== false);
   if(!items.length) return;
   const btn = document.getElementById("btnAplicarPreciosCfdi");
   const out = document.getElementById("cfdiPreciosBody");
@@ -6171,7 +6206,8 @@ async function aplicarPreciosCfdiAlCatalogo(){
     const r = await Promise.allSettled(tareas.slice(i,i+25).map(t=>fbUpdateDoc(CATALOGO_COL, t.id, t.datos)));
     r.forEach(x=>{ if(x.status==="fulfilled") aplicados++; else errores++; });
   }
-  if(btn){ btn.disabled = false; btn.textContent = "✅ Actualizar catálogo"; }
+  if(btn) btn.disabled = false;
+  _pintarBotonPrecios();
   if(out){
     out.insertAdjacentHTML("afterbegin",
       `<div class="status ok" style="display:block;margin-bottom:8px">✅ ${aplicados} precio(s) actualizados desde los CFDI` +
