@@ -93,7 +93,7 @@ const FUNCS = [
   "fmt", "duplicadosSospechosos", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
   "variantesLlaveMenu", "llavesMenuDeFila",
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
-  "planIdentificacion", "_identSugerida",
+  "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -833,6 +833,49 @@ t("solo lo de confianza ALTA viene premarcado; lo dudoso lo decide la persona", 
   const a = S.planIdentificacion([alta, baja], [PRECIO("A"), PRECIO("B")], CAT2);
   assert.equal(S._identSugerida(a[0]), true);
   assert.equal(S._identSugerida(a[1]), false, "confianza baja NO se guarda sin revisar");
+});
+
+console.log("\n== antiduplicados: un producto que ya existe NO se vuelve a crear ==");
+t("si la IA propone como NUEVO algo que ya está en el catálogo, se vuelve alias", () => {
+  // El riesgo real: la IA no reconoce "Queso americano" en la lista y propone crearlo otra vez.
+  const a = S.planIdentificacion(
+    [{ descripcion: "BC1.36K QCRE", producto: "Queso americano", existente: null, es_insumo: true, confianza: "alta" }],
+    [PRECIO("BC1.36K QCRE", 120)], CAT2);
+  assert.equal(a[0].tipo, "alias", "no se crea un segundo 'Queso americano'");
+  assert.equal(a[0].producto.id, "1");
+});
+t("el nombre se compara también contra los alias ya guardados", () => {
+  const cat = [{ id: "9", nombre_comercial: "Cebolla", alias_factura: ["CEBOLLA BLANCA"] }];
+  const a = S.planIdentificacion(
+    [{ descripcion: "20/500ROMA", producto: "Cebolla blanca", existente: null, es_insumo: true, confianza: "media" }],
+    [PRECIO("20/500ROMA", 30)], cat);
+  assert.equal(a[0].tipo, "alias");
+  assert.equal(a[0].nombre, "Cebolla", "cae en el producto real, no en el alias");
+});
+t("corregir el nombre a mano reconvierte la fila a alias del producto existente", () => {
+  const idx = S._indiceNombresCatalogo(CAT2);
+  const nuevo = { tipo: "nuevo", desc: "MM PASTA TOM", nombre: "Pasta de tomate", confianza: "media", precio: PRECIO("MM PASTA TOM") };
+  const corregido = S.decidirDestinoIdent({ ...nuevo, nombre: "Puré de tomate" }, idx);
+  assert.equal(corregido.tipo, "alias");
+  assert.equal(corregido.producto.id, "2");
+});
+t("y al revés: si se corrige a un nombre que no existe, vuelve a ser producto nuevo", () => {
+  const idx = S._indiceNombresCatalogo(CAT2);
+  const alias = S.decidirDestinoIdent({ tipo: "nuevo", desc: "X", nombre: "Puré de tomate", precio: PRECIO("X") }, idx);
+  assert.equal(alias.tipo, "alias");
+  const devuelta = S.decidirDestinoIdent({ ...alias, nombre: "Salsa bechamel" }, idx);
+  assert.equal(devuelta.tipo, "nuevo");
+  assert.ok(!devuelta.producto, "no queda apuntando al producto anterior");
+});
+t("la selección del usuario sobrevive al cambio de nombre", () => {
+  const idx = S._indiceNombresCatalogo(CAT2);
+  const r = S.decidirDestinoIdent({ tipo: "nuevo", desc: "X", nombre: "Puré de tomate", _sel: true, precio: PRECIO("X") }, idx);
+  assert.equal(r._sel, true, "no se destilda solo por corregir el nombre");
+});
+t("una fila 'no es insumo' no se convierte en producto por tener nombre", () => {
+  const idx = S._indiceNombresCatalogo(CAT2);
+  const r = S.decidirDestinoIdent({ tipo: "ignorar", desc: "UNIFORMES", nombre: "Puré de tomate" }, idx);
+  assert.equal(r.tipo, "ignorar", "omitir gana sobre cualquier coincidencia de nombre");
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
