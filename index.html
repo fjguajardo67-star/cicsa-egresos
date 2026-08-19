@@ -1335,6 +1335,15 @@ body.snav-min .side-theme span { display:none; }
         <button class="btn btn-light" id="btnBorrarMesCfdi" style="padding:8px 12px;display:none;color:var(--red)" onclick="eliminarMesCfdiSeleccionado()">🗑️ Eliminar este mes</button>
       </div>
       <div id="cfdisStoreBody" style="max-height:220px;overflow:auto;margin-top:10px"></div>
+      <div style="border-top:1.5px solid var(--border);margin-top:12px;padding-top:12px">
+        <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:4px">💲 Precios desde los CFDI · Sin IA</div>
+        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Cada renglón del CFDI trae su <strong>valor unitario exacto</strong> — es dato fiscal, no una lectura que se pueda equivocar. Aquí se compara contra el catálogo: lo que ya se sabe identificar se actualiza con un clic, y lo que no, queda como lista de trabajo.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn btn-green" style="padding:8px 12px" onclick="analizarPreciosCfdi()">💲 Revisar precios de los CFDI guardados</button>
+          <button class="btn btn-gold" id="btnAplicarPreciosCfdi" style="padding:8px 12px;display:none" onclick="aplicarPreciosCfdiAlCatalogo()">✅ Actualizar catálogo</button>
+        </div>
+        <div id="cfdiPreciosBody" style="margin-top:10px"></div>
+      </div>
     </div>
     <div class="btn-row">
       <button class="btn btn-light" id="btnSatExport" style="display:none" onclick="exportarConciliacion()">📊 Exportar Excel</button>
@@ -1949,7 +1958,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-a";
+const APP_BUILD = "2026-08-19-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5546,7 +5555,7 @@ async function guardarCfdisEnStore(cfdis){
     const docId = uuid.replace(/[^A-Za-z0-9_-]/g,"_");
     // Si ya se descartó a mano, volver a subir el XML NO debe resucitarlo.
     const prev = _cfdisStore.find(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase());
-    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, subtotal:parseFloat(c.subtotal)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), nombreReceptor:(c.nombreReceptor||""), folioComp:(c.folioComp||""), mes:cfdiMes(c.fecha), subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
+    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, subtotal:parseFloat(c.subtotal)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), nombreReceptor:(c.nombreReceptor||""), folioComp:(c.folioComp||""), mes:cfdiMes(c.fecha), conceptos:Array.isArray(c.conceptos)?c.conceptos:[], subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
     if(prev && prev.ignorado){ data.ignorado=true; data.ignoradoPor=prev.ignoradoPor||""; data.ignoradoTs=prev.ignoradoTs||""; }
     tareas.push({ docId, data });
     if(yaHay.has(uuid.toUpperCase())){ existentes++; const i=_cfdisStore.findIndex(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase()); if(i>=0)_cfdisStore[i]={id:docId,...data}; }
@@ -5662,6 +5671,52 @@ function _cfdiAttr(xml, tagLocal, attr){
 }
 // Convierte el XML de un CFDI en el mismo formato que consume conciliarSAT: folio (UUID/Folio
 // Fiscal), rfc y nombre del emisor, fecha y total del comprobante. Cero tokens: todo sale del XML.
+// Los atributos del XML vienen escapados (&amp;, &quot;…): "JUGO SAZONADOR M&amp;E" debe quedar
+// como "JUGO SAZONADOR M&E" o no va a casar nunca contra el alias del catálogo.
+function _desescaparXml(s){
+  return String(s==null?"":s)
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");   // al final: si no, un &amp;lt; se desescaparía dos veces
+}
+
+// La ClaveUnidad del SAT es un código estándar; se traduce a las unidades que maneja la app.
+// Lo que no está en la tabla se deja vacío a propósito — es mejor que el humano la ponga a que
+// el sistema invente una unidad y el costeo salga mal por un factor de mil.
+function unidadDesdeClaveSAT(clave){
+  const MAPA = { KGM:"kg", GRM:"kg", LTR:"lt", MLT:"lt", H87:"pz", EA:"pz", C62:"pz", PZ:"pz",
+                 XBX:"cja", XPK:"paq", XPP:"paq" };
+  return MAPA[String(clave==null?"":clave).trim().toUpperCase()] || "";
+}
+
+// Cada <cfdi:Concepto> es un renglón con su ValorUnitario EXACTO. Antes se descartaban al
+// parsear: se guardaba solo el encabezado, así que los 725 renglones de un mes se perdían aunque
+// el precio venía en el archivo. Son la fuente de precios más exacta del sistema — dato fiscal,
+// cero tokens — y por eso ahora se conservan.
+function _cfdiConceptos(xml){
+  const TOPE = 300;   // un documento de Firestore no debe crecer sin límite
+  const tags = String(xml==null?"":xml).match(/<(?:[\w.-]+:)?Concepto\b[^>]*>/gi) || [];
+  const out = [];
+  for(const t of tags){
+    const a = (attr)=>{
+      const m = t.match(new RegExp("\\b"+attr+"\\s*=\\s*\"([^\"]*)\"", "i"));
+      return m ? m[1] : "";
+    };
+    const desc = _desescaparXml(a("Descripcion")).trim();
+    if(!desc) continue;
+    out.push({
+      desc,
+      clave:    a("ClaveProdServ"),
+      unidad:   a("ClaveUnidad"),
+      cantidad: parseFloat(a("Cantidad"))  || 0,
+      precio:   parseFloat(a("ValorUnitario")) || 0,
+      importe:  parseFloat(a("Importe"))   || 0,
+    });
+    if(out.length >= TOPE) break;
+  }
+  return out;
+}
+
 function parseCFDIXML(xml){
   if(!xml || xml.indexOf("Comprobante")===-1) return null;
   const total  = parseFloat(_cfdiAttr(xml,"Comprobante","Total")||"0")||0;
@@ -5681,8 +5736,141 @@ function parseCFDIXML(xml){
   const nomRec = _cfdiAttr(xml,"Receptor","Nombre");
   const uuid   = _cfdiAttr(xml,"TimbreFiscalDigital","UUID");
   if(!uuid && !total) return null;                 // no parece un CFDI válido
-  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, total, subtotal: subtot, tipo, rfcReceptor: rfcRec, nombreReceptor: nomRec, folioComp: folioC };
+  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, total, subtotal: subtot, tipo, rfcReceptor: rfcRec, nombreReceptor: nomRec, folioComp: folioC, conceptos: _cfdiConceptos(xml) };
 }
+// ── Capa 1: de renglones de CFDI a precios por producto ─────────────────────
+// Del mes se queda el renglón MAS RECIENTE de cada descripción: la misma descripción se repite
+// mucho ("LECHUGA ROMA" 13 veces en un mes) y lo que interesa es el último precio pagado.
+// Solo cuentan los CFDI de tipo I (factura de gasto) recibidos por nosotros: un complemento de
+// pago no trae precios, y una factura que YO emití es una venta, no una compra.
+function preciosDesdeCfdis(cfdis, rfcPropio){
+  const lista = (cfdis||[]).filter(c=>String(c.tipo||"").toUpperCase().slice(0,1)==="I");
+  // Si no nos dicen cuál es nuestro RFC se deduce: el receptor que más se repite.
+  let rfc = rfcPropio || "";
+  if(!rfc){
+    const cuenta = {};
+    lista.forEach(c=>{ const r=c.rfcReceptor||""; if(r) cuenta[r]=(cuenta[r]||0)+1; });
+    rfc = Object.keys(cuenta).sort((a,b)=>cuenta[b]-cuenta[a])[0] || "";
+  }
+  const porDesc = new Map();
+  lista.forEach(c=>{
+    if(rfc && c.rfcReceptor && c.rfcReceptor !== rfc) return;
+    (c.conceptos||[]).forEach(k=>{
+      const desc = String(k.desc||"").trim();
+      const precio = parseFloat(k.precio)||0;
+      if(!desc || precio<=0) return;
+      const clave = normalizarParaComparar(desc);
+      const prev = porDesc.get(clave);
+      if(prev && (prev.fecha||"") >= (c.fecha||"")) return;
+      porDesc.set(clave, {
+        desc, precio, cantidad: parseFloat(k.cantidad)||0,
+        unidad: unidadDesdeClaveSAT(k.unidad), claveSat: k.clave||"",
+        proveedor: c.proveedor||"", fecha: c.fecha||"", folio: c.uuid||c.folio||"",
+      });
+    });
+  });
+  return [...porDesc.values()].sort((a,b)=> a.desc < b.desc ? -1 : (a.desc > b.desc ? 1 : 0));
+}
+
+// Parte los precios del CFDI en los que el catálogo YA sabe identificar (match EXACTO por nombre
+// o alias — el mismo criterio que usa la lectura de facturas) y los que nadie ha identificado.
+// NO se adivina por parecido: probando el emparejado difuso contra un mes real, "Ajo" cazaba con
+// "UNIFORMES DE TRABAJO", "Sal" con "SALSA CATSUP" y "Mantequilla" con "MANTECA". Lo dudoso se
+// pregunta, no se aplica: un precio equivocado costea mal y nadie se entera.
+function resolverPreciosCatalogo(precios, catalogo){
+  const idx = new Map();
+  (catalogo||[]).forEach(p=>{
+    [p.nombre_normalizado||p.nombre_comercial, ...(p.alias_factura||[])].forEach(n=>{
+      const k = normalizarParaComparar(n);
+      if(k && !idx.has(k)) idx.set(k, p);
+    });
+  });
+  const identificados = [], porIdentificar = [];
+  (precios||[]).forEach(pr=>{
+    const p = idx.get(normalizarParaComparar(pr.desc));
+    if(p) identificados.push({ ...pr, producto: p });
+    else porIdentificar.push(pr);
+  });
+  return { identificados, porIdentificar };
+}
+
+let _cfdiPreciosIdent = [];
+async function analizarPreciosCfdi(){
+  const out = document.getElementById("cfdiPreciosBody");
+  const btn = document.getElementById("btnAplicarPreciosCfdi");
+  if(!out) return;
+  out.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Leyendo los CFDI guardados…</div>`;
+  if(btn) btn.style.display = "none";
+  try{
+    await cargarCfdisStore();
+    await cargarCatalogo();
+  }catch(e){
+    out.innerHTML = `<div style="font-size:12px;color:var(--red)">No se pudieron leer los CFDI: ${esc(e.message||"error")}</div>`;
+    return;
+  }
+  const precios = preciosDesdeCfdis(_cfdisStore);
+  if(!precios.length){
+    // El caso más probable no es "no hay CFDI", sino "son de antes de que se guardaran renglones".
+    out.innerHTML = `<div style="font-size:12.5px;color:var(--txt2)">No hay renglones con precio en los CFDI guardados.<br>
+      Los XML subidos <strong>antes de esta versión</strong> se guardaron sin sus renglones (solo el encabezado).
+      Vuelve a subir los XML del mes y aquí van a aparecer los precios.</div>`;
+    return;
+  }
+  const { identificados, porIdentificar } = resolverPreciosCatalogo(precios, _catalogoProductos);
+  _cfdiPreciosIdent = identificados;
+  const filas = (arr, ident) => arr.slice(0, 40).map(p=>`<div style="display:grid;grid-template-columns:1fr 110px 90px;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <div>${esc(p.desc)}${ident?`<div style="font-size:10.5px;color:var(--vd)">→ ${esc(p.producto.nombre_comercial||"")}</div>`:`<div style="font-size:10.5px;color:var(--txt2)">${esc(p.proveedor)} · ${esc(p.fecha)}</div>`}</div>
+      <div class="amount-cell" style="font-family:'JetBrains Mono',monospace">${fmt(p.precio)}</div>
+      <div style="color:var(--txt2)">${esc(p.unidad||"—")}</div>
+    </div>`).join("");
+  out.innerHTML = `
+    <div style="font-size:12.5px;margin-bottom:8px">
+      <strong>${precios.length}</strong> producto(s) distinto(s) con precio exacto en los CFDI ·
+      <span style="color:var(--vd)"><strong>${identificados.length}</strong> ya identificado(s)</span> ·
+      <span style="color:var(--naranja)"><strong>${porIdentificar.length}</strong> por identificar</span>
+    </div>
+    ${identificados.length?`<details open><summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--vd)">✅ Se pueden actualizar ya (${identificados.length})</summary><div style="margin-top:6px">${filas(identificados,true)}</div>${identificados.length>40?`<div style="font-size:11px;color:var(--txt2);margin-top:4px">…y ${identificados.length-40} más</div>`:""}</details>`:""}
+    ${porIdentificar.length?`<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--naranja)">❓ Por identificar (${porIdentificar.length})</summary>
+      <div style="font-size:11.5px;color:var(--txt2);margin:6px 0">Nadie ha dicho todavía qué producto es cada una. Abre el producto en <strong>Productos</strong> y agrega la descripción como alias de factura: se aprende una vez y no se vuelve a preguntar.</div>
+      <div>${filas(porIdentificar,false)}</div>${porIdentificar.length>40?`<div style="font-size:11px;color:var(--txt2);margin-top:4px">…y ${porIdentificar.length-40} más</div>`:""}</details>`:""}`;
+  if(btn) btn.style.display = identificados.length ? "inline-flex" : "none";
+}
+
+// Escribe al catálogo SOLO lo identificado por match exacto. Un XML viejo no debe pisar un precio
+// más nuevo: si el producto ya trae una fecha de precio posterior, ese renglón se salta.
+async function aplicarPreciosCfdiAlCatalogo(){
+  const items = _cfdiPreciosIdent || [];
+  if(!items.length) return;
+  const btn = document.getElementById("btnAplicarPreciosCfdi");
+  const out = document.getElementById("cfdiPreciosBody");
+  if(btn){ btn.disabled = true; btn.textContent = "Actualizando…"; }
+  let aplicados = 0, saltados = 0, errores = 0;
+  const tareas = [];
+  for(const it of items){
+    const p = it.producto;
+    if(!p || !p.id) continue;
+    if((p.fecha_precio||"") > (it.fecha||"")){ saltados++; continue; }
+    p.precio_actual = it.precio;
+    p.fecha_precio  = it.fecha;
+    if(it.folio)     p.factura_origen  = it.folio;
+    if(it.proveedor) p.proveedor_nombre = it.proveedor;
+    const { id, ...datos } = p;
+    tareas.push({ id, datos });
+  }
+  for(let i=0;i<tareas.length;i+=25){
+    const r = await Promise.allSettled(tareas.slice(i,i+25).map(t=>fbUpdateDoc(CATALOGO_COL, t.id, t.datos)));
+    r.forEach(x=>{ if(x.status==="fulfilled") aplicados++; else errores++; });
+  }
+  if(btn){ btn.disabled = false; btn.textContent = "✅ Actualizar catálogo"; }
+  if(out){
+    out.insertAdjacentHTML("afterbegin",
+      `<div class="status ok" style="display:block;margin-bottom:8px">✅ ${aplicados} precio(s) actualizados desde los CFDI` +
+      (saltados?` · ${saltados} saltado(s) porque el catálogo ya tenía un precio más nuevo`:"") +
+      (errores?` · <span style="color:var(--red)">${errores} con error</span>`:"") + `</div>`);
+  }
+  try{ renderCatalogoProductos(true); }catch(_){}
+}
+
 async function procesarSATXml(){
   const files=[...(document.getElementById("satXmlFiles").files||[])];
   if(!files.length){ alert("Selecciona uno o más archivos XML de CFDI."); return; }
