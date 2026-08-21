@@ -289,6 +289,7 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
   "factura": "número de factura, folio o ticket",
   "importe": 1234.56,
   "mixto": false,
+  "es_complemento_pago": false,
   "categoria": "categoría de esta lista: {cats}",
   "productos": [
     {{
@@ -301,6 +302,12 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
   ]
 }}
 REGLAS:
+- "es_complemento_pago": true si el documento es un COMPLEMENTO DE PAGO y no una factura de
+  compra. Se reconoce porque dice "complemento de recepción de pagos", su tipo de comprobante es
+  "P" o "P-PAGO", su Subtotal y su Total van en CERO, y el dinero aparece aparte en una sección
+  de "Datos del pago" como "Monto de pago". NO es un gasto: es el acuse de que se pagaron
+  facturas que ya se registraron antes, y contarlo duplicaría el egreso. En ese caso pon
+  "importe": 0 y NO tomes el monto pagado como importe.
 - "importe" es el TOTAL del documento.
 - Si el documento tiene productos de VARIAS categorías distintas, pon "mixto": true y en
   "categoria" la categoría principal (la de mayor importe).

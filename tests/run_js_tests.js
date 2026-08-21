@@ -95,7 +95,7 @@ const FUNCS = [
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
-  "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento",
+  "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -1153,6 +1153,28 @@ t("salen ordenados por importe, para atacar primero lo que más pesa", () => {
   ], [{ folio: "0001135584", tipo: "P" }, { folio: "0001148188", tipo: "P" }]);
   assert.equal(r.length, 2);
   assert.equal(r[0].gasto.importe, 87302.64, "el mayor primero");
+});
+
+console.log("\n== bloqueo de complementos de pago al capturar ==");
+t("el XML timbrado tipo P se BLOQUEA, sin opción de guardarlo", () => {
+  assert.equal(S.bloqueoComplementoPago({ tipo: "P", folio: "BE2026080001152524" }, false), "bloqueo");
+  assert.equal(S.bloqueoComplementoPago({ tipo: "p" }, false), "bloqueo", "no importa la caja");
+  assert.equal(S.bloqueoComplementoPago({ tipo: "P-PAGO" }, false), "bloqueo");
+});
+t("una factura normal con XML pasa sin estorbo", () => {
+  assert.equal(S.bloqueoComplementoPago({ tipo: "I", folio: "MOJBE623610" }, false), "");
+  assert.equal(S.bloqueoComplementoPago({ tipo: "E" }, false), "", "una nota de crédito no es este caso");
+});
+t("sin XML, la sospecha de la IA solo pide confirmación: puede equivocarse", () => {
+  assert.equal(S.bloqueoComplementoPago(null, true), "confirmar");
+  assert.equal(S.bloqueoComplementoPago(null, false), "");
+});
+t("el XML manda sobre la IA: si el comprobante es tipo I, no se estorba aunque la IA dude", () => {
+  assert.equal(S.bloqueoComplementoPago({ tipo: "I" }, true), "confirmar",
+    "sigue pidiendo confirmación, pero nunca bloquea una factura real");
+});
+t("el XML tipo P bloquea aunque la IA no haya sospechado nada", () => {
+  assert.equal(S.bloqueoComplementoPago({ tipo: "P" }, false), "bloqueo");
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");

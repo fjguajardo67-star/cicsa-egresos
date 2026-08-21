@@ -1977,7 +1977,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-c";
+const APP_BUILD = "2026-08-21-d";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3328,6 +3328,21 @@ let _fechaAsumida=false;
 // una lectura de imagen: manda sobre lo que diga la IA. Con esto el gasto cae en la semana que le
 // toca, que es de lo que depende el presupuesto.
 let _cfdiGmail=null;
+// La IA sospecha que el documento es un complemento de pago (solo aplica cuando NO hay XML: con
+// XML manda el tipo del comprobante, que no se equivoca).
+let _esComplementoIA=false;
+
+// ¿Se impide guardar este documento como gasto?
+//  "bloqueo"   — el XML dice tipo P. Es dato fiscal timbrado, no hay margen de error: se impide.
+//  "confirmar" — solo la IA lo sospecha leyendo el PDF. Puede equivocarse, así que decide la
+//                persona; pero por omisión NO se guarda.
+// Un complemento de pago nunca es un egreso: ampara facturas que ya se registraron, y contarlo
+// duplica el dinero. Se detectaron 5 así en un solo mes, por $296,385.79.
+function bloqueoComplementoPago(cfdi, sospechaIA){
+  if(cfdi && String(cfdi.tipo||"").toUpperCase().slice(0,1)==="P") return "bloqueo";
+  if(sospechaIA) return "confirmar";
+  return "";
+}
 document.getElementById("fileIn").addEventListener("change",function(){ if(this.files[0]) handleFile(this.files[0]); });
 const dz=document.getElementById("dropzone");
 dz.addEventListener("dragover",e=>{e.preventDefault();dz.classList.add("drag");});
@@ -3375,6 +3390,7 @@ async function handleFile(file){
   capturedFile=file;
   _productosPreleidos=null;
   _cfdiGmail=null;          // archivo suelto: no hay CFDI del correo que mande sobre la fecha
+  _esComplementoIA=false;
   const preview=document.getElementById("imgPreview");
   if(file.type.startsWith("image/")){
     const rawDataURL = await _leerArchivoDataURL(file);
@@ -3433,6 +3449,7 @@ async function leerDocumento(){
       await analizarDivision(data.proveedor,data.fecha,data.factura,data.importe);
       return;
     }
+    _esComplementoIA = !!data.es_complemento_pago;
     // Si el correo traía el CFDI en XML, sus datos GANAN sobre los de la IA: son los timbrados.
     const _c = _cfdiGmail;
     document.getElementById("fProv").value=(_c&&_c.proveedor)||data.proveedor||"";
@@ -3453,12 +3470,16 @@ async function leerDocumento(){
     document.getElementById("btnDividir").style.display="none";
     document.getElementById("extractedCard").style.display="block";
     setStatus("statusLectura",
-      _fechaAsumida
+      bloqueoComplementoPago(_cfdiGmail, _esComplementoIA)
+        ? `🚫 <strong>Esto parece un COMPLEMENTO DE PAGO, no una factura de gasto.</strong><br>`+
+          `Ampara facturas que <strong>ya están registradas</strong>: contarlo duplicaría el egreso. `+
+          `El monto grande del documento es lo pagado, no un gasto nuevo.`
+        : _fechaAsumida
         ? `⚠ Datos extraídos, pero <strong>no se pudo leer la fecha del documento</strong>: quedó la de hoy. Corrígela antes de guardar o el gasto va a caer en la semana equivocada.`
         : (_cfdiGmail && _cfdiGmail.fecha)
           ? `✅ Datos extraídos · <strong>fecha, folio e importe tomados del CFDI</strong> del correo (exactos, no leídos de la imagen).`
           : "✅ Datos extraídos — verifica y guarda",
-      _fechaAsumida ? "err" : "ok");
+      (bloqueoComplementoPago(_cfdiGmail,_esComplementoIA) || _fechaAsumida) ? "err" : "ok");
   } catch(err){
     setStatus("statusLectura","❌ "+err.message+". Puedes capturar manualmente abajo.","err");
     document.getElementById("extractedCard").style.display="block";
@@ -3760,10 +3781,20 @@ function guardarGasto(){
   };
   if(!gasto.proveedor||!(gasto.importe>0)){ setStatus("statusGuardar","⚠ Proveedor e importe (mayor que cero) son obligatorios.","err"); return; }
   let _saltarExtraccion=false;   // no gastar una 2ª lectura de IA si es duplicado ya en catálogo
-  if(_cfdiGmail && _cfdiGmail.tipo==="P" &&
-     !confirm(`⚠ Este comprobante es un COMPLEMENTO DE PAGO (${_cfdiGmail.folio||""}), no una factura de gasto.\n\n`+
-              `Las facturas que ampara ya deberían estar registradas: guardarlo cuenta el mismo dinero dos veces.\n\n`+
-              `¿Guardar de todas formas?`)){
+  const _bloq = bloqueoComplementoPago(_cfdiGmail, _esComplementoIA);
+  if(_bloq === "bloqueo"){
+    // El XML timbrado dice que es tipo P. Eso no se discute: no se guarda como gasto.
+    alert(`🚫 NO se puede registrar como gasto.\n\n`+
+          `El comprobante ${_cfdiGmail.folio||""} es un COMPLEMENTO DE PAGO (tipo P), no una factura de compra.\n\n`+
+          `Ampara facturas que ya están registradas: contarlo duplicaría el egreso. `+
+          `El monto que muestra el documento es lo pagado, no un gasto nuevo.`);
+    return;
+  }
+  if(_bloq === "confirmar" &&
+     !confirm(`🚫 Esto parece un COMPLEMENTO DE PAGO, no una factura de gasto.\n\n`+
+              `Ampara facturas que ya deberían estar registradas: guardarlo contaría el mismo dinero dos veces.\n\n`+
+              `Solo continúa si estás seguro de que SÍ es una factura de compra.\n\n`+
+              `¿Registrarlo de todas formas?`)){
     return;
   }
   const _dup=findDuplicate(gasto.proveedor,gasto.importe,gasto.fecha,gasto.factura);
@@ -3787,6 +3818,7 @@ function guardarGasto(){
   getActiveWeek().gastos.push(gasto);
   _cfdiOrigen = null;            // ya se usó: que no se pegue a la siguiente captura
   _cfdiGmail  = null;
+  _esComplementoIA = false;
   // La factura de Gmail se marca como capturada para el equipo AQUÍ, con el gasto ya guardado.
   try{
     if(_gmailPendienteCaptura && capturedFile && capturedFile._gmailMsgId === _gmailPendienteCaptura.msg_id){
@@ -8573,6 +8605,7 @@ async function gmailProcessItem(idx){
   document.getElementById("fFecha").value=todayStr();document.getElementById("fCategoria").selectedIndex=0;
   // El CFDI del correo se aplica ANTES de leer: si la IA luego no encuentra la fecha, la buena ya
   // está puesta y no la pisa el todayStr() de respaldo.
+  _esComplementoIA = false;
   _cfdiGmail = item.cfdi || null;
   if(_cfdiGmail){
     if(_cfdiGmail.fecha)     document.getElementById("fFecha").value   = _cfdiGmail.fecha;
