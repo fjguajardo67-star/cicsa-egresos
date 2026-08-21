@@ -96,7 +96,7 @@ const FUNCS = [
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
-  "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
+  "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
   "_cfdiTipoDesdeTexto", "filtrarCfdisConciliables", "autodetectarRfcPropio",
@@ -1075,9 +1075,9 @@ t("un gasto sin fecha no entra a la lista", () => {
   assert.deepEqual(S.gastosConFechaDudosa([{ id: "1", fecha: "" }], REV, HOY), []);
 });
 const CFDIS = [
-  { folio: "12668", fecha: "2026-07-24" },
-  { folio: "PBAL31832", fecha: "2026-07-28" },
-  { folio: "EAR181665", fecha: "2026-07-08" },
+  { folioComp: "12668", fecha: "2026-07-24" },
+  { folioComp: "PBAL31832", fecha: "2026-07-28" },
+  { folioComp: "EAR181665", fecha: "2026-07-08" },
 ];
 t("el CFDI manda: si su fecha es otra, se marca como prueba y se ofrece la buena", () => {
   // Caso real: EVA MOTA folio 12668 quedó en 24 AGO y el comprobante dice 24 JUL.
@@ -1106,7 +1106,7 @@ t("un CFDI descartado a mano no se usa como verdad", () => {
   // Fecha en el pasado y sin origen Gmail: si el CFDI descartado contara, saldría marcada.
   const r = S.gastosConFechaDudosa(
     [{ id: "1", fecha: "2026-08-10", factura: "12668" }], [], HOY,
-    [{ folio: "12668", fecha: "2026-07-24", ignorado: true }]);
+    [{ folioComp: "12668", fecha: "2026-07-24", ignorado: true }]);
   assert.deepEqual(r, [], "sin CFDI válido y sin otra señal, no se inventa sospecha");
 });
 t("sin CFDI que casar, siguen valiendo las señales de antes", () => {
@@ -1116,10 +1116,41 @@ t("sin CFDI que casar, siguen valiendo las señales de antes", () => {
   assert.ok(/futuro/.test(r[0].motivo));
 });
 
+console.log("\n== el folio de un CFDI es serie+folio, no el UUID ==");
+t("se usa serie+folio, que es lo que la persona teclea", () => {
+  assert.equal(S._folioDeCfdi({ serie: "BE2026", folioComp: "070001148188",
+    folio: "8E3B6DA1-0067-4301-BD22-6FEAAF67AD6D" }), "BE2026070001148188");
+});
+t("si SOLO hay UUID no se compara nada, en vez de comparar mal", () => {
+  // Un folio corto es hexadecimal y casaría con casi cualquier UUID por casualidad.
+  assert.equal(S._folioDeCfdi({ folio: "8E3B6DA1-0067-4301-BD22-6FEAAF67AD6D" }), "");
+});
+t("un registro viejo sin serie ni folioComp usa su folio si no es un UUID", () => {
+  assert.equal(S._folioDeCfdi({ folio: "PBAL-31832" }), "PBAL31832");
+});
+t("sin nada no truena", () => {
+  assert.equal(S._folioDeCfdi(null), "");
+  assert.equal(S._folioDeCfdi({}), "");
+});
+t("el complemento real de julio SÍ se detecta guardado como lo guarda la app", () => {
+  // Caso reportado: los 5 complementos seguían saliendo como gasto porque se comparaba el UUID.
+  const guardadoComoLoGuardaLaApp = [{
+    uuid: "8E3B6DA1-0067-4301-BD22-6FEAAF67AD6D",
+    folio: "8E3B6DA1-0067-4301-BD22-6FEAAF67AD6D",   // parseCFDIXML pone el UUID aquí
+    serie: "BE2026", folioComp: "070001148188",
+    tipo: "P", fecha: "2026-07-30", proveedor: "BEBIDAS PURIFICADAS",
+  }];
+  const r = S.gastosQueSonComplemento(
+    [{ id: "1", factura: "BE2026070001148188", importe: 87302.64, proveedor: "BEBIDAS PURIFICADAS" }],
+    guardadoComoLoGuardaLaApp);
+  assert.equal(r.length, 1, "ahora sí lo encuentra");
+  close(r[0].gasto.importe, 87302.64);
+});
+
 console.log("\n== complementos de pago capturados como gasto (dinero contado dos veces) ==");
 const CFDIS_P = [
-  { folio: "BE2026080001152524", fecha: "2026-08-06", tipo: "P", proveedor: "BEBIDAS PURIFICADAS" },
-  { folio: "MOJBE623610", fecha: "2026-08-08", tipo: "I", proveedor: "BEBIDAS PURIFICADAS" },
+  { serie: "BE2026", folioComp: "080001152524", fecha: "2026-08-06", tipo: "P", proveedor: "BEBIDAS PURIFICADAS" },
+  { folioComp: "MOJBE623610", fecha: "2026-08-08", tipo: "I", proveedor: "BEBIDAS PURIFICADAS" },
 ];
 t("un gasto cuyo folio es un CFDI tipo P se marca", () => {
   // Caso real: $139,873.09 capturado desde un complemento de pago de GEPP.
@@ -1136,12 +1167,12 @@ t("una factura normal (tipo I) NO se marca", () => {
 t("sin CFDI tipo P guardado no se marca nada", () => {
   assert.deepEqual(S.gastosQueSonComplemento(
     [{ id: "1", factura: "BE2026080001152524", importe: 1 }],
-    [{ folio: "MOJBE623610", tipo: "I" }]), []);
+    [{ folioComp: "MOJBE623610", tipo: "I" }]), []);
 });
 t("un complemento descartado a mano no cuenta", () => {
   assert.deepEqual(S.gastosQueSonComplemento(
     [{ id: "1", factura: "BE2026080001152524", importe: 1 }],
-    [{ folio: "BE2026080001152524", tipo: "P", ignorado: true }]), []);
+    [{ folioComp: "BE2026080001152524", tipo: "P", ignorado: true }]), []);
 });
 t("un gasto sin folio no puede casarse con nada", () => {
   assert.deepEqual(S.gastosQueSonComplemento([{ id: "1", factura: "", importe: 500 }], CFDIS_P), []);
@@ -1150,7 +1181,7 @@ t("salen ordenados por importe, para atacar primero lo que más pesa", () => {
   const r = S.gastosQueSonComplemento([
     { id: "1", factura: "0001135584", importe: 60103.26 },
     { id: "2", factura: "0001148188", importe: 87302.64 },
-  ], [{ folio: "0001135584", tipo: "P" }, { folio: "0001148188", tipo: "P" }]);
+  ], [{ folioComp: "0001135584", tipo: "P" }, { folioComp: "0001148188", tipo: "P" }]);
   assert.equal(r.length, 2);
   assert.equal(r[0].gasto.importe, 87302.64, "el mayor primero");
 });
@@ -1179,8 +1210,8 @@ t("el XML tipo P bloquea aunque la IA no haya sospechado nada", () => {
 
 console.log("\n== importes que no cuadran con el CFDI ==");
 const CF_I = [
-  { folio: "MOJBE623610", tipo: "I", total: 23119.50, subtotal: 19930.60 },
-  { folio: "ICAJG470507", tipo: "I", total: 24122.00, subtotal: 20794.83 },
+  { folioComp: "MOJBE623610", tipo: "I", total: 23119.50, subtotal: 19930.60 },
+  { folioComp: "ICAJG470507", tipo: "I", total: 24122.00, subtotal: 20794.83 },
 ];
 t("un importe igual al del CFDI no se marca", () => {
   assert.deepEqual(S.gastosConImporteDistinto(
@@ -1202,7 +1233,7 @@ t("diferencias de centavos se ignoran (redondeo)", () => {
 t("un complemento (tipo P) no entra aquí: tiene su propia lista", () => {
   assert.deepEqual(S.gastosConImporteDistinto(
     [{ id: "1", factura: "BE123", importe: 139873.09 }],
-    [{ folio: "BE123", tipo: "P", total: 0 }]), []);
+    [{ folioComp: "BE123", tipo: "P", total: 0 }]), []);
 });
 t("sin CFDI que casar no se inventa nada", () => {
   assert.deepEqual(S.gastosConImporteDistinto(
