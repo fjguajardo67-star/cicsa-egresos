@@ -1359,7 +1359,9 @@ body.snav-min .side-theme span { display:none; }
         <div style="font-size:13px;font-weight:700;color:var(--vd)">☁️ CFDIs guardados en la nube</div>
         <div id="cfdisStoreResumen" style="font-size:12px;color:var(--txt2)">—</div>
       </div>
-      <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Los XML que subes se guardan aquí (mes completo). Elige un mes y concilia el periodo que quieras sin volver a subir.</div>
+      <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Los XML que subes se guardan aquí (mes completo). Elige un mes y concilia el periodo que quieras sin volver a subir.
+        <strong>Puedes subir todos los meses que quieras: se guardan todos a la vez.</strong> El selector solo elige cuál conciliar — no hace falta borrar un mes para subir otro,
+        y el balance usa <strong>todos</strong> los meses guardados, sin importar cuál esté seleccionado aquí.</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <select id="satMesGuardado" onchange="onMesGuardadoChange()" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;min-width:180px"></select>
         <button class="btn btn-green" style="padding:8px 12px" onclick="conciliarDesdeStore()">🔎 Conciliar el periodo seleccionado</button>
@@ -1998,7 +2000,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-k";
+const APP_BUILD = "2026-08-21-l";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -6170,7 +6172,14 @@ async function eliminarMesCfdiSeleccionado(){
   if(!mes){ alert("Selecciona un mes primero."); return; }
   const aBorrar=(_cfdisStore||[]).filter(c=>(c.mes||cfdiMes(c.fecha))===mes);
   if(!aBorrar.length) return;
-  if(!confirm(`¿Eliminar los ${aBorrar.length} CFDI de ${nombreMes(mes)} del almacén de la nube?\n\nNo afecta tus gastos capturados; solo los quita de este listado.`)) return;
+  // El texto anterior decía "solo los quita de este listado", que suena a filtro de pantalla.
+  // No lo es: borra los documentos de la nube y solo se recupera volviendo a subir los XML.
+  // Alguien lo usó creyendo que había que vaciar un mes para poder subir el siguiente, y perdió
+  // el mes anterior — con él, lo facturado de ese periodo salía en cero en el balance.
+  if(!confirm(`⚠ Esto BORRA de la nube los ${aBorrar.length} CFDI de ${nombreMes(mes)}.\n\n`+
+              `Para recuperarlos habría que volver a subir esos XML.\n\n`+
+              `NO hace falta borrar un mes para subir otro: el almacén guarda todos los meses a la vez.\n\n`+
+              `Tus gastos capturados no se tocan.\n\n¿Borrar de todas formas?`)) return;
   const btn=document.getElementById("btnBorrarMesCfdi"); if(btn) btn.disabled=true;
   setStatus("satStatus",`Eliminando ${aBorrar.length} CFDI de ${nombreMes(mes)}…`,"loading");
   for(let i=0;i<aBorrar.length;i+=25){ await Promise.all(aBorrar.slice(i,i+25).map(c=>fbDeleteDoc(CFDIS_COL, c.id))); }
