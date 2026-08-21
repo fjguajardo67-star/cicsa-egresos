@@ -979,13 +979,33 @@ t("un gasto dentro del periodo no genera aviso", () => {
 t("una factura de Gmail con fecha de otro periodo avisa que no se va a ver", () => {
   // El caso reportado: se captura desde Gmail, se guarda bien, y no aparece en Gastos,
   // Auditoría ni Presupuesto porque esas vistas filtran por FECHA, no por semana.
-  const m = S.avisoGastoFueraDeVista("2026-07-15", PER, "");
+  const conSemana = [{ ini: "2026-07-13", fin: "2026-07-19" }];
+  const m = S.avisoGastoFueraDeVista("2026-07-15", PER, "", conSemana);
   assert.ok(/FUERA del periodo/.test(m));
   assert.ok(/03 al 09 ago 2026/.test(m), "dice a qué periodo estás mirando");
   assert.ok(/Se guardó/.test(m), "deja claro que SÍ se guardó");
 });
+const SEMANAS = [{ ini: "2026-08-03", fin: "2026-08-09" }, { ini: "2026-08-17", fin: "2026-08-23" }];
 t("una fecha posterior al periodo también avisa", () => {
-  assert.ok(/FUERA del periodo/.test(S.avisoGastoFueraDeVista("2026-08-19", PER, "")));
+  assert.ok(/FUERA del periodo/.test(S.avisoGastoFueraDeVista("2026-08-19", PER, "", SEMANAS)));
+});
+t("si NO existe la semana que cubre la fecha, se dice que hay que crearla", () => {
+  // Caso real: facturas del 10 al 16 de agosto sin esa semana creada. Como las vistas filtran
+  // por fecha y no por bolsa, no había NINGÚN periodo donde pudieran verse.
+  const m = S.avisoGastoFueraDeVista("2026-08-12", PER, "", SEMANAS);
+  assert.ok(/NO cae en ninguna semana creada/.test(m));
+  assert.ok(/no hay que recapturarlo/.test(m), "hay que decir que el dato no se perdió");
+  assert.ok(!/cámbiate/i.test(m), "no mandar a un periodo que no existe");
+});
+t("si la semana sí existe, se manda a cambiarse a ella", () => {
+  const m = S.avisoGastoFueraDeVista("2026-08-19", PER, "", SEMANAS);
+  assert.ok(/te cambies a la semana que le toca/.test(m));
+  assert.ok(!/crea la semana/i.test(m));
+});
+t("los bordes de una semana existente cuentan como cubiertos", () => {
+  assert.ok(/te cambies/.test(S.avisoGastoFueraDeVista("2026-08-17", PER, "", SEMANAS)), "primer día");
+  assert.ok(/te cambies/.test(S.avisoGastoFueraDeVista("2026-08-23", PER, "", SEMANAS)), "último día");
+  assert.ok(/ninguna semana creada/.test(S.avisoGastoFueraDeVista("2026-08-24", PER, "", SEMANAS)));
 });
 t("la fecha de corte gana: ese gasto no se ve en NINGUNA consulta", () => {
   const m = S.avisoGastoFueraDeVista("2026-06-01", PER, "2026-07-01");
