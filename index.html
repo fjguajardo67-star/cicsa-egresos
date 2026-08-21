@@ -1239,7 +1239,8 @@ body.snav-min .side-theme span { display:none; }
     <div class="card-title" style="color:var(--naranja)">📅 Gastos con fecha dudosa<span id="fdCount" class="dup-badge" style="background:#FFF3E0;margin-left:8px"></span></div>
     <div style="font-size:12.5px;color:var(--txt2);margin-bottom:12px">
       El presupuesto se reparte por fecha, así que un gasto mal fechado descuadra <strong>dos</strong> semanas: le sobra a una y le falta a la otra.
-      Aquí salen los que casi seguro quedaron con la fecha equivocada. Corrige la fecha y el gasto se va solo a la semana que le toca.
+      Aquí salen los que casi seguro quedaron con la fecha equivocada. <strong>Escribe la fecha correcta en la última columna y aprieta Guardar</strong>: el gasto se va solo a la semana que le toca.
+      Cuando el campo viene en verde, ya trae la fecha buena tomada del CFDI y solo hay que confirmarla.
     </div>
     <div id="fdBody"></div>
   </div>
@@ -1968,7 +1969,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-a";
+const APP_BUILD = "2026-08-21-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5551,17 +5552,30 @@ async function renderFechasDudosas(){
         <td class="amount-cell">${fmt(g.importe)}</td>
         <td style="font-size:11.5px;color:${color}">${esc(x.motivo)}</td>
         <td style="white-space:nowrap">
-          <input type="date" value="${esc(x.fechaCorreo||g.fecha)}" onchange="corregirFechaGasto('${escAttrJs(g.id)}', this.value)"
-            style="padding:5px 7px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit">${sug}
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="date" id="fd-${esc(g.id)}" value="${esc(x.fechaCorreo||"")}"
+              style="padding:5px 7px;border:1.5px solid ${x.fechaCorreo?"var(--vm)":"var(--do)"};border-radius:6px;font-size:12px;font-family:inherit">
+            <button class="btn btn-gold" style="padding:5px 10px;font-size:11px;white-space:nowrap"
+              onclick="corregirFechaGasto('${escAttrJs(g.id)}')">✔ Guardar</button>
+          </div>${sug}
         </td></tr>`;
     }).join("") + `</tbody></table></div>
     <div style="font-size:11.5px;color:var(--txt2);margin-top:8px">✅ Donde dice <strong style="color:var(--vd)">CFDI</strong>, la fecha sugerida viene del comprobante timbrado: es la buena.<br>⚠ Donde dice <strong>correo</strong>, es <strong>cuándo llegó</strong>, no necesariamente la del comprobante — si tienes la factura a la mano, usa la del documento.</div>`;
 }
 
-function corregirFechaGasto(id, nueva){
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(nueva||""))){ alert("Fecha no válida."); return; }
+// Se lee del campo al apretar Guardar, en vez de colgarse de onchange: si el usuario elegía la
+// misma fecha que ya traía el campo, onchange no dispara y parecía que la pantalla no servía.
+function corregirFechaGasto(id){
+  const inp = document.getElementById("fd-" + id);
+  const nueva = inp ? String(inp.value||"").trim() : "";
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(nueva)){
+    alert("Escribe la fecha correcta de la factura antes de guardar.");
+    if(inp) inp.focus();
+    return;
+  }
   const g = encontrarGastoPorId(id);
-  if(!g){ alert("No encontré ese gasto."); return; }
+  if(!g){ alert("No encontré ese gasto. Recarga la página e inténtalo de nuevo."); return; }
+  if(g.fecha === nueva){ alert("Esa es la fecha que ya tenía. Cámbiala si no es la correcta."); return; }
   const antes = g.fecha;
   g.fecha = nueva;
   save();
