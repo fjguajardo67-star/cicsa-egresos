@@ -1074,6 +1074,47 @@ t("los seguros salen antes que los posibles", () => {
 t("un gasto sin fecha no entra a la lista", () => {
   assert.deepEqual(S.gastosConFechaDudosa([{ id: "1", fecha: "" }], REV, HOY), []);
 });
+const CFDIS = [
+  { folio: "12668", fecha: "2026-07-24" },
+  { folio: "PBAL31832", fecha: "2026-07-28" },
+  { folio: "EAR181665", fecha: "2026-07-08" },
+];
+t("el CFDI manda: si su fecha es otra, se marca como prueba y se ofrece la buena", () => {
+  // Caso real: EVA MOTA folio 12668 quedó en 24 AGO y el comprobante dice 24 JUL.
+  const r = S.gastosConFechaDudosa(
+    [{ id: "1", fecha: "2026-08-24", factura: "12668", proveedor: "EVA MOTA" }], [], HOY, CFDIS);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].nivel, "seguro");
+  assert.equal(r[0].fuente, "CFDI");
+  assert.equal(r[0].fechaCorreo, "2026-07-24", "la fecha ofrecida es la del comprobante");
+});
+t("si el CFDI confirma la fecha, el gasto NO se marca aunque haya indicios", () => {
+  // 5 de 9 sospechosos de un mes real resultaron correctos: coincidían con el día de captura
+  // sólo porque la factura se capturó el mismo día que llegó.
+  const idCaptura = String(new Date("2026-07-08T10:00:00").getTime());
+  const r = S.gastosConFechaDudosa(
+    [{ id: idCaptura, fecha: "2026-07-08", factura: "EAR-181665", _gmailMsgId: "zzz" }], [], HOY, CFDIS);
+  assert.deepEqual(r, [], "el comprobante gana sobre el indicio");
+});
+t("el folio casa aunque tenga guiones o prefijo distinto", () => {
+  const r = S.gastosConFechaDudosa(
+    [{ id: "1", fecha: "2026-08-10", factura: "PBAL-31832" }], [], HOY, CFDIS);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].fechaCorreo, "2026-07-28");
+});
+t("un CFDI descartado a mano no se usa como verdad", () => {
+  // Fecha en el pasado y sin origen Gmail: si el CFDI descartado contara, saldría marcada.
+  const r = S.gastosConFechaDudosa(
+    [{ id: "1", fecha: "2026-08-10", factura: "12668" }], [], HOY,
+    [{ folio: "12668", fecha: "2026-07-24", ignorado: true }]);
+  assert.deepEqual(r, [], "sin CFDI válido y sin otra señal, no se inventa sospecha");
+});
+t("sin CFDI que casar, siguen valiendo las señales de antes", () => {
+  const r = S.gastosConFechaDudosa(
+    [{ id: "1", fecha: "2026-09-01", factura: "NO-EXISTE" }], [], HOY, CFDIS);
+  assert.equal(r.length, 1);
+  assert.ok(/futuro/.test(r[0].motivo));
+});
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
 t("CFDI 4.0: extrae UUID, total (no SubTotal), fecha, RFC/nombre del EMISOR (no receptor)", () => {
