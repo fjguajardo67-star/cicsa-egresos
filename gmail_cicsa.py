@@ -28,7 +28,15 @@ ALLOWED_MIME = {
     "application/pdf",
     "image/jpeg", "image/jpg", "image/png", "image/webp",
     "application/octet-stream",
+    # El CFDI en XML es la fuente EXACTA de la fecha, el folio y el total. Antes se ignoraba, y
+    # con él se ignoraban facturas que el proveedor manda solo en XML.
+    "text/xml", "application/xml",
+    # Muchos proveedores mandan el par XML+PDF dentro de un zip.
+    "application/zip", "application/x-zip-compressed", "multipart/x-zip",
 }
+
+# Un CFDI XML pesa unos pocos KB — el piso de 8 KB pensado para logos lo tiraría.
+MIN_XML_BYTES = 200
 
 
 # ── Credenciales en memoria (sin tocar el filesystem) ─────────────────────
@@ -183,6 +191,74 @@ def is_inline_part(part: dict, filename: str) -> bool:
     return bool(_INLINE_FILENAME_RE.search(filename or ""))
 
 
+def _sin_entidades(t):
+    return (t.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+             .replace("&apos;", "'").replace("&amp;", "&"))
+
+
+def _cfdi_attr(xml, tag_local, attr):
+    m = re.search(r"<(?:[\w.-]+:)?" + tag_local + r"\b[^>]*>", xml, re.I)
+    if not m:
+        return ""
+    a = re.search(r"\b" + attr + r'\s*=\s*"([^"]*)"', m.group(0), re.I)
+    return _sin_entidades(a.group(1)) if a else ""
+
+
+def leer_cfdi_xml(data: bytes):
+    """Encabezado del CFDI: fecha, folio, emisor y total, tal como los timbró el SAT.
+
+    Es el dato EXACTO. La lectura con IA de un PDF puede no encontrar la fecha, y cuando no la
+    encuentra el formulario se queda con la de hoy: el gasto acaba en la semana equivocada y
+    descuadra el presupuesto de dos semanas a la vez. Del XML la fecha nunca falta.
+    """
+    try:
+        txt = data.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    if "Comprobante" not in txt:
+        return None
+    fecha = _cfdi_attr(txt, "Comprobante", "Fecha")[:10]
+    uuid  = _cfdi_attr(txt, "TimbreFiscalDigital", "UUID")
+    if not fecha and not uuid:
+        return None
+    serie = _cfdi_attr(txt, "Comprobante", "Serie")
+    folio = _cfdi_attr(txt, "Comprobante", "Folio")
+    def num(v):
+        try:    return float(v)
+        except (TypeError, ValueError): return 0.0
+    return {
+        "fecha":     fecha,
+        "total":     num(_cfdi_attr(txt, "Comprobante", "Total")),
+        "subtotal":  num(_cfdi_attr(txt, "Comprobante", "SubTotal")),
+        "tipo":      _cfdi_attr(txt, "Comprobante", "TipoDeComprobante").upper()[:1],
+        "folio":     (serie + folio) or uuid,
+        "uuid":      uuid,
+        "proveedor": _cfdi_attr(txt, "Emisor", "Nombre") or _cfdi_attr(txt, "Emisor", "Rfc"),
+        "rfc":       _cfdi_attr(txt, "Emisor", "Rfc"),
+        "rfcReceptor": _cfdi_attr(txt, "Receptor", "Rfc"),
+    }
+
+
+def _abrir_zip(data: bytes):
+    """Saca los PDF/XML/imágenes de dentro de un zip. Devuelve [(nombre, bytes)]."""
+    import io as _io, zipfile
+    fuera = []
+    try:
+        with zipfile.ZipFile(_io.BytesIO(data)) as z:
+            for nom in z.namelist()[:40]:          # tope: un zip no debería traer más
+                if nom.endswith("/"):
+                    continue
+                if not nom.lower().endswith((".pdf", ".xml", ".jpg", ".jpeg", ".png")):
+                    continue
+                try:
+                    fuera.append((nom.split("/")[-1], z.read(nom)))
+                except Exception:
+                    continue
+    except Exception:
+        pass          # no era un zip válido — se ignora, no se rompe la lectura del buzón
+    return fuera
+
+
 # ── Función principal ─────────────────────────────────────────────────────
 
 def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -> list:
@@ -242,14 +318,19 @@ def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -
             payload = msg["payload"]
             parts   = extract_parts(payload.get("parts", [payload]))
 
+            # 1) Reunir los adjuntos utilizables, abriendo los zips (XML+PDF suelen venir dentro).
+            adjuntos = []          # [(nombre, bytes)]
             for idx, part in enumerate(parts):
                 mime          = part.get("mimeType", "")
                 filename_orig = part.get("filename", "")
+                low           = filename_orig.lower()
 
-                if mime not in ALLOWED_MIME:
-                    if not (filename_orig.lower().endswith(".pdf") or
-                            filename_orig.lower().endswith((".jpg", ".jpeg", ".png"))):
-                        continue
+                es_zip = low.endswith(".zip") or mime in (
+                    "application/zip", "application/x-zip-compressed", "multipart/x-zip")
+                es_ok  = mime in ALLOWED_MIME or low.endswith(
+                    (".pdf", ".jpg", ".jpeg", ".png", ".xml"))
+                if not (es_zip or es_ok):
+                    continue
 
                 # Logos/íconos incrustados en la firma del correo — no son facturas.
                 if is_inline_part(part, filename_orig):
@@ -259,19 +340,46 @@ def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -
                 if not data:
                     continue
 
-                if len(data) < MIN_ATTACHMENT_BYTES:
+                if es_zip:
+                    adjuntos.extend(_abrir_zip(data))
+                else:
+                    adjuntos.append((filename_orig or f"adjunto_{idx}", data))
+
+            # 2) Si el correo trae el CFDI en XML, de ahí sale la fecha exacta del comprobante.
+            #    Se le pega a TODOS los adjuntos del mismo correo: el PDF y el XML son la misma
+            #    factura, así que el PDF hereda la fecha buena en vez de depender de la IA.
+            cfdi_meta = None
+            for nom, data in adjuntos:
+                if nom.lower().endswith(".xml") or b"Comprobante" in data[:4000]:
+                    cfdi_meta = leer_cfdi_xml(data)
+                    if cfdi_meta:
+                        break
+
+            # 3) Emitir. Si hay PDF o imagen, se manda eso (es lo que la persona sabe leer) y el
+            #    XML solo aporta sus datos. El XML se manda como adjunto propio únicamente cuando
+            #    el correo no trae nada visual — antes esas facturas no llegaban a la bandeja.
+            visuales = [(n, d) for n, d in adjuntos
+                        if n.lower().endswith((".pdf", ".jpg", ".jpeg", ".png"))]
+            elegidos = visuales or [(n, d) for n, d in adjuntos if n.lower().endswith(".xml")]
+
+            for idx, (nombre, data) in enumerate(elegidos):
+                low = nombre.lower()
+                es_xml = low.endswith(".xml")
+                if len(data) < (MIN_XML_BYTES if es_xml else MIN_ATTACHMENT_BYTES):
                     continue
 
-                safe_name = safe_filename(filename_orig, msg_id, idx)
+                safe_name = safe_filename(nombre, msg_id, idx)
                 out_path  = INBOX_DIR / safe_name
                 try:
                     out_path.write_bytes(data)
                 except Exception:
                     pass  # filesystem read-only — se usa data_b64 igualmente
 
-                b64     = base64.b64encode(data).decode()
-                ext     = Path(safe_name).suffix.lower()
-                mime_out = "application/pdf" if ext == ".pdf" else f"image/{ext.lstrip('.')}"
+                b64 = base64.b64encode(data).decode()
+                ext = Path(safe_name).suffix.lower()
+                mime_out = ("application/pdf" if ext == ".pdf"
+                            else "application/xml" if es_xml
+                            else f"image/{ext.lstrip('.')}")
 
                 results.append({
                     "filename":  safe_name,
@@ -282,6 +390,7 @@ def fetch_invoice_attachments(days_back: int = 30, include_seen: bool = False) -
                     "mime_type": mime_out,
                     "data_b64":  b64,
                     "msg_id":    msg_id,
+                    "cfdi":      cfdi_meta,     # None si el correo no traía XML
                 })
 
         except Exception as e:
