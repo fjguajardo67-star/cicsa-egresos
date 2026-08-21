@@ -95,7 +95,7 @@ const FUNCS = [
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
-  "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago",
+  "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -1175,6 +1175,46 @@ t("el XML manda sobre la IA: si el comprobante es tipo I, no se estorba aunque l
 });
 t("el XML tipo P bloquea aunque la IA no haya sospechado nada", () => {
   assert.equal(S.bloqueoComplementoPago({ tipo: "P" }, false), "bloqueo");
+});
+
+console.log("\n== importes que no cuadran con el CFDI ==");
+const CF_I = [
+  { folio: "MOJBE623610", tipo: "I", total: 23119.50, subtotal: 19930.60 },
+  { folio: "ICAJG470507", tipo: "I", total: 24122.00, subtotal: 20794.83 },
+];
+t("un importe igual al del CFDI no se marca", () => {
+  assert.deepEqual(S.gastosConImporteDistinto(
+    [{ id: "1", factura: "MOJBE623610", importe: 23119.50 }], CF_I), []);
+});
+t("haber capturado el SUBTOTAL se detecta y se dice", () => {
+  const r = S.gastosConImporteDistinto(
+    [{ id: "1", factura: "MOJBE623610", importe: 19930.60 }], CF_I);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].esSubtotal, true, "se avisa que falta el IVA");
+  close(r[0].diferencia, -3188.90);
+  close(r[0].totalCfdi, 23119.50);
+});
+t("diferencias de centavos se ignoran (redondeo)", () => {
+  assert.deepEqual(S.gastosConImporteDistinto(
+    [{ id: "1", factura: "MOJBE623610", importe: 23119.00 }], CF_I), [],
+    "medio peso no es un error de captura");
+});
+t("un complemento (tipo P) no entra aquí: tiene su propia lista", () => {
+  assert.deepEqual(S.gastosConImporteDistinto(
+    [{ id: "1", factura: "BE123", importe: 139873.09 }],
+    [{ folio: "BE123", tipo: "P", total: 0 }]), []);
+});
+t("sin CFDI que casar no se inventa nada", () => {
+  assert.deepEqual(S.gastosConImporteDistinto(
+    [{ id: "1", factura: "NO-EXISTE", importe: 999 }], CF_I), []);
+});
+t("salen ordenados por el tamaño del error", () => {
+  const r = S.gastosConImporteDistinto([
+    { id: "1", factura: "MOJBE623610", importe: 23000 },
+    { id: "2", factura: "ICAJG470507", importe: 10000 },
+  ], CF_I);
+  assert.equal(r.length, 2);
+  assert.equal(r[0].gasto.id, "2", "primero el que más distorsiona");
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
