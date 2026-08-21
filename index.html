@@ -1998,7 +1998,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-i";
+const APP_BUILD = "2026-08-21-j";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3233,8 +3233,11 @@ function showPage(name,btn){
   if(name==="gastos")     { pintarSelectorPeriodoSP("gastosPeriodoSel","renderGastos"); renderGastos(); }
   if(name==="presupuesto"){ pintarSelectorPeriodoSP("presupPeriodoSel","renderPresupuesto"); renderPresupuesto(); }
   if(name==="balance"){    pintarSelectorPeriodoSP("balancePeriodoSel","renderBalance",{sinCorte:true}); renderBalance();
-                           // Los CFDI viven en la nube: si aún no se cargan, se piden y se repinta.
-                           if(!_cfdisStore && currentRole==="admin") cargarCfdisStore().then(()=>renderBalance()).catch(()=>{}); }
+                           // Los CFDI viven en la nube y se cargaban UNA sola vez por sesión: si
+                           // alguien subía los XML de un mes nuevo —o los subía en otro dispositivo—
+                           // el balance seguía con la copia vieja y lo facturado salía incompleto sin
+                           // avisar. Se piden frescos cada vez que se entra.
+                           if(currentRole==="admin") cargarCfdisStore(true).then(()=>renderBalance()).catch(()=>{}); }
   if(name==="reporte"){    pintarSelectorPeriodoSP("reportePeriodoSel","renderReporteActual"); renderReporteActual(); }
   if(name==="caja"){ try{ initCajaDropzone(); }catch(_){} }
   if(name==="gmail")       checkGmailStatus();
