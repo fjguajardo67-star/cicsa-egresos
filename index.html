@@ -1960,7 +1960,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-i";
+const APP_BUILD = "2026-08-19-j";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3672,7 +3672,7 @@ function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
 // parecía que no se había registrado. Y si hay fecha de corte, un gasto anterior a ella queda
 // oculto en TODAS las consultas. Ninguna de las dos cosas se avisaba.
 // Devuelve "" si se va a ver; si no, el motivo. Pura y probada.
-function avisoGastoFueraDeVista(fecha, periodo, fechaCorte){
+function avisoGastoFueraDeVista(fecha, periodo, fechaCorte, semanas){
   const f = String(fecha||"").trim();
   if(!f) return "";
   const d = (x)=>(typeof fmtDate==="function" ? fmtDate(x) : x);
@@ -3683,8 +3683,17 @@ function avisoGastoFueraDeVista(fecha, periodo, fechaCorte){
   const ini = periodo && periodo.ini, fin = periodo && periodo.fin;
   if(ini && fin && (f < ini || f > fin)){
     const etq = (periodo && periodo.label) ? periodo.label : `${d(ini)} al ${d(fin)}`;
+    // Decir "cámbiate al periodo que le toca" no sirve de nada si ese periodo NO EXISTE: como las
+    // vistas filtran por fecha y no por semana, un gasto cuya fecha no cae en ninguna semana
+    // creada no se puede ver en modo semana por ningún lado. Crear la semana lo destapa solo.
+    const hay = (semanas||[]).some(w => w && w.ini && w.fin && f >= w.ini && f <= w.fin);
+    if(!hay){
+      return `Se guardó, pero su fecha (${d(f)}) NO cae en ninguna semana creada, así que no se ve `+
+             `en Gastos, Auditoría ni Presupuesto. Crea la semana que cubra esa fecha (en Semanas) `+
+             `y aparece solo — no hay que recapturarlo.`;
+    }
     return `Se guardó, pero su fecha (${d(f)}) queda FUERA del periodo que estás viendo (${etq}), `+
-           `así que no lo vas a ver en Gastos, Auditoría ni Presupuesto hasta que te cambies al periodo que le toca.`;
+           `así que no lo vas a ver en Gastos, Auditoría ni Presupuesto hasta que te cambies a la semana que le toca.`;
   }
   return "";
 }
@@ -3754,7 +3763,8 @@ function guardarGasto(){
   try{
     _fueraDeVista = avisoGastoFueraDeVista(gasto.fecha,
       (typeof getPeriodoSP==="function" ? getPeriodoSP() : null),
-      (typeof fechaCorteDatos==="function" ? fechaCorteDatos() : ""));
+      (typeof fechaCorteDatos==="function" ? fechaCorteDatos() : ""),
+      (state && state.weeks) || []);
   }catch(_){}
   if(_fueraDeVista){
     setStatus("statusGuardar",`⚠ <strong>${esc(gasto.proveedor)} ${fmt(gasto.importe)}</strong> — ${esc(_fueraDeVista)}`,"err");
