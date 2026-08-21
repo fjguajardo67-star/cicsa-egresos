@@ -94,7 +94,7 @@ const FUNCS = [
   "variantesLlaveMenu", "llavesMenuDeFila",
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
-  "resumenGmail", "_firmaEstado", "textoSync",
+  "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -967,6 +967,37 @@ t("el aviso de sincronización dice hace cuánto, no solo que existe", () => {
 t("un reloj adelantado no produce 'hace -3 min'", () => {
   const ahora = 1_700_000_000_000;
   assert.equal(S.textoSync(ahora + 180_000, ahora), "⟳ al día");
+});
+
+console.log("\n== un gasto guardado que no se ve: hay que decirlo ==");
+const PER = { ini: "2026-08-03", fin: "2026-08-09", label: "03 al 09 ago 2026" };
+t("un gasto dentro del periodo no genera aviso", () => {
+  assert.equal(S.avisoGastoFueraDeVista("2026-08-05", PER, ""), "");
+  assert.equal(S.avisoGastoFueraDeVista("2026-08-03", PER, ""), "", "el primer día cuenta");
+  assert.equal(S.avisoGastoFueraDeVista("2026-08-09", PER, ""), "", "el último también");
+});
+t("una factura de Gmail con fecha de otro periodo avisa que no se va a ver", () => {
+  // El caso reportado: se captura desde Gmail, se guarda bien, y no aparece en Gastos,
+  // Auditoría ni Presupuesto porque esas vistas filtran por FECHA, no por semana.
+  const m = S.avisoGastoFueraDeVista("2026-07-15", PER, "");
+  assert.ok(/FUERA del periodo/.test(m));
+  assert.ok(/03 al 09 ago 2026/.test(m), "dice a qué periodo estás mirando");
+  assert.ok(/Se guardó/.test(m), "deja claro que SÍ se guardó");
+});
+t("una fecha posterior al periodo también avisa", () => {
+  assert.ok(/FUERA del periodo/.test(S.avisoGastoFueraDeVista("2026-08-19", PER, "")));
+});
+t("la fecha de corte gana: ese gasto no se ve en NINGUNA consulta", () => {
+  const m = S.avisoGastoFueraDeVista("2026-06-01", PER, "2026-07-01");
+  assert.ok(/fecha de corte/.test(m));
+  assert.ok(!/FUERA del periodo/.test(m), "se explica la causa real, no la secundaria");
+});
+t("sin periodo definido no se inventan avisos", () => {
+  assert.equal(S.avisoGastoFueraDeVista("2026-07-15", null, ""), "");
+  assert.equal(S.avisoGastoFueraDeVista("2026-07-15", { ini: "", fin: "" }, ""), "");
+});
+t("un gasto sin fecha no dispara aviso", () => {
+  assert.equal(S.avisoGastoFueraDeVista("", PER, "2026-07-01"), "");
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
