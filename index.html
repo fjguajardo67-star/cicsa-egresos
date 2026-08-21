@@ -1968,7 +1968,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-m";
+const APP_BUILD = "2026-08-21-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5471,14 +5471,38 @@ function _fechaCorreoISO(txt){
 //  3. Coincide con el día en que se capturó, viniendo de Gmail. Es la huella del fallback: cuando
 //     la IA no encontraba la fecha en el PDF, se ponía la de hoy sin avisar.
 // Pura y probada. `hoy` se recibe para poder fijarlo en las pruebas.
-function gastosConFechaDudosa(gastos, revisados, hoy){
+function gastosConFechaDudosa(gastos, revisados, hoy, cfdis){
   const porMsg = {};
   (revisados||[]).forEach(r=>{ if(r && r.msgId) porMsg[r.msgId] = r; });
+  // El CFDI timbrado es la verdad: si el folio del gasto casa con uno guardado, su fecha decide y
+  // ya no hacen falta indicios. Esto además quita falsos positivos — probando contra un mes real,
+  // 5 de 9 "posibles" tenían la fecha CORRECTA y solo coincidían con el día de captura porque la
+  // factura se capturó el mismo día que llegó, que es lo normal.
+  const porFolio = [];
+  (cfdis||[]).forEach(c=>{
+    if(!c || c.ignorado || !c.fecha) return;
+    const f = _dupFolioCanon(c.folio || c.folioComp || "");
+    if(f) porFolio.push({ folio:f, fecha:String(c.fecha).slice(0,10) });
+  });
+  const buscarCfdi = (factura)=>{
+    const f = _dupFolioCanon(factura);
+    if(!f) return null;
+    return porFolio.find(c=>_dupFoliosEquivalentes(f, c.folio)) || null;
+  };
   const out = [];
   (gastos||[]).forEach(g=>{
     if(!g || !g.fecha) return;
     const rev = g._gmailMsgId ? porMsg[g._gmailMsgId] : null;
     const fCorreo = rev ? _fechaCorreoISO(rev.fechaCorreo) : "";
+    const cf = buscarCfdi(g.factura);
+    if(cf){
+      // Hay comprobante: su fecha manda, y si coincide el gasto está bien — no se marca nada más.
+      if(cf.fecha !== g.fecha){
+        out.push({ gasto:g, motivo:"la fecha del CFDI es otra", fechaCorreo:cf.fecha,
+                   fuente:"CFDI", nivel:"seguro" });
+      }
+      return;
+    }
     if(fCorreo && g.fecha > fCorreo){
       out.push({ gasto:g, motivo:"posterior al correo que la envió", fechaCorreo:fCorreo, nivel:"seguro" });
       return;
@@ -5493,7 +5517,8 @@ function gastosConFechaDudosa(gastos, revisados, hoy){
       const d = new Date(ms), p = n => String(n).padStart(2,"0");
       const fCap = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
       if(g.fecha === fCap){
-        out.push({ gasto:g, motivo:"quedó con la fecha del día en que se capturó", fechaCorreo:fCorreo, nivel:"posible" });
+        out.push({ gasto:g, motivo:"quedó con la fecha del día en que se capturó (sin CFDI para confirmarlo)",
+                   fechaCorreo:fCorreo, nivel:"posible" });
       }
     }
   });
@@ -5505,7 +5530,8 @@ async function renderFechasDudosas(){
   const body = document.getElementById("fdBody");
   if(!card || !body) return;
   try{ await cargarGmailRevisados(); }catch(_){}
-  const lista = gastosConFechaDudosa(allGastosAllWeeks(), _gmailRevisados||[], todayStr());
+  try{ await cargarCfdisStore(); }catch(_){}
+  const lista = gastosConFechaDudosa(allGastosAllWeeks(), _gmailRevisados||[], todayStr(), _cfdisStore||[]);
   document.getElementById("fdCount").textContent = lista.length;
   card.style.display = lista.length ? "block" : "none";
   if(!lista.length) return;
@@ -5516,7 +5542,7 @@ async function renderFechasDudosas(){
       const g = x.gasto;
       const color = x.nivel==="seguro" ? "var(--red)" : "var(--naranja)";
       const sug = x.fechaCorreo
-        ? `<div style="font-size:10.5px;color:var(--txt2);margin-top:2px">correo: ${esc(fmtDate(x.fechaCorreo))}</div>`
+        ? `<div style="font-size:10.5px;color:${x.fuente==="CFDI"?"var(--vd)":"var(--txt2)"};margin-top:2px">${x.fuente==="CFDI"?"CFDI":"correo"}: ${esc(fmtDate(x.fechaCorreo))}</div>`
         : "";
       return `<tr>
         <td style="white-space:nowrap"><strong style="color:${color}">${esc(fmtDate(g.fecha))}</strong></td>
@@ -5529,7 +5555,7 @@ async function renderFechasDudosas(){
             style="padding:5px 7px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit">${sug}
         </td></tr>`;
     }).join("") + `</tbody></table></div>
-    <div style="font-size:11.5px;color:var(--txt2);margin-top:8px">⚠ La fecha del correo es <strong>cuándo llegó</strong>, no necesariamente la del comprobante. Si tienes la factura a la mano, usa la del documento.</div>`;
+    <div style="font-size:11.5px;color:var(--txt2);margin-top:8px">✅ Donde dice <strong style="color:var(--vd)">CFDI</strong>, la fecha sugerida viene del comprobante timbrado: es la buena.<br>⚠ Donde dice <strong>correo</strong>, es <strong>cuándo llegó</strong>, no necesariamente la del comprobante — si tienes la factura a la mano, usa la del documento.</div>`;
 }
 
 function corregirFechaGasto(id, nueva){
