@@ -1423,12 +1423,27 @@ const cfdisReales = [
 t("las facturas que emite la propia empresa no son gastos", () => {
   const r = S.filtrarCfdisConciliables(cfdisReales, RFC_CICSA);
   assert.ok(!r.utiles.some(c => c.rfc === RFC_CICSA), "quedó un CFDI emitido por la empresa");
-  assert.equal(r.omitidos.PROPIO, 3);
+  // Solo la factura (tipo I) cuenta como "emitida por la empresa = ingreso". Sus dos
+  // complementos de pago se reportan como complementos, que es lo que son.
+  assert.equal(r.omitidos.PROPIO, 1);
+});
+t("un recibo de nómina propio NO se reporta como ingreso", () => {
+  // La nómina la emite SIEMPRE la propia empresa: revisando primero el emisor, 58 recibos
+  // salían como "facturas que emitió tu empresa (son ingresos)". No son ingresos.
+  const r = S.filtrarCfdisConciliables([
+    { folio: "N-1", rfc: RFC_CICSA, proveedor: "COMEDORES INDUSTRIALES DE CUAUHTEMOC",
+      fecha: "2026-07-04", total: 2145.50, tipo: "N" },
+  ], RFC_CICSA);
+  assert.equal(r.omitidos.N, 1, "se cuenta como recibo de nómina");
+  assert.ok(!r.omitidos.PROPIO, "y no como ingreso");
+  assert.equal(r.utiles.length, 0, "sigue sin pedirse capturar");
 });
 t("el complemento de pago de un proveedor no se pide capturar", () => {
   const r = S.filtrarCfdisConciliables(cfdisReales, RFC_CICSA);
   assert.ok(!r.utiles.some(c => c.folio === "PB-315P"), "el complemento de pago pasó el filtro");
-  assert.equal(r.omitidos.P, 1);
+  // 3 en total: el de Pollo Bal y los dos que emitió la propia empresa — antes esos dos se
+  // reportaban como "facturas que emitió tu empresa", escondiendo que eran complementos.
+  assert.equal(r.omitidos.P, 3);
 });
 t("solo sobreviven las 2 facturas reales de proveedor (Walmart y Pollo Bal)", () => {
   const r = S.filtrarCfdisConciliables(cfdisReales, RFC_CICSA);

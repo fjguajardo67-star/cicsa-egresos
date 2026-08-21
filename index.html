@@ -1989,7 +1989,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-g";
+const APP_BUILD = "2026-08-21-h";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -6770,11 +6770,15 @@ function filtrarCfdisConciliables(cfdis, rfcEmpresa){
   const marcar=(k)=>{ omitidos[k]=(omitidos[k]||0)+1; };
   (cfdis||[]).forEach(c=>{
     if(c.ignorado){ marcar("DESCARTADO"); return; }   // el usuario ya dijo que no es un gasto
-    // Lo que emitió la propia empresa es un INGRESO (venta), jamás un gasto por capturar.
-    if(propio && (c.rfc||"").trim().toUpperCase()===propio){ marcar("PROPIO"); return; }
     const t=(c.tipo||"").toUpperCase().slice(0,1);
+    // El tipo se revisa ANTES que "propio": los recibos de nómina los emite SIEMPRE la propia
+    // empresa, así que al revisar primero el emisor 58 recibos de nómina se reportaban como
+    // "facturas que emitió tu empresa (son ingresos)" — y no son ingresos, son el costo de la
+    // gente. Lo que se excluye es lo mismo; lo que cambia es que ahora se dice bien qué es.
     // Sin tipo (CFDIs guardados antes de esta versión) se deja pasar: mejor de más que de menos.
     if(t && t!=="I"){ marcar(t); return; }
+    // Lo que emitió la propia empresa es un INGRESO (venta), jamás un gasto por capturar.
+    if(propio && (c.rfc||"").trim().toUpperCase()===propio){ marcar("PROPIO"); return; }
     utiles.push(c);
   });
   return { utiles, omitidos };
