@@ -92,7 +92,7 @@ const FUNCS = [
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
   "variantesLlaveMenu", "llavesMenuDeFila",
-  "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
+  "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "_cfdiNomina", "corridasDeNomina", "corridaNominaRegistrada", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
@@ -1285,6 +1285,67 @@ t("una diferencia de monto REAL sí se reporta, con el gasto que le toca", () =>
   assert.equal(r.diferencias.length, 1);
   close(r.diferencias[0].gastoCICSA.importe, 10943.85, 0.01);
   close(r.diferencias[0].diferencia, 1056.15, 0.01);
+});
+
+console.log("\n== nómina timbrada: agrupar por corrida y registrar el BRUTO ==");
+const NOM = (fecha, per, ded, otros, total) =>
+  ({ tipo: "N", fecha, total, nomina: { percepciones: per, deducciones: ded, otrosPagos: otros } });
+t("los recibos se agrupan por corrida, no uno por trabajador", () => {
+  // Julio real: 58 recibos en 5 corridas. Registrar 58 gastos sería inservible.
+  const r = S.corridasDeNomina([
+    NOM("2026-07-04", 1000, 10, 0, 990), NOM("2026-07-04", 2000, 20, 0, 1980),
+    NOM("2026-07-10", 1500, 15, 0, 1485),
+  ]);
+  assert.equal(r.length, 2, "dos corridas");
+  assert.equal(r[0].recibos, 2);
+  close(r[0].bruto, 3000, 0.01);
+  close(r[0].neto, 2970, 0.01);
+});
+t("el importe es el BRUTO, no el neto: las retenciones también salen de la caja", () => {
+  const r = S.corridasDeNomina([NOM("2026-07-04", 124365.74, 719.13, 2.59, 123649.20)]);
+  close(r[0].bruto, 124365.74, 0.01);
+  close(r[0].neto, 123649.20, 0.01);
+  assert.ok(r[0].bruto > r[0].neto, "el bruto es mayor");
+});
+t("solo entran los CFDI de nómina, y no los descartados", () => {
+  const r = S.corridasDeNomina([
+    NOM("2026-07-04", 1000, 0, 0, 1000),
+    { tipo: "I", fecha: "2026-07-04", total: 5000 },
+    { ...NOM("2026-07-04", 9999, 0, 0, 9999), ignorado: true },
+  ]);
+  assert.equal(r.length, 1);
+  close(r[0].bruto, 1000, 0.01);
+});
+t("un recibo sin complemento se cuenta aparte, para poder avisar", () => {
+  const r = S.corridasDeNomina([
+    NOM("2026-07-04", 1000, 0, 0, 1000),
+    { tipo: "N", fecha: "2026-07-04", total: 500 },   // guardado antes de leer el complemento
+  ]);
+  assert.equal(r[0].recibos, 2);
+  assert.equal(r[0].sinDesglose, 1, "se avisa que falta desglose");
+  close(r[0].bruto, 1000, 0.01, "no se inventa el bruto que falta");
+});
+t("el rango de fechas se respeta", () => {
+  const cfdis = [NOM("2026-06-30", 100, 0, 0, 100), NOM("2026-07-15", 200, 0, 0, 200)];
+  assert.equal(S.corridasDeNomina(cfdis, "2026-07-01", "2026-07-31").length, 1);
+});
+t("las corridas salen en orden cronológico", () => {
+  const r = S.corridasDeNomina([NOM("2026-07-30", 1, 0, 0, 1), NOM("2026-07-04", 1, 0, 0, 1)]);
+  assert.deepEqual(r.map(c => c.fecha), ["2026-07-04", "2026-07-30"]);
+});
+t("una corrida ya registrada se reconoce: duplicar una nómina descuadra el mes", () => {
+  const gastos = [{ id: "1", _nominaCorrida: "2026-07-04", importe: 124365.74 }];
+  assert.ok(S.corridaNominaRegistrada("2026-07-04", gastos));
+  assert.ok(!S.corridaNominaRegistrada("2026-07-10", gastos));
+  assert.ok(!S.corridaNominaRegistrada("", gastos), "sin fecha no se da por registrada");
+});
+t("el complemento de nómina se lee del XML", () => {
+  const xml = '<cfdi:Comprobante Total="123649.20"><nomina12:Nomina TotalPercepciones="124365.74" TotalDeducciones="719.13" TotalOtrosPagos="2.59"/></cfdi:Comprobante>';
+  const n = S._cfdiNomina(xml);
+  close(n.percepciones, 124365.74, 0.01);
+  close(n.deducciones, 719.13, 0.01);
+  close(n.otrosPagos, 2.59, 0.01);
+  assert.equal(S._cfdiNomina('<cfdi:Comprobante Total="100"/>'), null, "una factura normal no trae nómina");
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");

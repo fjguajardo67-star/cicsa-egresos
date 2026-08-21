@@ -1375,6 +1375,15 @@ body.snav-min .side-theme span { display:none; }
         </div>
         <div id="cfdiPreciosBody" style="margin-top:10px"></div>
       </div>
+      <div style="border-top:1.5px solid var(--border);margin-top:12px;padding-top:12px">
+        <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:4px">👷 Nómina timbrada · Sin IA</div>
+        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">
+          Los recibos de nómina no son gastos por capturar (los emites tú), así que la conciliación los omite — pero <strong>el costo sí es real</strong>.
+          Aquí se agrupan por corrida y se registran con su <strong>bruto</strong> (percepciones): las retenciones también salen de tu caja, solo que hacia el SAT.
+        </div>
+        <button class="btn btn-green" style="padding:8px 12px" onclick="renderNominaTimbrada()">👷 Revisar nómina timbrada</button>
+        <div id="nominaBody" style="margin-top:10px"></div>
+      </div>
     </div>
     <div class="btn-row">
       <button class="btn btn-light" id="btnSatExport" style="display:none" onclick="exportarConciliacion()">📊 Exportar Excel</button>
@@ -1989,7 +1998,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-h";
+const APP_BUILD = "2026-08-21-i";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -6105,7 +6114,7 @@ async function guardarCfdisEnStore(cfdis){
     const docId = uuid.replace(/[^A-Za-z0-9_-]/g,"_");
     // Si ya se descartó a mano, volver a subir el XML NO debe resucitarlo.
     const prev = _cfdisStore.find(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase());
-    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, subtotal:parseFloat(c.subtotal)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), nombreReceptor:(c.nombreReceptor||""), folioComp:(c.folioComp||""), mes:cfdiMes(c.fecha), conceptos:Array.isArray(c.conceptos)?c.conceptos:[], subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
+    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, subtotal:parseFloat(c.subtotal)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), nombreReceptor:(c.nombreReceptor||""), folioComp:(c.folioComp||""), mes:cfdiMes(c.fecha), conceptos:Array.isArray(c.conceptos)?c.conceptos:[], nomina:c.nomina||null, subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
     if(prev && prev.ignorado){ data.ignorado=true; data.ignoradoPor=prev.ignoradoPor||""; data.ignoradoTs=prev.ignoradoTs||""; }
     tareas.push({ docId, data });
     if(yaHay.has(uuid.toUpperCase())){ existentes++; const i=_cfdisStore.findIndex(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase()); if(i>=0)_cfdisStore[i]={id:docId,...data}; }
@@ -6267,6 +6276,25 @@ function _cfdiConceptos(xml){
   return out;
 }
 
+// El complemento de nómina trae el desglose que NO está en el comprobante: el Total de un CFDI
+// de nómina es el NETO pagado, pero el gasto de la empresa es el BRUTO (las retenciones también
+// salen de la caja, solo que hacia el SAT). Sin esto no se puede registrar la nómina por su costo
+// real. Devuelve null cuando el CFDI no es de nómina.
+function _cfdiNomina(xml){
+  const t = String(xml==null?"":xml);
+  const tag = t.match(/<(?:[\w.-]+:)?Nomina\b[^>]*>/i);
+  if(!tag) return null;
+  const num = (attr)=>{
+    const m = tag[0].match(new RegExp("\\b"+attr+"\\s*=\\s*\"([^\"]*)\"", "i"));
+    return m ? (parseFloat(m[1])||0) : 0;
+  };
+  return {
+    percepciones: num("TotalPercepciones"),
+    deducciones:  num("TotalDeducciones"),
+    otrosPagos:   num("TotalOtrosPagos"),
+  };
+}
+
 function parseCFDIXML(xml){
   if(!xml || xml.indexOf("Comprobante")===-1) return null;
   const total  = parseFloat(_cfdiAttr(xml,"Comprobante","Total")||"0")||0;
@@ -6286,8 +6314,131 @@ function parseCFDIXML(xml){
   const nomRec = _cfdiAttr(xml,"Receptor","Nombre");
   const uuid   = _cfdiAttr(xml,"TimbreFiscalDigital","UUID");
   if(!uuid && !total) return null;                 // no parece un CFDI válido
-  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, total, subtotal: subtot, tipo, rfcReceptor: rfcRec, nombreReceptor: nomRec, folioComp: folioC, conceptos: _cfdiConceptos(xml) };
+  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, total, subtotal: subtot, tipo, rfcReceptor: rfcRec, nombreReceptor: nomRec, folioComp: folioC, conceptos: _cfdiConceptos(xml), nomina: _cfdiNomina(xml) };
 }
+// ── Nómina timbrada ────────────────────────────────────────────────────────
+// Un CFDI de nómina se emite por trabajador, así que una quincena son decenas de comprobantes.
+// Se agrupan por fecha de timbrado —la corrida— para registrar UN gasto por corrida y no 58.
+// El importe es el BRUTO (percepciones): el Total del CFDI es el NETO, y las retenciones también
+// salen de la caja, solo que hacia el SAT. Pura y probada.
+function corridasDeNomina(cfdis, ini, fin){
+  const porFecha = new Map();
+  (cfdis||[]).forEach(c=>{
+    if(!c || c.ignorado) return;
+    if(String(c.tipo||"").toUpperCase().slice(0,1) !== "N") return;
+    const f = String(c.fecha||"").slice(0,10);
+    if(!f) return;
+    if(ini && f < ini) return;
+    if(fin && f > fin) return;
+    const nom = c.nomina || null;
+    const g = porFecha.get(f) || { fecha:f, recibos:0, bruto:0, deducciones:0, otrosPagos:0, neto:0, sinDesglose:0 };
+    g.recibos++;
+    g.neto += parseFloat(c.total)||0;
+    if(nom){
+      g.bruto        += parseFloat(nom.percepciones)||0;
+      g.deducciones  += parseFloat(nom.deducciones)||0;
+      g.otrosPagos   += parseFloat(nom.otrosPagos)||0;
+    } else {
+      // CFDI guardado antes de que se leyera el complemento: sin él no se sabe el bruto.
+      g.sinDesglose++;
+    }
+    porFecha.set(f, g);
+  });
+  const r2 = x => Math.round(x*100)/100;
+  return [...porFecha.values()]
+    .map(g=>({ ...g, bruto:r2(g.bruto), deducciones:r2(g.deducciones), otrosPagos:r2(g.otrosPagos), neto:r2(g.neto) }))
+    .sort((a,b)=> a.fecha < b.fecha ? -1 : 1);
+}
+
+// ¿Esta corrida ya está registrada? Se marca el gasto con _nominaCorrida para que no se pueda
+// meter dos veces: duplicar una nómina completa descuadraría el mes entero.
+function corridaNominaRegistrada(fecha, gastos){
+  const f = String(fecha||"").slice(0,10);
+  if(!f) return null;
+  return (gastos||[]).find(g=>g && g._nominaCorrida === f) || null;
+}
+
+async function renderNominaTimbrada(){
+  const body = document.getElementById("nominaBody");
+  if(!body) return;
+  body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Leyendo los CFDI guardados…</div>`;
+  try{ await cargarCfdisStore(); }catch(_){}
+  const corridas = corridasDeNomina(_cfdisStore||[]);
+  if(!corridas.length){
+    body.innerHTML = `<div style="font-size:12.5px;color:var(--txt2)">No hay CFDI de nómina guardados en este almacén.</div>`;
+    return;
+  }
+  const sinDesglose = corridas.reduce((s,c)=>s+c.sinDesglose,0);
+  const gastos = allGastosAllWeeks();
+  const cats = (typeof catsActuales==="function") ? catsActuales() : [];
+  const sug = cats.find(c=>/n[oó]mina\s*fiscal/i.test(c)) || cats.find(c=>/n[oó]mina/i.test(c)) || cats[0] || "";
+  const aviso = sinDesglose
+    ? `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:8px;padding:9px 12px;font-size:12px;margin-bottom:10px">⚠️ ${sinDesglose} recibo(s) se guardaron antes de que se leyera el complemento de nómina, así que no traen el desglose. <strong>Vuelve a subir esos XML</strong> para que el bruto salga completo.</div>`
+    : "";
+  body.innerHTML = aviso + `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <label style="font-size:12px;color:var(--txt2)">Categoría:</label>
+      <select id="nomCategoria" style="padding:6px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:12.5px;font-family:inherit">
+        ${cats.map(c=>`<option value="${esc(c)}" ${c===sug?"selected":""}>${esc(c)}</option>`).join("")}
+      </select>
+      <span style="font-size:11.5px;color:var(--txt2)">Crea “Nómina fiscal” en Categorías si quieres separarla de la no fiscal.</span>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr>
+      <th>Corrida</th><th style="text-align:right">Recibos</th><th style="text-align:right">Bruto</th>
+      <th style="text-align:right">Deducciones</th><th style="text-align:right">Neto</th><th>Acción</th>
+    </tr></thead><tbody>` +
+    corridas.map(c=>{
+      const ya = corridaNominaRegistrada(c.fecha, gastos);
+      return `<tr>
+        <td style="white-space:nowrap">${esc(fmtDate(c.fecha))}</td>
+        <td class="amount-cell">${c.recibos}</td>
+        <td class="amount-cell" style="color:var(--vd)"><strong>${fmt(c.bruto)}</strong></td>
+        <td class="amount-cell" style="color:var(--txt2)">${fmt(c.deducciones)}</td>
+        <td class="amount-cell" style="color:var(--txt2)">${fmt(c.neto)}</td>
+        <td>${ya
+          ? `<span style="font-size:11.5px;color:var(--vd)">✔ ya registrada (${fmt(ya.importe)})</span>`
+          : `<button class="btn btn-gold" style="padding:5px 10px;font-size:11px" onclick="registrarCorridaNomina('${escAttrJs(c.fecha)}')">➕ Registrar</button>`}</td>
+      </tr>`;
+    }).join("") + `</tbody></table></div>
+    <div style="font-size:11.5px;color:var(--txt2);margin-top:8px">⚠ Si tu categoría de nómina ya incluye la parte fiscal, registrarla aquí la contaría dos veces. Revisa antes qué trae capturado.</div>`;
+}
+
+// Registra UNA corrida como un solo gasto, por su bruto. La semana la decide la FECHA de la
+// corrida, no la semana activa: si no existe una que la cubra, se dice en vez de dejarla invisible.
+function registrarCorridaNomina(fecha){
+  const corrida = corridasDeNomina(_cfdisStore||[]).find(c=>c.fecha===fecha);
+  if(!corrida){ alert("No encontré esa corrida. Vuelve a revisar la nómina."); return; }
+  if(corridaNominaRegistrada(fecha, allGastosAllWeeks())){ alert("Esa corrida ya está registrada."); return; }
+  if(corrida.bruto<=0){ alert("Esa corrida no trae percepciones. Vuelve a subir sus XML para leer el complemento de nómina."); return; }
+  const cat = document.getElementById("nomCategoria")?.value || "Nómina / Personal";
+  const wk = (state.weeks||[]).find(w=>w.ini && w.fin && fecha>=w.ini && fecha<=w.fin);
+  if(!wk){
+    alert(`No hay una semana creada que cubra el ${fmtDate(fecha)}.\n\nCréala primero en Semanas o el gasto no se vería en ningún lado.`);
+    return;
+  }
+  if(!confirm(`Registrar la nómina del ${fmtDate(fecha)}:\n\n`+
+              `${corrida.recibos} recibos timbrados\nBruto (percepciones): ${fmt(corrida.bruto)}\nCategoría: ${cat}\n\n`+
+              `Si tu categoría de nómina ya incluye lo fiscal, esto lo contaría dos veces.\n\n¿Continuar?`)) return;
+  const gasto = {
+    id: Date.now().toString(),
+    proveedor: "NÓMINA TIMBRADA",
+    fecha, factura: "NOMINA-" + fecha.replace(/-/g,""),
+    importe: corrida.bruto,
+    categoria: cat, esOtro:false, respaldo:null,
+    notas: `${corrida.recibos} recibos timbrados · bruto ${fmt(corrida.bruto)} · neto ${fmt(corrida.neto)}`,
+    formaPago:"transferencia", vencimiento:"", estadoPago:"pagado",
+    comprobantePago:null, fechaPago:null, referenciaPago:null,
+    _gmailMsgId:null, _gmailFile:null,
+    _nominaCorrida: fecha,       // marcador: impide registrarla dos veces
+  };
+  wk.gastos = wk.gastos || [];
+  wk.gastos.push(gasto);
+  save();
+  renderNominaTimbrada();
+  try{ renderAll(); }catch(_){}
+  alert(`✅ Nómina del ${fmtDate(fecha)} registrada por ${fmt(corrida.bruto)} en “${cat}”.`);
+}
+
 // ── Capa 1: de renglones de CFDI a precios por producto ─────────────────────
 // Del mes se queda el renglón MAS RECIENTE de cada descripción: la misma descripción se repite
 // mucho ("LECHUGA ROMA" 13 veces en un mes) y lo que interesa es el último precio pagado.
