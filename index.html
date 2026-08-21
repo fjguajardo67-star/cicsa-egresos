@@ -1960,7 +1960,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-h";
+const APP_BUILD = "2026-08-19-i";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3665,6 +3665,30 @@ function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
   ids.forEach(id=>_productosEnProceso.set(id, promesa));
 }
 
+// ¿El gasto que se acaba de guardar va a VERSE donde está parado el usuario?
+// El gasto se guarda en la bolsa de la semana activa, pero Gastos, Auditoría y Presupuesto
+// filtran por FECHA, no por bolsa. Una factura de Gmail casi siempre trae fecha de otro
+// periodo, así que se guardaba correctamente y no aparecía en ninguna de esas pantallas:
+// parecía que no se había registrado. Y si hay fecha de corte, un gasto anterior a ella queda
+// oculto en TODAS las consultas. Ninguna de las dos cosas se avisaba.
+// Devuelve "" si se va a ver; si no, el motivo. Pura y probada.
+function avisoGastoFueraDeVista(fecha, periodo, fechaCorte){
+  const f = String(fecha||"").trim();
+  if(!f) return "";
+  const d = (x)=>(typeof fmtDate==="function" ? fmtDate(x) : x);
+  if(fechaCorte && f < fechaCorte){
+    return `Se guardó, pero su fecha (${d(f)}) es anterior a la fecha de corte (${d(fechaCorte)}), `+
+           `así que NO va a aparecer en Gastos, Auditoría ni Presupuesto. Quita o mueve el corte para verlo.`;
+  }
+  const ini = periodo && periodo.ini, fin = periodo && periodo.fin;
+  if(ini && fin && (f < ini || f > fin)){
+    const etq = (periodo && periodo.label) ? periodo.label : `${d(ini)} al ${d(fin)}`;
+    return `Se guardó, pero su fecha (${d(f)}) queda FUERA del periodo que estás viendo (${etq}), `+
+           `así que no lo vas a ver en Gastos, Auditoría ni Presupuesto hasta que te cambies al periodo que le toca.`;
+  }
+  return "";
+}
+
 function guardarGasto(){
   const cat=document.getElementById("fCategoria").value;
   const otro=document.getElementById("fOtro").value.trim();
@@ -3706,6 +3730,13 @@ function guardarGasto(){
   }
   getActiveWeek().gastos.push(gasto);
   _cfdiOrigen = null;            // ya se usó: que no se pegue a la siguiente captura
+  // La factura de Gmail se marca como capturada para el equipo AQUÍ, con el gasto ya guardado.
+  try{
+    if(_gmailPendienteCaptura && capturedFile && capturedFile._gmailMsgId === _gmailPendienteCaptura.msg_id){
+      registrarGmailRevisado(_gmailPendienteCaptura, "capturado");
+      _gmailPendienteCaptura = null;
+    }
+  }catch(_){}
   save();
   // El desglose NO se salta si los productos ya vinieron en la MISMA lectura (_productosPreleidos):
   // usarlos no cuesta otra llamada a la IA y evita que el catálogo se quede sin los renglones.
@@ -3716,7 +3747,20 @@ function guardarGasto(){
   if(!_saltarExtraccion || _hayPreleidos) extraerProductosEnSegundoPlano(gasto.id, capturedB64, capturedFile?.type||"image/jpeg");
   subirRespaldoAStorage(gasto.id, capturedB64, capturedFile?.type||"image/jpeg", gasto.factura);
   const conRespaldo=gasto.respaldo?" 📎 con respaldo":"";
-  setStatus("statusGuardar",`✅ Gasto guardado — ${esc(gasto.proveedor)} ${fmt(gasto.importe)}${conRespaldo}. Puedes capturar otro.`,"ok");
+  // Si el gasto quedó fuera de lo que el usuario está viendo hay que decírselo AQUÍ: si no,
+  // el mensaje dice "guardado" y la pantalla de Gastos sigue igual, que es exactamente lo que
+  // hace pensar que no se registró.
+  let _fueraDeVista = "";
+  try{
+    _fueraDeVista = avisoGastoFueraDeVista(gasto.fecha,
+      (typeof getPeriodoSP==="function" ? getPeriodoSP() : null),
+      (typeof fechaCorteDatos==="function" ? fechaCorteDatos() : ""));
+  }catch(_){}
+  if(_fueraDeVista){
+    setStatus("statusGuardar",`⚠ <strong>${esc(gasto.proveedor)} ${fmt(gasto.importe)}</strong> — ${esc(_fueraDeVista)}`,"err");
+  } else {
+    setStatus("statusGuardar",`✅ Gasto guardado — ${esc(gasto.proveedor)} ${fmt(gasto.importe)}${conRespaldo}. Puedes capturar otro.`,"ok");
+  }
   capturedFile=null; capturedDataURL=null; capturedB64=null; splitData=null;
   document.getElementById("imgPreview").style.display="none";
   document.getElementById("btnLeer").disabled=true;
@@ -8053,6 +8097,9 @@ function exportarReporteExcel(){
 // GMAIL
 // ═══════════════════════════════════════════════════════════════════════════
 let gmailItems=[];
+// Factura de Gmail mandada a Capturar y todavía sin guardar. Se registra como "capturada" para
+// el equipo solo cuando el gasto existe (ver guardarGasto).
+let _gmailPendienteCaptura=null;
 // El servidor marca un correo como "visto" en cuanto lo descubre (/gmail-fetch), no cuando
 // se procesa — así que si se pierde esta lista (ej. al recargar la página), esos adjuntos
 // no vuelven a aparecer en un siguiente escaneo. Se guarda en IndexedDB (no en Firestore ni
@@ -8252,7 +8299,11 @@ async function gmailProcessItem(idx){
   else capturedDataURL=null;
   gmailItems[idx]._done=true;
   guardarGmailItemsLocal();
-  registrarGmailRevisado(item,"capturado");   // en segundo plano: no debe frenar la lectura
+  // Antes aquí se registraba "capturado" para TODO el equipo, con solo mandarla a Capturar. Si
+  // luego nadie le daba Guardar —o la lectura fallaba— la factura quedaba marcada como capturada
+  // sin que existiera el gasto, y desaparecía para todos. Ahora se apunta como pendiente y se
+  // registra hasta que el gasto se guarda de verdad.
+  _gmailPendienteCaptura = item;
   const el=document.getElementById(`gmail-item-${idx}`);if(el){el.style.opacity="0.4";el.innerHTML=`<div style="padding:8px;color:var(--vm);font-size:13px">✅ Procesando…</div>`;}
   showPage("captura");   // sin btn: showPage marca sola la pestana correcta (con el sidebar, el primer .nav-btn ya no es Capturar sino Resumen)
   const preview=document.getElementById("imgPreview");
