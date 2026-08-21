@@ -897,7 +897,7 @@ body.snav-min .side-theme span { display:none; }
       </div>
       <div class="field">
         <label>Fecha</label>
-        <input id="fFecha" type="date" onchange="checkDuplicateForm()">
+        <input id="fFecha" type="date" onchange="_fechaAsumida=false;checkDuplicateForm()">
       </div>
       <div class="field">
         <label>No. Factura / Ticket</label>
@@ -1960,7 +1960,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-j";
+const APP_BUILD = "2026-08-19-k";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3303,6 +3303,10 @@ let capturedFile=null, capturedDataURL=null, capturedB64=null;
 // Productos que /leer-gasto-full ya devolvió junto con el encabezado. Se guardan aquí para que
 // al guardar el gasto NO se vuelva a mandar la imagen a Claude solo por los productos.
 let _productosPreleidos=null;
+// La IA no siempre saca la fecha del documento. Cuando no la saca se pone la de HOY, que se ve
+// perfectamente normal en el formulario — y el gasto acaba en la semana equivocada sin que nadie
+// lo note. Esta bandera recuerda que la fecha NO salió del documento, para poder avisarlo.
+let _fechaAsumida=false;
 document.getElementById("fileIn").addEventListener("change",function(){ if(this.files[0]) handleFile(this.files[0]); });
 const dz=document.getElementById("dropzone");
 dz.addEventListener("dragover",e=>{e.preventDefault();dz.classList.add("drag");});
@@ -3408,6 +3412,7 @@ async function leerDocumento(){
       return;
     }
     document.getElementById("fProv").value=data.proveedor||"";
+    _fechaAsumida = !data.fecha;
     document.getElementById("fFecha").value=data.fecha||todayStr();
     document.getElementById("fFactura").value=data.factura||"";
     document.getElementById("fImporte").value=data.importe||"";
@@ -3418,10 +3423,13 @@ async function leerDocumento(){
     }
     document.getElementById("btnDividir").style.display="none";
     document.getElementById("extractedCard").style.display="block";
-    setStatus("statusLectura","✅ Datos extraídos — verifica y guarda","ok");
+    setStatus("statusLectura", _fechaAsumida
+      ? `⚠ Datos extraídos, pero <strong>no se pudo leer la fecha del documento</strong>: quedó la de hoy. Corrígela antes de guardar o el gasto va a caer en la semana equivocada.`
+      : "✅ Datos extraídos — verifica y guarda", _fechaAsumida ? "err" : "ok");
   } catch(err){
     setStatus("statusLectura","❌ "+err.message+". Puedes capturar manualmente abajo.","err");
     document.getElementById("extractedCard").style.display="block";
+    _fechaAsumida = true;
     document.getElementById("fFecha").value=todayStr();
   }
   document.getElementById("btnLeer").disabled=false;
@@ -3759,6 +3767,12 @@ function guardarGasto(){
   // Si el gasto quedó fuera de lo que el usuario está viendo hay que decírselo AQUÍ: si no,
   // el mensaje dice "guardado" y la pantalla de Gastos sigue igual, que es exactamente lo que
   // hace pensar que no se registró.
+  // Una fecha que la IA no leyó es la causa silenciosa de que el gasto "desaparezca": queda con
+  // la de hoy y cae en otra semana. Si se guarda así, hay que decirlo.
+  const _avisoFecha = (_fechaAsumida && gasto.fecha === todayStr())
+    ? `La fecha NO se leyó del documento (quedó la de hoy): si la factura es de otra fecha, corrígela en Gastos o va a quedar en la semana equivocada.`
+    : "";
+  _fechaAsumida = false;
   let _fueraDeVista = "";
   try{
     _fueraDeVista = avisoGastoFueraDeVista(gasto.fecha,
@@ -3769,7 +3783,11 @@ function guardarGasto(){
   if(_fueraDeVista){
     setStatus("statusGuardar",`⚠ <strong>${esc(gasto.proveedor)} ${fmt(gasto.importe)}</strong> — ${esc(_fueraDeVista)}`,"err");
   } else {
-    setStatus("statusGuardar",`✅ Gasto guardado — ${esc(gasto.proveedor)} ${fmt(gasto.importe)}${conRespaldo}. Puedes capturar otro.`,"ok");
+    setStatus("statusGuardar",
+      _avisoFecha
+        ? `✅ Gasto guardado — ${esc(gasto.proveedor)} ${fmt(gasto.importe)}${conRespaldo}.<br>⚠ ${esc(_avisoFecha)}`
+        : `✅ Gasto guardado — ${esc(gasto.proveedor)} ${fmt(gasto.importe)}${conRespaldo}. Puedes capturar otro.`,
+      _avisoFecha ? "err" : "ok");
   }
   capturedFile=null; capturedDataURL=null; capturedB64=null; splitData=null;
   document.getElementById("imgPreview").style.display="none";
