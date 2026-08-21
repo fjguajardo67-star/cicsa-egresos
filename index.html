@@ -1989,7 +1989,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-f";
+const APP_BUILD = "2026-08-21-g";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5521,7 +5521,7 @@ function gastosConImporteDistinto(gastos, cfdis, tolerancia){
   (cfdis||[]).forEach(c=>{
     if(!c || c.ignorado) return;
     if(String(c.tipo||"I").toUpperCase().slice(0,1) !== "I") return;
-    const f = _dupFolioCanon(c.folio || c.folioComp || "");
+    const f = _folioDeCfdi(c);
     const t = parseFloat(c.total)||0;
     if(f && t>0) porFolio.push({ folio:f, total:t, subtotal:parseFloat(c.subtotal)||0 });
   });
@@ -5624,7 +5624,7 @@ function gastosQueSonComplemento(gastos, cfdis){
   (cfdis||[]).forEach(c=>{
     if(!c || c.ignorado) return;
     if(String(c.tipo||"").toUpperCase().slice(0,1) !== "P") return;
-    const f = _dupFolioCanon(c.folio || c.folioComp || "");
+    const f = _folioDeCfdi(c);
     if(f) pagos.push({ folio:f, fecha:String(c.fecha||"").slice(0,10), proveedor:c.proveedor||"" });
   });
   if(!pagos.length) return [];
@@ -5704,7 +5704,7 @@ function gastosConFechaDudosa(gastos, revisados, hoy, cfdis){
   const porFolio = [];
   (cfdis||[]).forEach(c=>{
     if(!c || c.ignorado || !c.fecha) return;
-    const f = _dupFolioCanon(c.folio || c.folioComp || "");
+    const f = _folioDeCfdi(c);
     if(f) porFolio.push({ folio:f, fecha:String(c.fecha).slice(0,10) });
   });
   const buscarCfdi = (factura)=>{
@@ -7243,6 +7243,20 @@ async function quitarAliasProducto(id, alias){
 // "EVA MOTA CARDENAS (PLÁSTICOS DE MORELIA)" vs "PLASTICOS DE MORELIA". Estas
 // funciones deciden si dos folios/proveedores son "el mismo" pese a esas variantes.
 function _dupFolioCanon(s){ return String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,""); }
+// El folio con el que una persona teclea una factura es SERIE+FOLIO del comprobante, nunca el
+// UUID. parseCFDIXML guarda en `folio` el UUID cuando existe (`uuid || serie+folio`), así que
+// compararlo contra lo capturado no casa jamás: las revisiones de Auditoría salían vacías aunque
+// el gasto estuviera ahí — un complemento capturado como "BE2026070001148188" nunca iba a casar
+// contra un UUID. Devuelve "" cuando lo único que hay es el UUID: mejor no comparar que comparar
+// mal, porque un folio corto es hexadecimal y casa con casi cualquier UUID por casualidad.
+function _folioDeCfdi(c){
+  if(!c) return "";
+  const f = _dupFolioCanon(String(c.serie||"") + String(c.folioComp||""));
+  if(f) return f;
+  const bruto = String(c.folio||"");
+  if(/^[0-9A-F]{8}-[0-9A-F]{4}-/i.test(bruto)) return "";
+  return _dupFolioCanon(bruto);
+}
 function _dupFoliosEquivalentes(a,b){
   if(!a||!b) return false;
   if(a===b) return true;
