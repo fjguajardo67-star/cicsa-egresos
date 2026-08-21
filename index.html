@@ -2000,7 +2000,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-l";
+const APP_BUILD = "2026-08-21-m";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4919,6 +4919,18 @@ function exportarBalancePDF(){
   doc.setTextColor(180,230,180); doc.setFontSize(9); doc.setFont("helvetica","normal");
   doc.text(`Periodo: ${label} | Generado: ${new Date().toLocaleDateString("es-MX")}`,MAR,23);
   Y=42;
+  // El aviso de que los CFDI no se pudieron leer vivía solo en la pantalla, así que el PDF salía
+  // con "$0.00 facturado" sin ninguna marca — y un PDF se guarda, se manda y se lee como
+  // definitivo. Si el dato no es confiable, el documento tiene que decirlo.
+  if(_cfdisError){
+    doc.setFillColor(255,235,238); doc.rect(MAR,Y,W,12,"F");
+    doc.setDrawColor(...RED); doc.setLineWidth(0.5); doc.rect(MAR,Y,W,12);
+    doc.setTextColor(...RED); doc.setFontSize(8.5); doc.setFont("helvetica","bold");
+    doc.text("NO se pudieron leer los CFDI de la nube: lo FACTURADO de este reporte NO es confiable.",MAR+3,Y+5);
+    doc.setFont("helvetica","normal");
+    doc.text("Vuelve a generarlo cuando la lectura funcione.",MAR+3,Y+9.5);
+    Y+=17;
+  }
   const sano=b.resultado>=0;
   const reng=(etq,val,neg,bold)=>{
     doc.setFillColor(...CL); doc.rect(MAR,Y,W,8,"F");
