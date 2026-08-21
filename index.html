@@ -1235,6 +1235,18 @@ body.snav-min .side-theme span { display:none; }
 
 <!-- ═══════════════ PAGE: REPORTES ═══════════════ -->
 <div class="container page" id="page-reportes">
+  <div class="card" id="cardLimpieza" style="display:none;margin-bottom:16px">
+    <div class="card-title">🧹 Limpieza de datos — qué le falta al balance para ser real</div>
+    <div id="limpiezaBody"></div>
+  </div>
+  <div class="card" id="cardImportes" style="display:none;margin-bottom:16px">
+    <div class="card-title" style="color:var(--naranja)">💲 Importes que no cuadran con el CFDI<span id="imCount" class="dup-badge" style="background:#FFF3E0;margin-left:8px"></span></div>
+    <div style="font-size:12.5px;color:var(--txt2);margin-bottom:12px">
+      El folio del gasto casa con un comprobante timbrado, pero el importe capturado es otro.
+      Suele ser que se tomó el <strong>subtotal en vez del total</strong>, o que la lectura leyó mal una cifra. El del CFDI es el bueno.
+    </div>
+    <div id="imBody"></div>
+  </div>
   <div class="card" id="cardComplementos" style="display:none;margin-bottom:16px;border:2px solid var(--red)">
     <div class="card-title" style="color:var(--red)">🚫 Complementos de pago registrados como gasto<span id="cpCount" class="dup-badge" style="background:#FFEBEE;color:var(--red);margin-left:8px"></span></div>
     <div style="font-size:12.5px;color:var(--txt2);margin-bottom:12px">
@@ -1977,7 +1989,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-d";
+const APP_BUILD = "2026-08-21-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3218,7 +3230,7 @@ function showPage(name,btn){
   if(name==="caja"){ try{ initCajaDropzone(); }catch(_){} }
   if(name==="gmail")       checkGmailStatus();
   if(name==="pagos")       { restaurarPagosPeriodo(); renderPagos(); }
-  if(name==="reportes")  { initReporteDates(); renderComplementos(); renderFechasDudosas(); }
+  if(name==="reportes")  { initReporteDates(); renderLimpieza(); renderComplementos(); renderImportesDistintos(); renderFechasDudosas(); }
   if(name==="catalogo")    renderCatalogo();
   // Los catálogos de la nube se cargaban UNA sola vez por sesión: si otro daba de alta un
   // producto o subía CFDIs, no aparecían hasta recargar la página entera. Al entrar a la pestaña
@@ -5499,6 +5511,110 @@ function renderAll(){
   if(fc){ const prev=fc.value; fc.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${esc(c)}" ${c===prev?"selected":""}>${esc(c)}</option>`).join(""); }
 }
 
+// ── Importes que no cuadran con su CFDI ────────────────────────────────────
+// Si el folio del gasto casa con un comprobante timbrado, el importe tiene que ser el mismo. Lo
+// más común es haber capturado el SUBTOTAL en vez del total (se va el IVA) o una cifra mal leída.
+// Solo se comparan facturas (tipo I): un complemento va en cero y se atiende en su propia lista.
+function gastosConImporteDistinto(gastos, cfdis, tolerancia){
+  const tol = (tolerancia==null) ? 1 : tolerancia;
+  const porFolio = [];
+  (cfdis||[]).forEach(c=>{
+    if(!c || c.ignorado) return;
+    if(String(c.tipo||"I").toUpperCase().slice(0,1) !== "I") return;
+    const f = _dupFolioCanon(c.folio || c.folioComp || "");
+    const t = parseFloat(c.total)||0;
+    if(f && t>0) porFolio.push({ folio:f, total:t, subtotal:parseFloat(c.subtotal)||0 });
+  });
+  if(!porFolio.length) return [];
+  const out = [];
+  (gastos||[]).forEach(g=>{
+    const f = _dupFolioCanon(g && g.factura);
+    if(!f) return;
+    const hit = porFolio.find(c=>_dupFoliosEquivalentes(f, c.folio));
+    if(!hit) return;
+    const imp = parseFloat(g.importe)||0;
+    const dif = Math.round((imp - hit.total)*100)/100;
+    if(Math.abs(dif) <= tol) return;
+    // Decirlo cuando la diferencia es exactamente el IVA ahorra la mitad de la investigación.
+    const esSubtotal = hit.subtotal>0 && Math.abs(imp - hit.subtotal) <= tol;
+    out.push({ gasto:g, totalCfdi:hit.total, diferencia:dif, esSubtotal });
+  });
+  return out.sort((a,b)=> Math.abs(b.diferencia) - Math.abs(a.diferencia));
+}
+
+async function renderImportesDistintos(){
+  const card = document.getElementById("cardImportes"), body = document.getElementById("imBody");
+  if(!card || !body) return;
+  try{ await cargarCfdisStore(); }catch(_){}
+  const lista = gastosConImporteDistinto(allGastosAllWeeks(), _cfdisStore||[]);
+  document.getElementById("imCount").textContent = lista.length;
+  card.style.display = lista.length ? "block" : "none";
+  if(!lista.length) return;
+  body.innerHTML = `<div class="tbl-wrap"><table><thead><tr>
+      <th>Fecha</th><th>Proveedor</th><th>Folio</th><th style="text-align:right">Capturado</th>
+      <th style="text-align:right">CFDI</th><th style="text-align:right">Diferencia</th><th>Acción</th>
+    </tr></thead><tbody>` +
+    lista.map(x=>{
+      const g=x.gasto;
+      return `<tr>
+        <td style="white-space:nowrap">${esc(fmtDate(g.fecha))}</td>
+        <td>${esc(g.proveedor||"—")}${x.esSubtotal?`<div style="font-size:10.5px;color:var(--naranja)">se capturó el subtotal (falta el IVA)</div>`:""}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(g.factura||"—")}</td>
+        <td class="amount-cell">${fmt(g.importe)}</td>
+        <td class="amount-cell" style="color:var(--vd)">${fmt(x.totalCfdi)}</td>
+        <td class="amount-cell" style="color:var(--red)">${fmt(x.diferencia)}</td>
+        <td><button class="btn btn-gold" style="padding:5px 10px;font-size:11px" onclick="usarImporteCfdi('${escAttrJs(g.id)}',${x.totalCfdi})">Usar el del CFDI</button></td>
+      </tr>`;
+    }).join("") + `</tbody></table></div>`;
+}
+
+function usarImporteCfdi(id, total){
+  const g = encontrarGastoPorId(id);
+  if(!g){ alert("No encontré ese gasto. Recarga la página."); return; }
+  const antes = g.importe;
+  g.importe = Math.round((parseFloat(total)||0)*100)/100;
+  save();
+  renderImportesDistintos(); renderLimpieza();
+  try{ renderAll(); }catch(_){}
+  alert(`✅ ${g.proveedor||"Gasto"}: ${fmt(antes)} → ${fmt(g.importe)} (el del comprobante).`);
+}
+
+// Resumen de todo lo que hay que limpiar antes de fiarse del balance, con el efecto en pesos.
+async function renderLimpieza(){
+  const card = document.getElementById("cardLimpieza"), body = document.getElementById("limpiezaBody");
+  if(!card || !body) return;
+  try{ await cargarCfdisStore(); }catch(_){}
+  try{ await cargarGmailRevisados(); }catch(_){}
+  const gastos = allGastosAllWeeks(), cfdis = _cfdisStore||[];
+  const comp  = gastosQueSonComplemento(gastos, cfdis);
+  const imp   = gastosConImporteDistinto(gastos, cfdis);
+  const fech  = gastosConFechaDudosa(gastos, _gmailRevisados||[], todayStr(), cfdis);
+  const dups  = (typeof duplicadosSospechosos==="function") ? (duplicadosSospechosos(gastos)||[]) : [];
+  const mComp = comp.reduce((s,x)=>s+(parseFloat(x.gasto.importe)||0),0);
+  const mImp  = imp.reduce((s,x)=>s+x.diferencia,0);
+  const total = comp.length+imp.length+fech.length+dups.length;
+  card.style.display = "block";
+  if(!total){
+    body.innerHTML = `<div style="font-size:13px;color:var(--vd)">✅ No se detectó nada que corregir. El balance de este periodo se puede tomar como bueno.</div>
+      <div style="font-size:11.5px;color:var(--txt2);margin-top:6px">Ojo: solo se puede revisar lo que tenga CFDI subido en la pestaña SAT.</div>`;
+    return;
+  }
+  const fila=(n,txt,monto,color)=>`<tr><td style="padding:6px 4px"><strong style="color:${color}">${n}</strong> ${txt}</td>`+
+    `<td class="amount-cell" style="padding:6px 4px;color:${color}">${monto}</td></tr>`;
+  body.innerHTML = `<div style="font-size:12.5px;color:var(--txt2);margin-bottom:10px">
+      Esto es lo que hoy distorsiona el balance. Corrígelo en las tarjetas de abajo y vuelve a exportarlo.
+    </div><div class="tbl-wrap"><table><tbody>` +
+    (comp.length ? fila(comp.length,"complemento(s) de pago contados como gasto — <strong>hay que quitarlos</strong>", "−"+fmt(mComp), "var(--red)") : "") +
+    (imp.length  ? fila(imp.length,"importe(s) que no cuadran con su CFDI", (mImp>=0?"−":"+")+fmt(Math.abs(mImp)), "var(--naranja)") : "") +
+    (fech.length ? fila(fech.length,"gasto(s) con fecha dudosa — mueven dinero de semana", "—", "var(--naranja)") : "") +
+    (dups.length ? fila(dups.length,"posible(s) duplicado(s) — revísalos en Gastos", "—", "var(--naranja)") : "") +
+    `</tbody></table></div>
+    <div style="font-size:12.5px;margin-top:10px;padding-top:10px;border-top:1.5px solid var(--border)">
+      Efecto estimado en los egresos si corriges todo: <strong style="color:var(--vd)">${(mComp+mImp)>=0?"−":"+"}${fmt(Math.abs(mComp+mImp))}</strong>
+    </div>
+    <div style="font-size:11.5px;color:var(--txt2);margin-top:6px">Solo se puede revisar lo que tenga su CFDI subido en <strong>SAT</strong>. Sube todos los meses que quieras auditar.</div>`;
+}
+
 // ── Complementos de pago capturados como gasto ─────────────────────────────
 // El CFDI tipo P es el acuse de pago de facturas YA registradas: su Subtotal y su Total van en
 // cero y el dinero que muestra el PDF ("Monto de pago") no es un egreso nuevo. Registrarlo
@@ -5556,7 +5672,7 @@ function quitarComplemento(id){
               `Es un complemento de PAGO, no una factura de gasto: las facturas que ampara ya están registradas aparte.\n\n`+
               `¿Continuar?`)) return;
   eliminarGasto(id);
-  renderComplementos();
+  renderComplementos(); renderLimpieza();
 }
 
 // ── Gastos con fecha dudosa ────────────────────────────────────────────────
