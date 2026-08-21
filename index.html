@@ -1235,6 +1235,14 @@ body.snav-min .side-theme span { display:none; }
 
 <!-- ═══════════════ PAGE: REPORTES ═══════════════ -->
 <div class="container page" id="page-reportes">
+  <div class="card" id="cardFechasDudosas" style="display:none;margin-bottom:16px">
+    <div class="card-title" style="color:var(--naranja)">📅 Gastos con fecha dudosa<span id="fdCount" class="dup-badge" style="background:#FFF3E0;margin-left:8px"></span></div>
+    <div style="font-size:12.5px;color:var(--txt2);margin-bottom:12px">
+      El presupuesto se reparte por fecha, así que un gasto mal fechado descuadra <strong>dos</strong> semanas: le sobra a una y le falta a la otra.
+      Aquí salen los que casi seguro quedaron con la fecha equivocada. Corrige la fecha y el gasto se va solo a la semana que le toca.
+    </div>
+    <div id="fdBody"></div>
+  </div>
   <div class="card">
     <div class="card-title">📈 Auditoría por período y proveedor</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px;margin-bottom:20px">
@@ -1960,7 +1968,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-l";
+const APP_BUILD = "2026-08-19-m";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3201,7 +3209,7 @@ function showPage(name,btn){
   if(name==="caja"){ try{ initCajaDropzone(); }catch(_){} }
   if(name==="gmail")       checkGmailStatus();
   if(name==="pagos")       { restaurarPagosPeriodo(); renderPagos(); }
-  if(name==="reportes")    initReporteDates();
+  if(name==="reportes")  { initReporteDates(); renderFechasDudosas(); }
   if(name==="catalogo")    renderCatalogo();
   // Los catálogos de la nube se cargaban UNA sola vez por sesión: si otro daba de alta un
   // producto o subía CFDIs, no aparecían hasta recargar la página entera. Al entrar a la pestaña
@@ -5442,6 +5450,98 @@ function renderAll(){
   const cats=[...catsSet].sort();
   const fc=document.getElementById("filtrocat");
   if(fc){ const prev=fc.value; fc.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${esc(c)}" ${c===prev?"selected":""}>${esc(c)}</option>`).join(""); }
+}
+
+// ── Gastos con fecha dudosa ────────────────────────────────────────────────
+// La fecha del correo viene en formato RFC 2822 ("Mon, 10 Aug 2026 15:17:33 +0000").
+// Se pasa a YYYY-MM-DD para poder compararla con la del gasto. Si no se entiende, "".
+function _fechaCorreoISO(txt){
+  const t = String(txt||"").trim();
+  if(!t) return "";
+  const d = new Date(t);
+  if(isNaN(d.getTime())) return "";
+  const p = n => String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+
+// Tres señales de que la fecha de un gasto está mal, de la más concluyente a la más indiciaria:
+//  1. Es POSTERIOR a la del correo que trajo la factura. Imposible: una factura no puede tener
+//     fecha después del correo que la envió. Es prueba, no sospecha.
+//  2. Está en el futuro. Tampoco puede ser.
+//  3. Coincide con el día en que se capturó, viniendo de Gmail. Es la huella del fallback: cuando
+//     la IA no encontraba la fecha en el PDF, se ponía la de hoy sin avisar.
+// Pura y probada. `hoy` se recibe para poder fijarlo en las pruebas.
+function gastosConFechaDudosa(gastos, revisados, hoy){
+  const porMsg = {};
+  (revisados||[]).forEach(r=>{ if(r && r.msgId) porMsg[r.msgId] = r; });
+  const out = [];
+  (gastos||[]).forEach(g=>{
+    if(!g || !g.fecha) return;
+    const rev = g._gmailMsgId ? porMsg[g._gmailMsgId] : null;
+    const fCorreo = rev ? _fechaCorreoISO(rev.fechaCorreo) : "";
+    if(fCorreo && g.fecha > fCorreo){
+      out.push({ gasto:g, motivo:"posterior al correo que la envió", fechaCorreo:fCorreo, nivel:"seguro" });
+      return;
+    }
+    if(hoy && g.fecha > hoy){
+      out.push({ gasto:g, motivo:"fecha en el futuro", fechaCorreo:fCorreo, nivel:"seguro" });
+      return;
+    }
+    // El id del gasto es el Date.now() de cuando se guardó: sirve para saber qué día se capturó.
+    const ms = Number(g.id);
+    if(g._gmailMsgId && ms > 0 && String(g.id).length >= 13){
+      const d = new Date(ms), p = n => String(n).padStart(2,"0");
+      const fCap = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+      if(g.fecha === fCap){
+        out.push({ gasto:g, motivo:"quedó con la fecha del día en que se capturó", fechaCorreo:fCorreo, nivel:"posible" });
+      }
+    }
+  });
+  return out.sort((a,b)=> (a.nivel===b.nivel) ? (a.gasto.fecha < b.gasto.fecha ? -1 : 1) : (a.nivel==="seguro" ? -1 : 1));
+}
+
+async function renderFechasDudosas(){
+  const card = document.getElementById("cardFechasDudosas");
+  const body = document.getElementById("fdBody");
+  if(!card || !body) return;
+  try{ await cargarGmailRevisados(); }catch(_){}
+  const lista = gastosConFechaDudosa(allGastosAllWeeks(), _gmailRevisados||[], todayStr());
+  document.getElementById("fdCount").textContent = lista.length;
+  card.style.display = lista.length ? "block" : "none";
+  if(!lista.length) return;
+  body.innerHTML = `<div class="tbl-wrap"><table><thead><tr>
+      <th>Fecha actual</th><th>Proveedor</th><th>Factura</th><th style="text-align:right">Importe</th>
+      <th>Por qué</th><th>Corregir a</th></tr></thead><tbody>` +
+    lista.map(x=>{
+      const g = x.gasto;
+      const color = x.nivel==="seguro" ? "var(--red)" : "var(--naranja)";
+      const sug = x.fechaCorreo
+        ? `<div style="font-size:10.5px;color:var(--txt2);margin-top:2px">correo: ${esc(fmtDate(x.fechaCorreo))}</div>`
+        : "";
+      return `<tr>
+        <td style="white-space:nowrap"><strong style="color:${color}">${esc(fmtDate(g.fecha))}</strong></td>
+        <td>${esc(g.proveedor||"—")}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(g.factura||"—")}</td>
+        <td class="amount-cell">${fmt(g.importe)}</td>
+        <td style="font-size:11.5px;color:${color}">${esc(x.motivo)}</td>
+        <td style="white-space:nowrap">
+          <input type="date" value="${esc(x.fechaCorreo||g.fecha)}" onchange="corregirFechaGasto('${escAttrJs(g.id)}', this.value)"
+            style="padding:5px 7px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit">${sug}
+        </td></tr>`;
+    }).join("") + `</tbody></table></div>
+    <div style="font-size:11.5px;color:var(--txt2);margin-top:8px">⚠ La fecha del correo es <strong>cuándo llegó</strong>, no necesariamente la del comprobante. Si tienes la factura a la mano, usa la del documento.</div>`;
+}
+
+function corregirFechaGasto(id, nueva){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(nueva||""))){ alert("Fecha no válida."); return; }
+  const g = encontrarGastoPorId(id);
+  if(!g){ alert("No encontré ese gasto."); return; }
+  const antes = g.fecha;
+  g.fecha = nueva;
+  save();
+  renderFechasDudosas();
+  try{ renderAll(); }catch(_){}
+  alert(`✅ ${g.proveedor||"Gasto"}: ${fmtDate(antes)} → ${fmtDate(nueva)}.\n\nYa cuenta en la semana que le toca.`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

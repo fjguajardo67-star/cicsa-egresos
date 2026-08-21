@@ -95,6 +95,7 @@ const FUNCS = [
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
+  "gastosConFechaDudosa", "_fechaCorreoISO",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -1018,6 +1019,60 @@ t("sin periodo definido no se inventan avisos", () => {
 });
 t("un gasto sin fecha no dispara aviso", () => {
   assert.equal(S.avisoGastoFueraDeVista("", PER, "2026-07-01"), "");
+});
+
+console.log("\n== gastos con fecha dudosa (el presupuesto se reparte por fecha) ==");
+const HOY = "2026-08-19";
+const REV = [{ msgId: "m1", fechaCorreo: "Wed, 12 Aug 2026 17:13:18 +0000" }];
+t("la fecha del correo RFC 2822 se entiende", () => {
+  assert.equal(S._fechaCorreoISO("Mon, 10 Aug 2026 15:17:33 +0000"), "2026-08-10");
+  assert.equal(S._fechaCorreoISO(""), "");
+  assert.equal(S._fechaCorreoISO("no es fecha"), "", "basura no truena");
+});
+t("un gasto POSTERIOR al correo que lo trajo es prueba, no sospecha", () => {
+  // Caso real: correo de PolloBal del 12 ago, gasto fechado el 19.
+  const r = S.gastosConFechaDudosa(
+    [{ id: "1", fecha: "2026-08-19", proveedor: "POLLO BAL", _gmailMsgId: "m1" }], REV, HOY);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].nivel, "seguro");
+  assert.ok(/posterior al correo/.test(r[0].motivo));
+  assert.equal(r[0].fechaCorreo, "2026-08-12", "se ofrece la fecha del correo como arranque");
+});
+t("un gasto anterior o igual al correo NO se marca", () => {
+  assert.deepEqual(S.gastosConFechaDudosa(
+    [{ id: "1", fecha: "2026-08-11", _gmailMsgId: "m1" }], REV, HOY), []);
+  assert.deepEqual(S.gastosConFechaDudosa(
+    [{ id: "1", fecha: "2026-08-12", _gmailMsgId: "m1" }], REV, HOY), []);
+});
+t("una fecha en el futuro se marca aunque no haya correo", () => {
+  const r = S.gastosConFechaDudosa([{ id: "1", fecha: "2026-09-01" }], [], HOY);
+  assert.equal(r.length, 1);
+  assert.ok(/futuro/.test(r[0].motivo));
+});
+t("la huella del fallback: fecha igual al día en que se capturó, viniendo de Gmail", () => {
+  const idCaptura = String(new Date("2026-08-19T10:00:00").getTime());
+  const r = S.gastosConFechaDudosa(
+    [{ id: idCaptura, fecha: "2026-08-19", _gmailMsgId: "zzz" }], [], HOY);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].nivel, "posible", "es indicio, no prueba");
+});
+t("un gasto capturado a mano el mismo día NO se marca", () => {
+  // Sin _gmailMsgId no aplica: capturar hoy una factura de hoy es lo normal.
+  const idCaptura = String(new Date("2026-08-19T10:00:00").getTime());
+  assert.deepEqual(S.gastosConFechaDudosa([{ id: idCaptura, fecha: "2026-08-19" }], [], HOY), []);
+});
+t("los seguros salen antes que los posibles", () => {
+  const idCaptura = String(new Date("2026-08-19T10:00:00").getTime());
+  const r = S.gastosConFechaDudosa([
+    { id: idCaptura, fecha: "2026-08-19", _gmailMsgId: "zzz" },
+    { id: "1", fecha: "2026-08-19", proveedor: "POLLO BAL", _gmailMsgId: "m1" },
+  ], REV, HOY);
+  assert.equal(r.length, 2);
+  assert.equal(r[0].nivel, "seguro", "primero lo que es prueba");
+  assert.equal(r[1].nivel, "posible");
+});
+t("un gasto sin fecha no entra a la lista", () => {
+  assert.deepEqual(S.gastosConFechaDudosa([{ id: "1", fecha: "" }], REV, HOY), []);
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
