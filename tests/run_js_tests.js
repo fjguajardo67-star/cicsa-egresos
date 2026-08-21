@@ -95,7 +95,7 @@ const FUNCS = [
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
-  "gastosConFechaDudosa", "_fechaCorreoISO",
+  "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -1114,6 +1114,45 @@ t("sin CFDI que casar, siguen valiendo las señales de antes", () => {
     [{ id: "1", fecha: "2026-09-01", factura: "NO-EXISTE" }], [], HOY, CFDIS);
   assert.equal(r.length, 1);
   assert.ok(/futuro/.test(r[0].motivo));
+});
+
+console.log("\n== complementos de pago capturados como gasto (dinero contado dos veces) ==");
+const CFDIS_P = [
+  { folio: "BE2026080001152524", fecha: "2026-08-06", tipo: "P", proveedor: "BEBIDAS PURIFICADAS" },
+  { folio: "MOJBE623610", fecha: "2026-08-08", tipo: "I", proveedor: "BEBIDAS PURIFICADAS" },
+];
+t("un gasto cuyo folio es un CFDI tipo P se marca", () => {
+  // Caso real: $139,873.09 capturado desde un complemento de pago de GEPP.
+  const r = S.gastosQueSonComplemento(
+    [{ id: "1", fecha: "2026-08-04", factura: "BE2026080001152524", importe: 139873.09, proveedor: "BEBIDAS PURIFICADAS" }],
+    CFDIS_P);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].gasto.importe, 139873.09);
+});
+t("una factura normal (tipo I) NO se marca", () => {
+  assert.deepEqual(S.gastosQueSonComplemento(
+    [{ id: "1", factura: "MOJBE623610", importe: 23119.5 }], CFDIS_P), []);
+});
+t("sin CFDI tipo P guardado no se marca nada", () => {
+  assert.deepEqual(S.gastosQueSonComplemento(
+    [{ id: "1", factura: "BE2026080001152524", importe: 1 }],
+    [{ folio: "MOJBE623610", tipo: "I" }]), []);
+});
+t("un complemento descartado a mano no cuenta", () => {
+  assert.deepEqual(S.gastosQueSonComplemento(
+    [{ id: "1", factura: "BE2026080001152524", importe: 1 }],
+    [{ folio: "BE2026080001152524", tipo: "P", ignorado: true }]), []);
+});
+t("un gasto sin folio no puede casarse con nada", () => {
+  assert.deepEqual(S.gastosQueSonComplemento([{ id: "1", factura: "", importe: 500 }], CFDIS_P), []);
+});
+t("salen ordenados por importe, para atacar primero lo que más pesa", () => {
+  const r = S.gastosQueSonComplemento([
+    { id: "1", factura: "0001135584", importe: 60103.26 },
+    { id: "2", factura: "0001148188", importe: 87302.64 },
+  ], [{ folio: "0001135584", tipo: "P" }, { folio: "0001148188", tipo: "P" }]);
+  assert.equal(r.length, 2);
+  assert.equal(r[0].gasto.importe, 87302.64, "el mayor primero");
 });
 
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");

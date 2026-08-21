@@ -1235,6 +1235,14 @@ body.snav-min .side-theme span { display:none; }
 
 <!-- ═══════════════ PAGE: REPORTES ═══════════════ -->
 <div class="container page" id="page-reportes">
+  <div class="card" id="cardComplementos" style="display:none;margin-bottom:16px;border:2px solid var(--red)">
+    <div class="card-title" style="color:var(--red)">🚫 Complementos de pago registrados como gasto<span id="cpCount" class="dup-badge" style="background:#FFEBEE;color:var(--red);margin-left:8px"></span></div>
+    <div style="font-size:12.5px;color:var(--txt2);margin-bottom:12px">
+      Un <strong>complemento de pago</strong> no es un gasto: es el acuse de que se pagaron facturas que <strong>ya estaban registradas</strong>.
+      Capturarlo cuenta el mismo dinero <strong>dos veces</strong>. El PDF engaña porque muestra un monto grande en “Monto de pago”, aunque el comprobante va con Subtotal 0 y Total 0.
+    </div>
+    <div id="cpBody"></div>
+  </div>
   <div class="card" id="cardFechasDudosas" style="display:none;margin-bottom:16px">
     <div class="card-title" style="color:var(--naranja)">📅 Gastos con fecha dudosa<span id="fdCount" class="dup-badge" style="background:#FFF3E0;margin-left:8px"></span></div>
     <div style="font-size:12.5px;color:var(--txt2);margin-bottom:12px">
@@ -1969,7 +1977,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-b";
+const APP_BUILD = "2026-08-21-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3210,7 +3218,7 @@ function showPage(name,btn){
   if(name==="caja"){ try{ initCajaDropzone(); }catch(_){} }
   if(name==="gmail")       checkGmailStatus();
   if(name==="pagos")       { restaurarPagosPeriodo(); renderPagos(); }
-  if(name==="reportes")  { initReporteDates(); renderFechasDudosas(); }
+  if(name==="reportes")  { initReporteDates(); renderComplementos(); renderFechasDudosas(); }
   if(name==="catalogo")    renderCatalogo();
   // Los catálogos de la nube se cargaban UNA sola vez por sesión: si otro daba de alta un
   // producto o subía CFDIs, no aparecían hasta recargar la página entera. Al entrar a la pestaña
@@ -3752,6 +3760,12 @@ function guardarGasto(){
   };
   if(!gasto.proveedor||!(gasto.importe>0)){ setStatus("statusGuardar","⚠ Proveedor e importe (mayor que cero) son obligatorios.","err"); return; }
   let _saltarExtraccion=false;   // no gastar una 2ª lectura de IA si es duplicado ya en catálogo
+  if(_cfdiGmail && _cfdiGmail.tipo==="P" &&
+     !confirm(`⚠ Este comprobante es un COMPLEMENTO DE PAGO (${_cfdiGmail.folio||""}), no una factura de gasto.\n\n`+
+              `Las facturas que ampara ya deberían estar registradas: guardarlo cuenta el mismo dinero dos veces.\n\n`+
+              `¿Guardar de todas formas?`)){
+    return;
+  }
   const _dup=findDuplicate(gasto.proveedor,gasto.importe,gasto.fecha,gasto.factura);
   if(_dup){
     // Si el gasto existente no tiene factura adjunta (ej. se capturó a mano desde la
@@ -5451,6 +5465,66 @@ function renderAll(){
   const cats=[...catsSet].sort();
   const fc=document.getElementById("filtrocat");
   if(fc){ const prev=fc.value; fc.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${esc(c)}" ${c===prev?"selected":""}>${esc(c)}</option>`).join(""); }
+}
+
+// ── Complementos de pago capturados como gasto ─────────────────────────────
+// El CFDI tipo P es el acuse de pago de facturas YA registradas: su Subtotal y su Total van en
+// cero y el dinero que muestra el PDF ("Monto de pago") no es un egreso nuevo. Registrarlo
+// duplica el gasto. Solo en un mes real esos comprobantes sumaban $576,501.62.
+function gastosQueSonComplemento(gastos, cfdis){
+  const pagos = [];
+  (cfdis||[]).forEach(c=>{
+    if(!c || c.ignorado) return;
+    if(String(c.tipo||"").toUpperCase().slice(0,1) !== "P") return;
+    const f = _dupFolioCanon(c.folio || c.folioComp || "");
+    if(f) pagos.push({ folio:f, fecha:String(c.fecha||"").slice(0,10), proveedor:c.proveedor||"" });
+  });
+  if(!pagos.length) return [];
+  const out = [];
+  (gastos||[]).forEach(g=>{
+    if(!g) return;
+    const f = _dupFolioCanon(g.factura);
+    if(!f) return;
+    const hit = pagos.find(p=>_dupFoliosEquivalentes(f, p.folio));
+    if(hit) out.push({ gasto:g, cfdi:hit });
+  });
+  return out.sort((a,b)=> (parseFloat(b.gasto.importe)||0) - (parseFloat(a.gasto.importe)||0));
+}
+
+async function renderComplementos(){
+  const card = document.getElementById("cardComplementos");
+  const body = document.getElementById("cpBody");
+  if(!card || !body) return;
+  try{ await cargarCfdisStore(); }catch(_){}
+  const lista = gastosQueSonComplemento(allGastosAllWeeks(), _cfdisStore||[]);
+  document.getElementById("cpCount").textContent = lista.length;
+  card.style.display = lista.length ? "block" : "none";
+  if(!lista.length) return;
+  const suma = lista.reduce((s,x)=>s+(parseFloat(x.gasto.importe)||0), 0);
+  body.innerHTML = `<div style="font-size:13px;margin-bottom:10px">Se están contando de más <strong style="color:var(--red)">${fmt(suma)}</strong>.</div>
+    <div class="tbl-wrap"><table><thead><tr>
+      <th>Fecha</th><th>Proveedor</th><th>Folio</th><th style="text-align:right">Importe</th><th>Acción</th>
+    </tr></thead><tbody>` +
+    lista.map(x=>{
+      const g = x.gasto;
+      return `<tr>
+        <td style="white-space:nowrap">${esc(fmtDate(g.fecha))}</td>
+        <td>${esc(g.proveedor||"—")}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(g.factura||"—")}</td>
+        <td class="amount-cell" style="color:var(--red)">${fmt(g.importe)}</td>
+        <td><button class="btn btn-red" style="padding:5px 10px;font-size:11px" onclick="quitarComplemento('${escAttrJs(g.id)}')">🗑️ Quitar</button></td>
+      </tr>`;
+    }).join("") + `</tbody></table></div>`;
+}
+
+function quitarComplemento(id){
+  const g = encontrarGastoPorId(id);
+  if(!g){ alert("No encontré ese gasto. Recarga la página."); return; }
+  if(!confirm(`Quitar este registro:\n\n${g.proveedor||""} · ${fmt(g.importe)} · ${g.factura||""}\n\n`+
+              `Es un complemento de PAGO, no una factura de gasto: las facturas que ampara ya están registradas aparte.\n\n`+
+              `¿Continuar?`)) return;
+  eliminarGasto(id);
+  renderComplementos();
 }
 
 // ── Gastos con fecha dudosa ────────────────────────────────────────────────
@@ -8504,11 +8578,21 @@ async function gmailProcessItem(idx){
     if(_cfdiGmail.fecha)     document.getElementById("fFecha").value   = _cfdiGmail.fecha;
     if(_cfdiGmail.proveedor) document.getElementById("fProv").value    = _cfdiGmail.proveedor;
     if(_cfdiGmail.folio)     document.getElementById("fFactura").value = _cfdiGmail.folio;
-    if(_cfdiGmail.total>0)   document.getElementById("fImporte").value = _cfdiGmail.total;
+    // Un complemento de pago va con Total 0: el monto que enseña el PDF es lo PAGADO de facturas
+    // que ya se registraron. No se prellena el importe para no invitar a duplicar el gasto.
+    if(_cfdiGmail.total>0 && _cfdiGmail.tipo!=="P") document.getElementById("fImporte").value = _cfdiGmail.total;
     _fechaAsumida = false;
   }
   setTimeout(async()=>{
-    if(item.mime_type==="application/xml"){
+    if(_cfdiGmail && _cfdiGmail.tipo==="P"){
+      // Se avisa antes de que nadie teclee nada: el PDF de un complemento se parece a una factura.
+      document.getElementById("extractedCard").style.display="block";
+      setStatus("statusLectura",
+        `🚫 <strong>Esto es un COMPLEMENTO DE PAGO, no una factura de gasto.</strong><br>`+
+        `Es el acuse de que se pagaron facturas que <strong>ya están registradas</strong>: capturarlo contaría el mismo dinero dos veces. `+
+        `El monto grande que ves en el PDF es lo pagado, no un egreso nuevo (el comprobante va con Total 0).<br>`+
+        `Si de todas formas necesitas registrarlo, escribe tú el importe.`, "err");
+    } else if(item.mime_type==="application/xml"){
       // Correo que solo trae el XML: no hay nada que leer con IA — el comprobante ya dio todo.
       document.getElementById("extractedCard").style.display="block";
       document.getElementById("btnLeer").disabled=true;
