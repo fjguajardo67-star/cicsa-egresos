@@ -1998,7 +1998,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-j";
+const APP_BUILD = "2026-08-21-k";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2108,26 +2108,36 @@ const CATALOGO_COL = 'productos_comerciales';
 const PROVEEDORES_COL = 'proveedores';
 
 async function fbListCollection(col){
-  try {
-    const headers = await fbAuthHeader();
-    // Sigue nextPageToken: sin esto, la colección quedaba silenciosamente truncada en los
-    // primeros 300 documentos y los productos 301+ simplemente no aparecían en el catálogo.
-    const out = [];
-    let pageToken = "";
-    do {
-      const r = await fetch(`${FB_BASE}/${col}?pageSize=300&key=${FB_KEY}${pageToken?`&pageToken=${encodeURIComponent(pageToken)}`:""}`, { headers });
-      if(!r.ok) break;
-      const d = await r.json();
-      (d.documents||[]).forEach(doc=>{
-        const id = doc.name.split('/').pop();
-        let data = {};
-        try { data = JSON.parse(doc.fields?.json?.stringValue || '{}'); } catch(e){}
-        out.push({ id, ...data });
-      });
-      pageToken = d.nextPageToken || "";
-    } while(pageToken);
-    return out;
-  } catch(e){ console.warn('fbListCollection error:', e); return []; }
+  // Sigue nextPageToken: sin esto la colección quedaba truncada en los primeros 300 documentos.
+  // Y si una página falla NO se devuelve lo que alcanzó a leer: una lista a medias se ve igual de
+  // legítima que una completa, y con ella el balance mostraba $0 de facturado como si fuera cierto.
+  // Mientras hubo un solo mes de CFDIs cabía todo en una página y el problema no se notaba; al
+  // llegar al segundo mes empezaron a ser dos, y perder la segunda borraba medio año de datos.
+  // Cada página se reintenta antes de rendirse — casi siempre es un fallo pasajero de red.
+  const headers = await fbAuthHeader();
+  const out = [];
+  let pageToken = "";
+  do {
+    const url = `${FB_BASE}/${col}?pageSize=300&key=${FB_KEY}${pageToken?`&pageToken=${encodeURIComponent(pageToken)}`:""}`;
+    let d = null, ultimoError = "";
+    for(let intento=1; intento<=3; intento++){
+      try {
+        const r = await fetch(url, { headers });
+        if(r.ok){ d = await r.json(); break; }
+        ultimoError = `el servidor respondió ${r.status}`;
+      } catch(e){ ultimoError = e.message || "error de red"; }
+      if(intento < 3) await new Promise(res=>setTimeout(res, 400*intento));
+    }
+    if(!d) throw new Error(`No se pudo leer "${col}" completo (${ultimoError}). Se leyeron ${out.length} registro(s) de más que hay: mejor no mostrar nada que mostrar la mitad como si fuera todo.`);
+    (d.documents||[]).forEach(doc=>{
+      const id = doc.name.split('/').pop();
+      let data = {};
+      try { data = JSON.parse(doc.fields?.json?.stringValue || '{}'); } catch(e){}
+      out.push({ id, ...data });
+    });
+    pageToken = d.nextPageToken || "";
+  } while(pageToken);
+  return out;
 }
 
 async function fbCreateDoc(col, data){
@@ -3237,7 +3247,8 @@ function showPage(name,btn){
                            // alguien subía los XML de un mes nuevo —o los subía en otro dispositivo—
                            // el balance seguía con la copia vieja y lo facturado salía incompleto sin
                            // avisar. Se piden frescos cada vez que se entra.
-                           if(currentRole==="admin") cargarCfdisStore(true).then(()=>renderBalance()).catch(()=>{}); }
+                           if(currentRole==="admin") cargarCfdisStore(true).then(()=>renderBalance())
+                             .catch(e=>{ _cfdisError = e.message||"no se pudieron leer los CFDI"; renderBalance(); }); }
   if(name==="reporte"){    pintarSelectorPeriodoSP("reportePeriodoSel","renderReporteActual"); renderReporteActual(); }
   if(name==="caja"){ try{ initCajaDropzone(); }catch(_){} }
   if(name==="gmail")       checkGmailStatus();
@@ -4814,6 +4825,11 @@ function renderBalance(){
   ocultar(false);
   const { b, rfc, label } = _datosBalance();
   const lbl=document.getElementById("balancePeriodoLabel"); if(lbl) lbl.textContent=`— ${label}`;
+  // Si los CFDI no se pudieron leer, lo facturado sale en cero — y un cero silencioso se lee como
+  // "no facturaste nada", que es una conclusión muy distinta de "no pude leerlo".
+  const avisoCfdi = _cfdisError
+    ? `<div style="background:#FFEBEE;border:1.5px solid var(--red);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px">❌ <strong>No se pudieron leer los CFDI de la nube</strong>, así que lo facturado NO es confiable en este reporte. ${esc(_cfdisError)}<br>Recarga la página e inténtalo de nuevo.</div>`
+    : "";
   const sano=b.resultado>=0;
   const aviso = !rfc
     ? `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px">⚠️ Falta el <strong>RFC de tu empresa</strong> (se pone en la pantalla SAT): sin él no se puede saber cuáles CFDI emitiste tú, y lo facturado sale en cero.</div>`
@@ -4831,7 +4847,7 @@ function renderBalance(){
   const avisoCuadre = Math.abs(_descuadre) >= 0.01
     ? `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px">⚠️ El desglose por categoría suma <strong>${fmt(totCats)}</strong>, que no cuadra con las salidas (<strong>${fmt(b.salidas)}</strong>): faltan ${fmt(Math.abs(_descuadre))}. Revisa las facturas divididas cuyo desglose no cubre el importe total.</div>`
     : "";
-  cont.innerHTML = aviso + avisoCuadre + `
+  cont.innerHTML = avisoCfdi + aviso + avisoCuadre + `
     <div class="summary-grid" style="margin-bottom:16px">
       <div class="scard"><div class="scard-label">⬆️ Entradas</div><div class="scard-val" style="color:var(--vd)">${fmt(b.entradas)}</div><div class="scard-sub">facturado + efectivo</div></div>
       <div class="scard"><div class="scard-label">⬇️ Salidas</div><div class="scard-val" style="color:var(--red)">${fmt(b.salidas)}</div><div class="scard-sub">${b.nGastos} gasto(s)</div></div>
@@ -6094,6 +6110,7 @@ async function procesarSATExcel(){
 // del documento es el UUID, de modo que subir el mismo CFDI dos veces lo actualiza, no lo duplica.
 const CFDIS_COL = "cfdis";
 let _cfdisStore = null;
+let _cfdisError = "";     // último fallo al leer los CFDI: se muestra en el balance
 function cfdiMes(fecha){ return (fecha||"").slice(0,7); }                      // "YYYY-MM"
 function filtrarCfdisPorRango(cfdis, ini, fin){
   return (cfdis||[]).filter(c=>{ if(ini && c.fecha && c.fecha<ini) return false; if(fin && c.fecha && c.fecha>fin) return false; return true; });
@@ -6104,6 +6121,7 @@ function agruparCfdisPorMes(cfdis){
 async function cargarCfdisStore(forzar){
   if(_cfdisStore && !forzar) return _cfdisStore;
   _cfdisStore = await fbListCollection(CFDIS_COL);
+  _cfdisError = "";
   return _cfdisStore;
 }
 // Upsert de un arreglo de CFDIs parseados. Devuelve {nuevos, existentes}.
