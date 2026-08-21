@@ -1960,7 +1960,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-k";
+const APP_BUILD = "2026-08-19-l";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3307,6 +3307,10 @@ let _productosPreleidos=null;
 // perfectamente normal en el formulario — y el gasto acaba en la semana equivocada sin que nadie
 // lo note. Esta bandera recuerda que la fecha NO salió del documento, para poder avisarlo.
 let _fechaAsumida=false;
+// Encabezado del CFDI que venía en el correo (XML). Su fecha es la del comprobante timbrado, no
+// una lectura de imagen: manda sobre lo que diga la IA. Con esto el gasto cae en la semana que le
+// toca, que es de lo que depende el presupuesto.
+let _cfdiGmail=null;
 document.getElementById("fileIn").addEventListener("change",function(){ if(this.files[0]) handleFile(this.files[0]); });
 const dz=document.getElementById("dropzone");
 dz.addEventListener("dragover",e=>{e.preventDefault();dz.classList.add("drag");});
@@ -3353,6 +3357,7 @@ async function _optimizarCaptura(rawDataURL, nombre){
 async function handleFile(file){
   capturedFile=file;
   _productosPreleidos=null;
+  _cfdiGmail=null;          // archivo suelto: no hay CFDI del correo que mande sobre la fecha
   const preview=document.getElementById("imgPreview");
   if(file.type.startsWith("image/")){
     const rawDataURL = await _leerArchivoDataURL(file);
@@ -3411,11 +3416,18 @@ async function leerDocumento(){
       await analizarDivision(data.proveedor,data.fecha,data.factura,data.importe);
       return;
     }
-    document.getElementById("fProv").value=data.proveedor||"";
-    _fechaAsumida = !data.fecha;
-    document.getElementById("fFecha").value=data.fecha||todayStr();
-    document.getElementById("fFactura").value=data.factura||"";
-    document.getElementById("fImporte").value=data.importe||"";
+    // Si el correo traía el CFDI en XML, sus datos GANAN sobre los de la IA: son los timbrados.
+    const _c = _cfdiGmail;
+    document.getElementById("fProv").value=(_c&&_c.proveedor)||data.proveedor||"";
+    if(_c && _c.fecha){
+      _fechaAsumida = false;
+      document.getElementById("fFecha").value=_c.fecha;
+    } else {
+      _fechaAsumida = !data.fecha;
+      document.getElementById("fFecha").value=data.fecha||todayStr();
+    }
+    document.getElementById("fFactura").value=(_c&&_c.folio)||data.factura||"";
+    document.getElementById("fImporte").value=(_c&&_c.total>0)?_c.total:(data.importe||"");
     if(data.categoria){
       const sel=document.getElementById("fCategoria");
       for(let i=0;i<sel.options.length;i++){ if(sel.options[i].value===data.categoria){sel.selectedIndex=i;break;} }
@@ -3423,9 +3435,13 @@ async function leerDocumento(){
     }
     document.getElementById("btnDividir").style.display="none";
     document.getElementById("extractedCard").style.display="block";
-    setStatus("statusLectura", _fechaAsumida
-      ? `⚠ Datos extraídos, pero <strong>no se pudo leer la fecha del documento</strong>: quedó la de hoy. Corrígela antes de guardar o el gasto va a caer en la semana equivocada.`
-      : "✅ Datos extraídos — verifica y guarda", _fechaAsumida ? "err" : "ok");
+    setStatus("statusLectura",
+      _fechaAsumida
+        ? `⚠ Datos extraídos, pero <strong>no se pudo leer la fecha del documento</strong>: quedó la de hoy. Corrígela antes de guardar o el gasto va a caer en la semana equivocada.`
+        : (_cfdiGmail && _cfdiGmail.fecha)
+          ? `✅ Datos extraídos · <strong>fecha, folio e importe tomados del CFDI</strong> del correo (exactos, no leídos de la imagen).`
+          : "✅ Datos extraídos — verifica y guarda",
+      _fechaAsumida ? "err" : "ok");
   } catch(err){
     setStatus("statusLectura","❌ "+err.message+". Puedes capturar manualmente abajo.","err");
     document.getElementById("extractedCard").style.display="block";
@@ -3747,6 +3763,7 @@ function guardarGasto(){
   }
   getActiveWeek().gastos.push(gasto);
   _cfdiOrigen = null;            // ya se usó: que no se pegue a la siguiente captura
+  _cfdiGmail  = null;
   // La factura de Gmail se marca como capturada para el equipo AQUÍ, con el gasto ya guardado.
   try{
     if(_gmailPendienteCaptura && capturedFile && capturedFile._gmailMsgId === _gmailPendienteCaptura.msg_id){
@@ -8340,7 +8357,30 @@ async function gmailProcessItem(idx){
   document.getElementById("extractedCard").style.display="none";document.getElementById("statusLectura").style.display="none";
   ["fProv","fFecha","fFactura","fImporte","fNotas","fOtro"].forEach(id=>{document.getElementById(id).value="";});
   document.getElementById("fFecha").value=todayStr();document.getElementById("fCategoria").selectedIndex=0;
-  setTimeout(async()=>{await leerDocumento();if(el)el.innerHTML=`<div style="padding:8px;color:var(--vm);font-size:13px">✅ Enviado a Capturar</div>`;},300);
+  // El CFDI del correo se aplica ANTES de leer: si la IA luego no encuentra la fecha, la buena ya
+  // está puesta y no la pisa el todayStr() de respaldo.
+  _cfdiGmail = item.cfdi || null;
+  if(_cfdiGmail){
+    if(_cfdiGmail.fecha)     document.getElementById("fFecha").value   = _cfdiGmail.fecha;
+    if(_cfdiGmail.proveedor) document.getElementById("fProv").value    = _cfdiGmail.proveedor;
+    if(_cfdiGmail.folio)     document.getElementById("fFactura").value = _cfdiGmail.folio;
+    if(_cfdiGmail.total>0)   document.getElementById("fImporte").value = _cfdiGmail.total;
+    _fechaAsumida = false;
+  }
+  setTimeout(async()=>{
+    if(item.mime_type==="application/xml"){
+      // Correo que solo trae el XML: no hay nada que leer con IA — el comprobante ya dio todo.
+      document.getElementById("extractedCard").style.display="block";
+      document.getElementById("btnLeer").disabled=true;
+      setStatus("statusLectura", _cfdiGmail
+        ? `✅ <strong>Datos tomados del CFDI (XML)</strong> — fecha, folio e importe exactos. Elige la categoría y guarda.`
+        : `⚠ Este correo solo trae un XML que no se pudo leer como CFDI. Captura manualmente.`,
+        _cfdiGmail ? "ok" : "err");
+    } else {
+      await leerDocumento();
+    }
+    if(el)el.innerHTML=`<div style="padding:8px;color:var(--vm);font-size:13px">✅ Enviado a Capturar</div>`;
+  },300);
 }
 // Descartar ahora vale para TODO el equipo (antes solo para este navegador), asi que la misma
 // factura no le vuelve a aparecer a nadie. Se revierte con "Incluir ya revisadas" + "Leer igual".
