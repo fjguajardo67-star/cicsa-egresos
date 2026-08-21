@@ -1989,7 +1989,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-e";
+const APP_BUILD = "2026-08-21-f";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -6874,7 +6874,19 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
     // depende de que el folio o el monto se hayan tecleado igual.
     const _u=cfdi.uuid||cfdi.folio;
     const matchUuid=_u?gastosCICSA.find(g=>g.cfdiUuid&&g.cfdiUuid===_u):null;
-    const matchFolio=gastosCICSA.find(g=>g.factura&&cfdi.folio&&(g.factura.toUpperCase().includes(cfdi.folio.toUpperCase().slice(0,8))||cfdi.folio.toUpperCase().includes((g.factura||"").toUpperCase().slice(0,8))));
+    // El folio que teclea la persona es el de la FACTURA (serie+folio), no el UUID fiscal.
+    // Antes se comparaba contra cfdi.folio, que casi siempre ES el UUID, y con substrings de 8
+    // caracteres: un folio corto como "245" son dígitos hexadecimales, así que aparecía dentro de
+    // casi cualquier UUID y un MISMO gasto se emparejaba con muchos CFDI distintos. En pantalla
+    // salían cuatro proveedores con importes muy distintos y el mismo "Monto CICSA".
+    // Ahora se usa el mismo criterio que la detección de duplicados: folio canónico y, para
+    // folios de 4+ caracteres, coincidencia por sufijo ("PBAL31598" ≡ "31598").
+    let _folioCfdi = _dupFolioCanon((cfdi.serie||"") + (cfdi.folioComp||""));
+    if(!_folioCfdi && !/^[0-9A-F]{8}-[0-9A-F]{4}-/i.test(String(cfdi.folio||""))) _folioCfdi = _dupFolioCanon(cfdi.folio);
+    const matchFolio = _folioCfdi ? gastosCICSA.find(g=>{
+      const f = _dupFolioCanon(g.factura);
+      return f && _dupFoliosEquivalentes(f, _folioCfdi);
+    }) : null;
     const matchMonto=gastosCICSA.find(g=>Math.abs(new Date(g.fecha)-new Date(cfdi.fecha))<=3*86400000&&Math.abs(g.importe-cfdi.total)<1);
     const match=matchUuid||matchFolio||matchMonto;
     if(!match) faltantes.push(cfdi);
