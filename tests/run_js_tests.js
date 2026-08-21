@@ -1217,6 +1217,45 @@ t("salen ordenados por el tamaño del error", () => {
   assert.equal(r[0].gasto.id, "2", "primero el que más distorsiona");
 });
 
+console.log("\n== conciliación SAT: el folio se compara contra la FACTURA, no contra el UUID ==");
+const UUID_A = "BC46CB99-12D7-E945-0000-000000002450";
+t("un folio corto no se empareja con un UUID que lo contenga por casualidad", () => {
+  // Bug real: "245" son dígitos hexadecimales, así que aparecía dentro de casi cualquier UUID y
+  // el MISMO gasto de $36,195 salía emparejado con cuatro CFDI de proveedores distintos.
+  S.state.weeks = [{ id: "1", gastos: [
+    { id: "1", factura: "245", importe: 36195, fecha: "2026-07-09", proveedor: "OTRO" },
+  ]}];
+  const r = S.conciliarSAT([
+    { uuid: UUID_A, folio: UUID_A, serie: "A", folioComp: "9001",
+      proveedor: "GETNET", fecha: "2026-07-31", total: 1406.34, tipo: "I" },
+  ], "", "", "");
+  assert.equal(r.diferencias.length, 0, "no debe inventar una diferencia de monto");
+  assert.equal(r.faltantes.length, 1, "el CFDI queda como faltante, que es la verdad");
+});
+t("el folio real de la factura sí empareja, con o sin guiones", () => {
+  S.state.weeks = [{ id: "1", gastos: [
+    { id: "1", factura: "PBAL-31832", importe: 5940, fecha: "2026-07-28", proveedor: "POLLO BAL" },
+  ]}];
+  const r = S.conciliarSAT([
+    { uuid: "AAAAAAAA-1111-2222-3333-444444444444", folio: "AAAAAAAA-1111-2222-3333-444444444444",
+      serie: "", folioComp: "PBAL31832", proveedor: "POLLO BAL", fecha: "2026-07-28", total: 5940, tipo: "I" },
+  ], "", "", "");
+  assert.equal(r.conciliadas.length, 1, "cuadra por folio pese al guion");
+  assert.equal(r.faltantes.length, 0);
+});
+t("una diferencia de monto REAL sí se reporta, con el gasto que le toca", () => {
+  S.state.weeks = [{ id: "1", gastos: [
+    { id: "1", factura: "F6533", importe: 10943.85, fecha: "2026-07-11", proveedor: "ASAEL" },
+  ]}];
+  const r = S.conciliarSAT([
+    { uuid: "BBBBBBBB-1111-2222-3333-444444444444", folio: "BBBBBBBB-1111-2222-3333-444444444444",
+      serie: "", folioComp: "F6533", proveedor: "ASAEL", fecha: "2026-07-11", total: 12000, tipo: "I" },
+  ], "", "", "");
+  assert.equal(r.diferencias.length, 1);
+  close(r.diferencias[0].gastoCICSA.importe, 10943.85, 0.01);
+  close(r.diferencias[0].diferencia, 1056.15, 0.01);
+});
+
 console.log("\n== CFDI XML (conciliación SAT sin tokens) ==");
 t("CFDI 4.0: extrae UUID, total (no SubTotal), fecha, RFC/nombre del EMISOR (no receptor)", () => {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
