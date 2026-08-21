@@ -233,6 +233,38 @@ t("partidasExpandidas: divide la dividida, conserva el total, ignora partidas �
   assert.equal(out.length, 3);
   close(out.reduce((s, g) => s + g.importe, 0), 400);
   assert.deepEqual(out.filter(g => g.categoria === "Cárnicos").length, 1);
+  assert.ok(!out.some(g => g.categoria === "(sin desglosar)"), "si el desglose cuadra, no se inventa resto");
+});
+t("una factura dividida a la que le falta desglose NO pierde ese dinero", () => {
+  // Caso real: el balance daba $2,292,182.34 por categoría contra $2,292,580.69 de salidas.
+  // El desglose por proveedor cuadraba, el de categorías no, y el hueco no aparecía en ningún lado.
+  const out = S.partidasExpandidas([
+    { id: "b", importe: 1000, categoria: "Mixta", _dividida: true, _partidas: [
+      { categoria: "Cárnicos", importe: 600 }, { categoria: "Hielo", importe: 1.65 },
+    ]},
+  ]);
+  close(out.reduce((s, g) => s + g.importe, 0), 1000, 0.001);
+  const resto = out.find(g => g.categoria === "(sin desglosar)");
+  assert.ok(resto, "el resto se muestra, no se esfuma");
+  close(resto.importe, 398.35);
+});
+t("si las partidas suman de MÁS, el sobrante sale negativo en vez de taparse", () => {
+  const out = S.partidasExpandidas([
+    { id: "c", importe: 100, categoria: "M", _dividida: true, _partidas: [
+      { categoria: "A", importe: 80 }, { categoria: "B", importe: 50 },
+    ]},
+  ]);
+  const resto = out.find(g => g.categoria === "(sin desglosar)");
+  assert.ok(resto && resto.importe < 0, "un desglose inflado tiene que verse");
+  close(out.reduce((s, g) => s + g.importe, 0), 100, 0.001);
+});
+t("diferencias de centavos por redondeo no ensucian el reporte", () => {
+  const out = S.partidasExpandidas([
+    { id: "d", importe: 100, categoria: "M", _dividida: true, _partidas: [
+      { categoria: "A", importe: 33.33 }, { categoria: "B", importe: 33.33 }, { categoria: "C", importe: 33.34 },
+    ]},
+  ]);
+  assert.ok(!out.some(g => g.categoria === "(sin desglosar)"), "cuadra exacto, sin fila de resto");
 });
 
 console.log("\n== saldos de Caja ==");

@@ -1960,7 +1960,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-19-g";
+const APP_BUILD = "2026-08-19-h";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4335,10 +4335,22 @@ function partidasExpandidas(gastos){
   const out=[];
   gastos.forEach(g=>{
     if(g._dividida && Array.isArray(g._partidas) && g._partidas.length){
+      let repartido = 0;
       g._partidas.forEach(p=>{
-        if(parseFloat(p.importe||0)<=0) return;
-        out.push({ ...g, categoria:p.categoria, importe:parseFloat(p.importe), notas:p.descripcion||g.notas });
+        const imp = parseFloat(p.importe||0);
+        if(imp<=0) return;
+        repartido += imp;
+        out.push({ ...g, categoria:p.categoria, importe:imp, notas:p.descripcion||g.notas });
       });
+      // Si el desglose no cubre el importe de la factura, ese resto NO puede desaparecer. Antes
+      // se esfumaba: el reporte por categoria sumaba MENOS que el total de egresos (el mismo
+      // balance daba $2,292,182.34 por categoria contra $2,292,580.69 de salidas) y no había
+      // forma de saber de dónde salía el hueco, porque el desglose por proveedor sí cuadraba.
+      // Ahora el resto aparece como "(sin desglosar)": el reporte cuadra y la factura mal
+      // dividida se puede encontrar y corregir. Si las partidas suman de MÁS, sale negativo —
+      // también hay que verlo, no taparlo.
+      const resto = Math.round(((parseFloat(g.importe)||0) - repartido)*100)/100;
+      if(Math.abs(resto) >= 0.01) out.push({ ...g, categoria:"(sin desglosar)", importe:resto });
     } else {
       out.push(g);
     }
@@ -4644,7 +4656,14 @@ function renderBalance(){
     `<td class="amount-cell" style="padding:9px 4px;color:${color||"var(--txt)"}">${fmt(val)}</td></tr>`;
   const cats=Object.entries(totalesPorCatPeriodo()).sort((a,b2)=>b2[1]-a[1]);
   const totCats=cats.reduce((s,[,v])=>s+v,0);
-  cont.innerHTML = aviso + `
+  // El desglose por categoría TIENE que sumar lo mismo que las salidas. Si no, el reporte se
+  // contradice a sí mismo y hay que decirlo en la cara, no dejar que el lector lo descubra
+  // sumando a mano.
+  const _descuadre = Math.round((totCats - b.salidas)*100)/100;
+  const avisoCuadre = Math.abs(_descuadre) >= 0.01
+    ? `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px">⚠️ El desglose por categoría suma <strong>${fmt(totCats)}</strong>, que no cuadra con las salidas (<strong>${fmt(b.salidas)}</strong>): faltan ${fmt(Math.abs(_descuadre))}. Revisa las facturas divididas cuyo desglose no cubre el importe total.</div>`
+    : "";
+  cont.innerHTML = aviso + avisoCuadre + `
     <div class="summary-grid" style="margin-bottom:16px">
       <div class="scard"><div class="scard-label">⬆️ Entradas</div><div class="scard-val" style="color:var(--vd)">${fmt(b.entradas)}</div><div class="scard-sub">facturado + efectivo</div></div>
       <div class="scard"><div class="scard-label">⬇️ Salidas</div><div class="scard-val" style="color:var(--red)">${fmt(b.salidas)}</div><div class="scard-sub">${b.nGastos} gasto(s)</div></div>
