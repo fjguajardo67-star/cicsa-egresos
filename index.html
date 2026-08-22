@@ -1531,7 +1531,7 @@ body.snav-min .side-theme span { display:none; }
     <div class="field" style="margin-bottom:14px">
       <label>🔑 Nombre en las recetas de Menú</label>
       <input type="text" id="pcGenerico" placeholder='Ej: "Catsup" — como lo escribes en tus recetas'>
-      <div style="font-size:11px;color:var(--txt2);margin-top:3px">Escribe <strong>un solo nombre principal, sin comas</strong>. Es la palabra con la que Menú conecta este precio a tus recetas. Si pegas varios nombres, Egresos moverá los demás a “Otras formas” al guardar. Déjalo vacío si este producto no va a Menú.</div>
+      <div style="font-size:11px;color:var(--txt2);margin-top:3px">Escribe <strong>un solo nombre principal, sin comas ni puntos separando variantes</strong>. Es la palabra con la que Menú conecta este precio a tus recetas. Si pegas varios nombres, Egresos moverá los demás a “Otras formas” al guardar. Déjalo vacío si este producto no va a Menú.</div>
     </div>
     <div class="field" style="margin-bottom:14px">
       <label>Otras formas en que lo escriben tus recetas (separadas por coma)</label>
@@ -7736,10 +7736,13 @@ function borrarGastoDuplicado(id){
 // catálogo; el documento del producto se normaliza la próxima vez que una persona lo guarde.
 function separarNombresMenu(nombrePrincipal, sinonimos){
   const partes = String(nombrePrincipal==null ? "" : nombrePrincipal)
-    .split(/[,;\n]+/).map(x=>x.trim()).filter(Boolean);
+    // El catálogo histórico trae variantes unidas tanto con coma como con punto:
+    // "Tortilla Maiz. Tortilla" y "Alitas IQF. Alitas de Pollo" son casos reales.
+    // Solo se toma el punto seguido de espacio; así 3.8lt y otros decimales quedan intactos.
+    .split(/[,;\n]+|\.\s+(?=\S)/).map(x=>x.trim()).filter(Boolean);
   const principal = partes.shift() || "";
   const extras = partes.concat(Array.isArray(sinonimos) ? sinonimos :
-    String(sinonimos==null ? "" : sinonimos).split(/[,;\n]+/));
+    String(sinonimos==null ? "" : sinonimos).split(/[,;\n]+|\.\s+(?=\S)/));
   const vistos = new Set();
   const clavePrincipal = normalizarParaComparar(principal);
   if(clavePrincipal) vistos.add(clavePrincipal);

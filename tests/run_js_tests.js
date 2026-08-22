@@ -392,6 +392,12 @@ t("nombre canónico con comas: conserva el primero y mueve el resto a sinónimos
   assert.deepEqual(r.sinonimos, ["Alitas IQF", "Alitas de Pollo"]);
   assert.equal(r.movidos, 2);
 });
+t("nombre histórico con puntos: separa variantes sin romper decimales", () => {
+  const r = S.separarNombresMenu("Tortilla Maiz. Tortilla", ["Aderezo ranch 3.8lt"]);
+  assert.equal(r.principal, "Tortilla Maiz");
+  assert.deepEqual(r.sinonimos, ["Tortilla", "Aderezo ranch 3.8lt"]);
+  assert.equal(r.movidos, 1);
+});
 t("fusiona variantes existentes sin repetir mayúsculas ni acentos", () => {
   const r = S.separarNombresMenu("Orégano seco, oregano seco", ["ORÉGANO SECO", "Orégano mexicano"]);
   assert.equal(r.principal, "Orégano seco");
