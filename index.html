@@ -2000,7 +2000,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-21-m";
+const APP_BUILD = "2026-08-22-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5568,18 +5568,31 @@ function gastosConImporteDistinto(gastos, cfdis, tolerancia){
     if(f && t>0) porFolio.push({ folio:f, total:t, subtotal:parseFloat(c.subtotal)||0 });
   });
   if(!porFolio.length) return [];
-  const out = [];
+  // Una factura con dos categorías (abarrotes y cárnicos, por ejemplo) se captura DIVIDIDA. Hoy
+  // eso es un solo gasto con _partidas, pero lo capturado antes de ese cambio quedó como VARIOS
+  // renglones con el MISMO folio, cada uno con su pedazo del total.
+  // Comparando renglón por renglón contra el CFDI, cada pedazo salía como "no cuadra" — seis
+  // renglones de una factura correcta de Walmart aparecían como seis errores de -$2,500 — y el
+  // botón "Usar el del CFDI" le habría puesto el TOTAL COMPLETO a cada pedazo, multiplicando el
+  // gasto por seis. Lo que tiene que cuadrar con el comprobante es la SUMA del folio.
+  const grupos = new Map();
   (gastos||[]).forEach(g=>{
     const f = _dupFolioCanon(g && g.factura);
     if(!f) return;
     const hit = porFolio.find(c=>_dupFoliosEquivalentes(f, c.folio));
     if(!hit) return;
-    const imp = parseFloat(g.importe)||0;
-    const dif = Math.round((imp - hit.total)*100)/100;
+    if(!grupos.has(hit.folio)) grupos.set(hit.folio, { cfdi:hit, gastos:[] });
+    grupos.get(hit.folio).gastos.push(g);
+  });
+  const out = [];
+  grupos.forEach(gr=>{
+    const imp = Math.round(gr.gastos.reduce((a,g)=>a+(parseFloat(g.importe)||0),0)*100)/100;
+    const dif = Math.round((imp - gr.cfdi.total)*100)/100;
     if(Math.abs(dif) <= tol) return;
     // Decirlo cuando la diferencia es exactamente el IVA ahorra la mitad de la investigación.
-    const esSubtotal = hit.subtotal>0 && Math.abs(imp - hit.subtotal) <= tol;
-    out.push({ gasto:g, totalCfdi:hit.total, diferencia:dif, esSubtotal });
+    const esSubtotal = gr.cfdi.subtotal>0 && Math.abs(imp - gr.cfdi.subtotal) <= tol;
+    out.push({ gasto:gr.gastos[0], gastos:gr.gastos, capturado:imp,
+               totalCfdi:gr.cfdi.total, diferencia:dif, esSubtotal });
   });
   return out.sort((a,b)=> Math.abs(b.diferencia) - Math.abs(a.diferencia));
 }
@@ -5597,15 +5610,21 @@ async function renderImportesDistintos(){
       <th style="text-align:right">CFDI</th><th style="text-align:right">Diferencia</th><th>Acción</th>
     </tr></thead><tbody>` +
     lista.map(x=>{
-      const g=x.gasto;
+      const g=x.gasto, n=(x.gastos||[g]).length;
+      // En una factura repartida en varios renglones no se puede "usar el del CFDI": pondría el
+      // total en uno solo y la suma quedaría peor. Lo que corresponde es juntarlos en una sola
+      // factura dividida, que es justo lo que hace Revisión de duplicados.
+      const accion = n>1
+        ? `<span style="font-size:11px;color:var(--txt2)">Junta los renglones en <strong>Revisión de duplicados</strong> y vuelve a revisar</span>`
+        : `<button class="btn btn-gold" style="padding:5px 10px;font-size:11px" onclick="usarImporteCfdi('${escAttrJs(g.id)}',${x.totalCfdi})">Usar el del CFDI</button>`;
       return `<tr>
         <td style="white-space:nowrap">${esc(fmtDate(g.fecha))}</td>
-        <td>${esc(g.proveedor||"—")}${x.esSubtotal?`<div style="font-size:10.5px;color:var(--naranja)">se capturó el subtotal (falta el IVA)</div>`:""}</td>
+        <td>${esc(g.proveedor||"—")}${x.esSubtotal?`<div style="font-size:10.5px;color:var(--naranja)">se capturó el subtotal (falta el IVA)</div>`:""}${n>1?`<div style="font-size:10.5px;color:var(--txt2)">${n} renglones con este folio (factura repartida por categoría)</div>`:""}</td>
         <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(g.factura||"—")}</td>
-        <td class="amount-cell">${fmt(g.importe)}</td>
+        <td class="amount-cell">${fmt(x.capturado!=null?x.capturado:g.importe)}</td>
         <td class="amount-cell" style="color:var(--vd)">${fmt(x.totalCfdi)}</td>
         <td class="amount-cell" style="color:var(--red)">${fmt(x.diferencia)}</td>
-        <td><button class="btn btn-gold" style="padding:5px 10px;font-size:11px" onclick="usarImporteCfdi('${escAttrJs(g.id)}',${x.totalCfdi})">Usar el del CFDI</button></td>
+        <td>${accion}</td>
       </tr>`;
     }).join("") + `</tbody></table></div>`;
 }
@@ -5613,6 +5632,23 @@ async function renderImportesDistintos(){
 function usarImporteCfdi(id, total){
   const g = encontrarGastoPorId(id);
   if(!g){ alert("No encontré ese gasto. Recarga la página."); return; }
+  // Cinturón de seguridad: aunque la tabla ya no ofrece el botón en facturas repartidas, la
+  // pantalla puede llevar rato abierta. Poner el total completo en uno de los renglones sumaría
+  // la factura de más, y eso no se nota hasta el balance.
+  // Por folio EQUIVALENTE, no idéntico: el mismo comprobante se teclea "PBAL-31598" y "31598",
+  // y con igualdad exacta los renglones hermanos no se veían.
+  const f = _dupFolioCanon(g.factura);
+  const hermanos = f ? allGastosAllWeeks().filter(x=>{
+    if(!x || x.id===g.id) return false;
+    const xf = _dupFolioCanon(x.factura);
+    return !!xf && _dupFoliosEquivalentes(xf, f);
+  }) : [];
+  if(hermanos.length){
+    alert(`Esta factura está repartida en ${hermanos.length+1} renglones (una por categoría).\n\n`+
+          `Ponerle el total del CFDI a uno solo sumaría la factura de más. Júntalos primero en `+
+          `Revisión de duplicados y vuelve a revisar.`);
+    return;
+  }
   const antes = g.importe;
   g.importe = Math.round((parseFloat(total)||0)*100)/100;
   save();
@@ -7087,8 +7123,25 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
     const matchMonto=gastosCICSA.find(g=>Math.abs(new Date(g.fecha)-new Date(cfdi.fecha))<=3*86400000&&Math.abs(g.importe-cfdi.total)<1);
     const match=matchUuid||matchFolio||matchMonto;
     if(!match) faltantes.push(cfdi);
-    else if(Math.abs(match.importe-cfdi.total)>1) diferencias.push({cfdi,gastoCICSA:match,diferencia:cfdi.total-match.importe});
-    else conciliadas.push(cfdi);
+    else {
+      // Mismo caso que en Auditoría: una factura repartida por categoría son varios renglones con
+      // el mismo folio. Comparando solo el renglón que casó primero, una factura bien capturada
+      // salía como diferencia por lo que valen los demás pedazos.
+      // Se juntan por UUID y por folio EQUIVALENTE ("PBAL31598" ≡ "31598"), no por texto
+      // idéntico: el mismo comprobante se teclea de varias formas y con igualdad exacta los
+      // demás pedazos no aparecían.
+      const _mismos = gastosCICSA.filter(g=>{
+        if(!g) return false;
+        if(g.id === match.id) return true;
+        if(_u && g.cfdiUuid && g.cfdiUuid === _u) return true;
+        if(!_folioCfdi) return false;
+        const gf = _dupFolioCanon(g.factura);
+        return !!gf && _dupFoliosEquivalentes(gf, _folioCfdi);
+      });
+      const _cap = Math.round(_mismos.reduce((a,g)=>a+(parseFloat(g.importe)||0),0)*100)/100;
+      if(Math.abs(_cap-cfdi.total)>1) diferencias.push({cfdi,gastoCICSA:match,capturado:_cap,gastos:_mismos,diferencia:Math.round((cfdi.total-_cap)*100)/100});
+      else conciliadas.push(cfdi);
+    }
   });
   return{faltantes,diferencias,conciliadas,cfdisUtiles:utiles,omitidos:filtro.omitidos,totalSAT:utiles.reduce((s,c)=>s+c.total,0),totalCICSA:gastosCICSA.reduce((s,g)=>s+g.importe,0)};
 }
@@ -7137,7 +7190,7 @@ function renderConciliacion(r){
   document.getElementById("satDifCount").textContent=r.diferencias.length;
   document.getElementById("satDiferenciasBody").innerHTML=r.diferencias.map(d=>`<tr style="background:#FFFBEB">
     <td><strong>${d.cfdi.proveedor||"—"}</strong></td><td>${fmtDate(d.cfdi.fecha)||"—"}</td>
-    <td class="amount-cell">${fmt(d.cfdi.total)}</td><td class="amount-cell">${fmt(d.gastoCICSA.importe)}</td>
+    <td class="amount-cell">${fmt(d.cfdi.total)}</td><td class="amount-cell">${fmt(d.capturado!=null?d.capturado:d.gastoCICSA.importe)}</td>
     <td class="amount-cell" style="color:${d.diferencia>0?'var(--red)':'var(--vm)'}">${d.diferencia>0?'+':''}${fmt(d.diferencia)}</td></tr>`).join("");
   document.getElementById("satOkCard").style.display=r.conciliadas.length>0?"block":"none";
   document.getElementById("satOkCount").textContent=r.conciliadas.length;
@@ -7164,7 +7217,7 @@ function exportarConciliacion(){
   const wb=XLSX.utils.book_new(), ini=document.getElementById("satFechaIni").value, fin=document.getElementById("satFechaFin").value;
   const ws1=XLSX.utils.aoa_to_sheet([["CICSA — Conciliación SAT · Faltantes"],[`Período: ${ini} al ${fin}`],[],["Folio Fiscal","Proveedor","RFC","Fecha","Total SAT"],...satResultado.faltantes.map(c=>[c.folio,c.proveedor,c.rfc,c.fecha,c.total]),[],[" ","","","TOTAL",satResultado.faltantes.reduce((s,c)=>s+c.total,0)]]);
   ws1["!cols"]=[{wch:40},{wch:36},{wch:16},{wch:12},{wch:14}]; XLSX.utils.book_append_sheet(wb,ws1,"Faltantes en CICSA");
-  const ws2=XLSX.utils.aoa_to_sheet([["CICSA — Diferencias"],[`Período: ${ini} al ${fin}`],[],["Proveedor","Fecha","Total SAT","Monto CICSA","Diferencia"],...satResultado.diferencias.map(d=>[d.cfdi.proveedor,d.cfdi.fecha,d.cfdi.total,d.gastoCICSA.importe,d.diferencia])]);
+  const ws2=XLSX.utils.aoa_to_sheet([["CICSA — Diferencias"],[`Período: ${ini} al ${fin}`],[],["Proveedor","Fecha","Total SAT","Monto CICSA","Diferencia"],...satResultado.diferencias.map(d=>[d.cfdi.proveedor,d.cfdi.fecha,d.cfdi.total,(d.capturado!=null?d.capturado:d.gastoCICSA.importe),d.diferencia])]);
   ws2["!cols"]=[{wch:36},{wch:12},{wch:14},{wch:14},{wch:14}]; XLSX.utils.book_append_sheet(wb,ws2,"Diferencias de Monto");
   const ws3=XLSX.utils.aoa_to_sheet([["CICSA — Conciliadas OK"],[`Período: ${ini} al ${fin}`],[],["Proveedor","RFC","Fecha","Total SAT"],...satResultado.conciliadas.map(c=>[c.proveedor,c.rfc,c.fecha,c.total])]);
   XLSX.utils.book_append_sheet(wb,ws3,"Conciliadas OK");
