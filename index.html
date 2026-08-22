@@ -1531,7 +1531,7 @@ body.snav-min .side-theme span { display:none; }
     <div class="field" style="margin-bottom:14px">
       <label>🔑 Nombre en las recetas de Menú</label>
       <input type="text" id="pcGenerico" placeholder='Ej: "Catsup" — como lo escribes en tus recetas'>
-      <div style="font-size:11px;color:var(--txt2);margin-top:3px">La palabra con la que Menú conecta este precio a tus recetas — debe coincidir con cómo escribes el ingrediente en la receta. Déjalo vacío si este producto no va a Menú.</div>
+      <div style="font-size:11px;color:var(--txt2);margin-top:3px">Escribe <strong>un solo nombre principal, sin comas</strong>. Es la palabra con la que Menú conecta este precio a tus recetas. Si pegas varios nombres, Egresos moverá los demás a “Otras formas” al guardar. Déjalo vacío si este producto no va a Menú.</div>
     </div>
     <div class="field" style="margin-bottom:14px">
       <label>Otras formas en que lo escriben tus recetas (separadas por coma)</label>
@@ -7726,6 +7726,34 @@ function borrarGastoDuplicado(id){
 // Menú (getPrecio()/getCost()); Egresos solo etiqueta con la palabra clave (ingrediente_generico)
 // y manda un precio+unidad ya limpio.
 
+// Los primeros productos del catálogo permitían escribir TODOS los nombres de receta dentro de
+// ingrediente_generico (ej. "Alitas, Alitas IQF, Alitas de Pollo"), aunque el modelo ya tenía
+// sinonimos_menu para las variantes. Menú recibía la frase completa como una sola llave y una
+// receta que dijera solo "Alitas" se quedaba sin precio. Esta función corrige tanto lo nuevo al
+// guardar como lo histórico al sincronizar: el primer nombre queda como principal y el resto se
+// fusiona con los sinónimos capturados, sin duplicados por mayúsculas ni acentos.
+// Pura y sin escritura: sincronizar puede reparar la salida sin modificar silenciosamente el
+// catálogo; el documento del producto se normaliza la próxima vez que una persona lo guarde.
+function separarNombresMenu(nombrePrincipal, sinonimos){
+  const partes = String(nombrePrincipal==null ? "" : nombrePrincipal)
+    .split(/[,;\n]+/).map(x=>x.trim()).filter(Boolean);
+  const principal = partes.shift() || "";
+  const extras = partes.concat(Array.isArray(sinonimos) ? sinonimos :
+    String(sinonimos==null ? "" : sinonimos).split(/[,;\n]+/));
+  const vistos = new Set();
+  const clavePrincipal = normalizarParaComparar(principal);
+  if(clavePrincipal) vistos.add(clavePrincipal);
+  const limpios = [];
+  extras.forEach(x=>{
+    const nombre = String(x==null ? "" : x).trim();
+    const clave = normalizarParaComparar(nombre);
+    if(!nombre || !clave || vistos.has(clave)) return;
+    vistos.add(clave);
+    limpios.push(nombre);
+  });
+  return { principal, sinonimos: limpios, movidos: partes.length };
+}
+
 // Contenido total de UNA unidad de factura, en gramos (o ml — se tratan igual). Se usa para
 // kg/lt y para "porción" (que necesita el contenido total para calcular cuántas porciones
 // salen). NO se usa para "pz" — ver precioPorUnidadBase().
@@ -7805,16 +7833,22 @@ async function abrirSyncMenuModal(){
 
   _syncMenuRows = validados.map(p=>{
     const calc = precioPorUnidadBase(p);
-    const nombreSync = (p.ingrediente_generico||p.nombre_comercial||"").trim();
+    const nombres = separarNombresMenu(p.ingrediente_generico||p.nombre_comercial||"", p.sinonimos_menu);
+    const nombreSync = nombres.principal;
     const parecido = _syncMenuNombresMenu.find(n=>posibleMismoIngrediente(nombreSync, n));
-    return { producto:p, calc, parecido, incluir: calc.ok, nombreSync };
+    return { producto:p, calc, parecido, incluir: calc.ok, nombreSync,
+      sinonimosSync:nombres.sinonimos, nombresSeparados:nombres.movidos };
   });
   marcarColisionesSyncMenu();
   renderSyncMenuRows();
 }
 function cambiarNombreSync(idx, valor){
-  _syncMenuRows[idx].nombreSync = valor;
-  _syncMenuRows[idx].parecido = _syncMenuNombresMenu.find(n=>posibleMismoIngrediente(valor, n));
+  const row = _syncMenuRows[idx];
+  const nombres = separarNombresMenu(valor, row.sinonimosSync);
+  row.nombreSync = nombres.principal;
+  row.sinonimosSync = nombres.sinonimos;
+  row.nombresSeparados = (row.nombresSeparados||0) + nombres.movidos;
+  row.parecido = _syncMenuNombresMenu.find(n=>posibleMismoIngrediente(row.nombreSync, n));
   marcarColisionesSyncMenu();
   renderSyncMenuRows();
 }
@@ -7866,6 +7900,7 @@ function renderSyncMenuRows(){
           onchange="cambiarNombreSync(${idx}, this.value)">
         <div style="font-size:10.5px;color:var(--txt2);margin-top:2px">Factura: ${r.producto.nombre_comercial}</div>
         ${extras.length?`<div style="font-size:10.5px;color:var(--txt2);margin-top:2px">También conecta con: ${extras.map(k=>esc(k)).join(" · ")}</div>`:""}
+        ${r.nombresSeparados?`<div style="font-size:10.5px;color:var(--vd);margin-top:2px">✓ ${r.nombresSeparados} nombre(s) que estaban juntos se separaron automáticamente como variantes.</div>`:""}
         ${r.parecido?`<div style="font-size:11px;color:var(--naranja)">⚠ ¿Es lo mismo que "<strong>${r.parecido}</strong>" ya en Menú?</div>`:""}
         ${r.colision?`<div style="font-size:11px;color:${r.colision.startsWith("gana")?"var(--vm)":"var(--red)"}">⚠ Mismo nombre que otra fila en este lote — ${r.colision}</div>`:""}
       </div>
@@ -7912,9 +7947,12 @@ function variantesLlaveMenu(nombre){
 function llavesMenuDeFila(row){
   const out = [];
   const agregar = n => variantesLlaveMenu(n).forEach(v=>{ if(out.indexOf(v)===-1) out.push(v); });
-  agregar(row && row.nombreSync);
-  const sinon = (row && row.producto && row.producto.sinonimos_menu) || [];
-  (Array.isArray(sinon) ? sinon : []).forEach(agregar);
+  const nombres = separarNombresMenu(row && row.nombreSync,
+    row && Array.isArray(row.sinonimosSync)
+      ? row.sinonimosSync
+      : (row && row.producto && row.producto.sinonimos_menu) || []);
+  agregar(nombres.principal);
+  nombres.sinonimos.forEach(agregar);
   return out;
 }
 
@@ -8250,8 +8288,12 @@ async function guardarProducto(nuevoEstado){
   const proveedorNombre = document.getElementById("pcProveedor").value.trim();
   const alias = document.getElementById("pcAlias").value.split(",").map(a=>a.trim()).filter(Boolean);
   if(alias.length===0) alias.push(nombre);
-  const generico = document.getElementById("pcGenerico").value.trim();
-  const sinonimos = document.getElementById("pcSinonimos").value.split(",").map(a=>a.trim()).filter(Boolean);
+  const nombresMenu = separarNombresMenu(
+    document.getElementById("pcGenerico").value,
+    document.getElementById("pcSinonimos").value
+  );
+  const generico = nombresMenu.principal;
+  const sinonimos = nombresMenu.sinonimos;
   const numOrNull = (v)=>{ const n = parseFloat(v); return (v===""||isNaN(n)) ? null : n; };
 
   // La merma tiene que ser un porcentaje real: negativa abarataría el producto por arte de
@@ -8331,7 +8373,10 @@ async function guardarProducto(nuevoEstado){
   }
   closeProductoModal();
   renderCatalogoProductos();
-  setStatus("catProdStatus", `✅ "${nombre}" guardado.`, "ok");
+  const avisoNombres = nombresMenu.movidos
+    ? ` Se movieron ${nombresMenu.movidos} variante(s) a “Otras formas”.`
+    : "";
+  setStatus("catProdStatus", `✅ "${nombre}" guardado.${avisoNombres}`, "ok");
   setTimeout(()=>{ const el=document.getElementById("catProdStatus"); if(el) el.style.display="none"; }, 2500);
 }
 

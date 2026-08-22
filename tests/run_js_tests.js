@@ -90,7 +90,7 @@ const FUNCS = [
   "allGastosAllWeeks", "todosLosCortes", "todosLosRetiros",
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
-  "fmt", "duplicadosSospechosos", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
+  "fmt", "duplicadosSospechosos", "separarNombresMenu", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
   "variantesLlaveMenu", "llavesMenuDeFila",
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "_cfdiNomina", "corridasDeNomina", "corridaNominaRegistrada", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
@@ -386,6 +386,22 @@ t("alias GENÉRICO absorbido (caso real Zanahoria/Papa) sí se marca", () => {
 });
 
 console.log("\n== sincronización a CICSA Menú (reemplaza, no acumula) ==");
+t("nombre canónico con comas: conserva el primero y mueve el resto a sinónimos", () => {
+  const r = S.separarNombresMenu("Alitas, Alitas IQF, Alitas de Pollo", []);
+  assert.equal(r.principal, "Alitas");
+  assert.deepEqual(r.sinonimos, ["Alitas IQF", "Alitas de Pollo"]);
+  assert.equal(r.movidos, 2);
+});
+t("fusiona variantes existentes sin repetir mayúsculas ni acentos", () => {
+  const r = S.separarNombresMenu("Orégano seco, oregano seco", ["ORÉGANO SECO", "Orégano mexicano"]);
+  assert.equal(r.principal, "Orégano seco");
+  assert.deepEqual(r.sinonimos, ["Orégano mexicano"]);
+  assert.equal(r.movidos, 1);
+});
+t("acepta el campo de sinónimos como texto separado por comas", () => {
+  const r = S.separarNombresMenu("Tortilla de maíz", "tortillas de maíz, Tortilla");
+  assert.deepEqual(r.sinonimos, ["tortillas de maíz", "Tortilla"]);
+});
 const filaSync = (nombre, precio, fecha, incluir = true, ok = true) => ({
   producto: { fecha_precio: fecha }, nombreSync: nombre, incluir,
   calc: { ok, precio, unidadBase: "kg" },
@@ -400,10 +416,10 @@ t("los productos que ya no están validados desaparecen del documento", () => {
   const nuevo = S.construirMapaPreciosMenu(
     [filaSync("Papa a la francesa, papa frita", 54.69, "2026-07-28"), filaSync("Cebolla", 22.5, "2026-07-28")],
     previos, "28/07/2026");
-  // Cada producto ocupa varias llaves (mayúsculas/acentos), así que lo que se compara es el
-  // conjunto de ingredientes distintos, no el número de llaves.
+  // La coma histórica se corrige en dos nombres útiles; cada uno además ocupa variantes de
+  // mayúsculas/acentos, así que se compara el conjunto normalizado, no el número de llaves.
   const distintos = [...new Set(Object.keys(nuevo).map(S.normalizarParaComparar))].sort();
-  assert.deepEqual(distintos, ["cebolla", "papa a la francesa, papa frita"]);
+  assert.deepEqual(distintos, ["cebolla", "papa a la francesa", "papa frita"]);
   assert.ok(!("Papa lisa europea" in nuevo), "el producto borrado ya no cotiza en Menú");
   assert.ok(!("Jamón super pavo loyval" in nuevo), "el duplicado mal escrito se va");
   close(nuevo["Cebolla"].precio, 22.5);
@@ -455,6 +471,12 @@ t("las llaves de una fila incluyen los sinónimos capturados a mano", () => {
   const k = S.llavesMenuDeFila({ nombreSync: "Tortilla de maíz", producto: { sinonimos_menu: ["tortillas de maiz"] } });
   assert.ok(k.includes("Tortilla de maíz") && k.includes("Tortilla de maiz"), "el nombre y su forma sin acento");
   assert.ok(k.includes("tortillas de maiz") && k.includes("Tortillas de maiz"), "el plural entra por el sinónimo");
+});
+t("una fila histórica con nombres pegados publica cada nombre por separado", () => {
+  const nombres = S.separarNombresMenu("Alitas, Alitas IQF, Alitas de Pollo", []);
+  const k = S.llavesMenuDeFila({ nombreSync:nombres.principal, sinonimosSync:nombres.sinonimos, producto:{} });
+  ["Alitas", "Alitas IQF", "Alitas de Pollo"].forEach(n => assert.ok(k.includes(n), `falta ${n}`));
+  assert.ok(!k.some(n => n.includes(",")), "nunca se publica la cadena combinada con comas");
 });
 t("sin sinónimos no truena y no duplica llaves", () => {
   assert.deepEqual(S.llavesMenuDeFila({ nombreSync: "Sal", producto: {} }), ["Sal", "sal"]);
