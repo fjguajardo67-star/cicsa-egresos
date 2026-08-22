@@ -1277,6 +1277,16 @@ t("si la suma NO cuadra se marca UNA vez, con la suma y la diferencia real", () 
   close(r[0].diferencia, -10000);
 });
 
+t("los renglones se juntan aunque el folio se haya tecleado distinto", () => {
+  // El mismo comprobante se captura "PBAL-31598", "pbal31598" y "31598". Con igualdad exacta de
+  // texto cada uno quedaba suelto y la factura salía como error tres veces.
+  assert.deepEqual(S.gastosConImporteDistinto([
+    { id: "1", factura: "PBAL-31598", importe: 1000 },
+    { id: "2", factura: "pbal31598",  importe: 2000 },
+    { id: "3", factura: "31598",      importe: 500  },
+  ], [{ folioComp: "PBAL31598", tipo: "I", total: 3500, subtotal: 3017.24 }]), []);
+});
+
 t("una factura repartida no sale como diferencia en la conciliación", () => {
   S.state.weeks = [{ id: "1", gastos: [
     { id: "1", factura: "FCPF4010508626", importe: 4996.00,  fecha: "2026-07-06", proveedor: "ONUS COMERCIAL" },
@@ -1289,6 +1299,32 @@ t("una factura repartida no sale como diferencia en la conciliación", () => {
   ], "", "", "");
   assert.equal(r.diferencias.length, 0, "la suma de los renglones cuadra con el CFDI");
   assert.equal(r.conciliadas.length, 1);
+});
+t("la conciliación también junta folios equivalentes, no solo idénticos", () => {
+  S.state.weeks = [{ id: "1", gastos: [
+    { id: "1", factura: "PBAL-31598", importe: 1000, fecha: "2026-07-06", proveedor: "POLLO BAL" },
+    { id: "2", factura: "31598",      importe: 2500, fecha: "2026-07-06", proveedor: "POLLO BAL" },
+  ]}];
+  const r = S.conciliarSAT([
+    { uuid: "99999999-2222-3333-4444-555555555555", folio: "99999999-2222-3333-4444-555555555555",
+      serie: "PBAL", folioComp: "31598", proveedor: "POLLO BAL",
+      fecha: "2026-07-06", total: 3500, tipo: "I" },
+  ], "", "", "");
+  assert.equal(r.diferencias.length, 0, "1000 + 2500 = 3500, el total del CFDI");
+  assert.equal(r.conciliadas.length, 1);
+});
+t("si de verdad falta dinero, la conciliación lo sigue diciendo", () => {
+  S.state.weeks = [{ id: "1", gastos: [
+    { id: "1", factura: "PBAL-31598", importe: 1000, fecha: "2026-07-06", proveedor: "POLLO BAL" },
+  ]}];
+  const r = S.conciliarSAT([
+    { uuid: "99999999-2222-3333-4444-555555555555", folio: "99999999-2222-3333-4444-555555555555",
+      serie: "PBAL", folioComp: "31598", proveedor: "POLLO BAL",
+      fecha: "2026-07-06", total: 3500, tipo: "I" },
+  ], "", "", "");
+  assert.equal(r.diferencias.length, 1, "juntar renglones no debe tapar un faltante real");
+  close(r.diferencias[0].capturado, 1000);
+  close(r.diferencias[0].diferencia, 2500);
 });
 
 console.log("\n== conciliación SAT: el folio se compara contra la FACTURA, no contra el UUID ==");

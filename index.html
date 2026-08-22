@@ -5635,8 +5635,14 @@ function usarImporteCfdi(id, total){
   // Cinturón de seguridad: aunque la tabla ya no ofrece el botón en facturas repartidas, la
   // pantalla puede llevar rato abierta. Poner el total completo en uno de los renglones sumaría
   // la factura de más, y eso no se nota hasta el balance.
+  // Por folio EQUIVALENTE, no idéntico: el mismo comprobante se teclea "PBAL-31598" y "31598",
+  // y con igualdad exacta los renglones hermanos no se veían.
   const f = _dupFolioCanon(g.factura);
-  const hermanos = f ? allGastosAllWeeks().filter(x=>x && x.id!==g.id && _dupFolioCanon(x.factura)===f) : [];
+  const hermanos = f ? allGastosAllWeeks().filter(x=>{
+    if(!x || x.id===g.id) return false;
+    const xf = _dupFolioCanon(x.factura);
+    return !!xf && _dupFoliosEquivalentes(xf, f);
+  }) : [];
   if(hermanos.length){
     alert(`Esta factura está repartida en ${hermanos.length+1} renglones (una por categoría).\n\n`+
           `Ponerle el total del CFDI a uno solo sumaría la factura de más. Júntalos primero en `+
@@ -7121,11 +7127,19 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
       // Mismo caso que en Auditoría: una factura repartida por categoría son varios renglones con
       // el mismo folio. Comparando solo el renglón que casó primero, una factura bien capturada
       // salía como diferencia por lo que valen los demás pedazos.
-      const _f = _dupFolioCanon(match.factura);
-      const _cap = Math.round((_f
-        ? gastosCICSA.filter(g=>_dupFolioCanon(g.factura)===_f).reduce((a,g)=>a+(parseFloat(g.importe)||0),0)
-        : (parseFloat(match.importe)||0))*100)/100;
-      if(Math.abs(_cap-cfdi.total)>1) diferencias.push({cfdi,gastoCICSA:match,capturado:_cap,diferencia:Math.round((cfdi.total-_cap)*100)/100});
+      // Se juntan por UUID y por folio EQUIVALENTE ("PBAL31598" ≡ "31598"), no por texto
+      // idéntico: el mismo comprobante se teclea de varias formas y con igualdad exacta los
+      // demás pedazos no aparecían.
+      const _mismos = gastosCICSA.filter(g=>{
+        if(!g) return false;
+        if(g.id === match.id) return true;
+        if(_u && g.cfdiUuid && g.cfdiUuid === _u) return true;
+        if(!_folioCfdi) return false;
+        const gf = _dupFolioCanon(g.factura);
+        return !!gf && _dupFoliosEquivalentes(gf, _folioCfdi);
+      });
+      const _cap = Math.round(_mismos.reduce((a,g)=>a+(parseFloat(g.importe)||0),0)*100)/100;
+      if(Math.abs(_cap-cfdi.total)>1) diferencias.push({cfdi,gastoCICSA:match,capturado:_cap,gastos:_mismos,diferencia:Math.round((cfdi.total-_cap)*100)/100});
       else conciliadas.push(cfdi);
     }
   });
