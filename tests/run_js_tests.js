@@ -1248,6 +1248,49 @@ t("salen ordenados por el tamaño del error", () => {
   assert.equal(r[0].gasto.id, "2", "primero el que más distorsiona");
 });
 
+// Caso real reportado: una factura con dos categorías se captura DIVIDIDA. Antes de que eso fuera
+// un solo gasto con _partidas, cada categoría quedó como un renglón aparte con el MISMO folio.
+// El chequeo comparaba renglón por renglón, así que una factura correcta salía como N errores y
+// el botón "Usar el del CFDI" le habría puesto el total completo a cada pedazo.
+t("una factura repartida en dos categorías NO se marca si la suma cuadra", () => {
+  // ONUS COMERCIAL FCPF4010508626: 4,996.00 + 29,038.36 = 34,034.36 = el CFDI.
+  assert.deepEqual(S.gastosConImporteDistinto([
+    { id: "1", factura: "FCPF4010508626", importe: 4996.00,  categoria: "Abarrotes / Secos" },
+    { id: "2", factura: "FCPF4010508626", importe: 29038.36, categoria: "Cárnicos" },
+  ], [{ folioComp: "FCPF4010508626", tipo: "I", total: 34034.36, subtotal: 29340.00 }]), []);
+});
+t("una factura repartida en seis renglones tampoco, si la suma cuadra", () => {
+  // NUEVA WAL MART ICAJG465599, los seis pedazos de la captura real.
+  const gs = [64.00, 170.00, 220.00, 230.01, 399.01, 1733.97].map((n,i)=>(
+    { id: String(i), factura: "ICAJG465599", importe: n }));
+  assert.deepEqual(S.gastosConImporteDistinto(
+    gs, [{ folioComp: "ICAJG465599", tipo: "I", total: 2816.99, subtotal: 2428.44 }]), []);
+});
+t("si la suma NO cuadra se marca UNA vez, con la suma y la diferencia real", () => {
+  const r = S.gastosConImporteDistinto([
+    { id: "1", factura: "MOJBE623610", importe: 10000 },
+    { id: "2", factura: "MOJBE623610", importe: 3119.50 },
+  ], CF_I);
+  assert.equal(r.length, 1, "un renglón por factura, no uno por pedazo");
+  assert.equal(r[0].gastos.length, 2, "lleva los renglones del grupo");
+  close(r[0].capturado, 13119.50);
+  close(r[0].diferencia, -10000);
+});
+
+t("una factura repartida no sale como diferencia en la conciliación", () => {
+  S.state.weeks = [{ id: "1", gastos: [
+    { id: "1", factura: "FCPF4010508626", importe: 4996.00,  fecha: "2026-07-06", proveedor: "ONUS COMERCIAL" },
+    { id: "2", factura: "FCPF4010508626", importe: 29038.36, fecha: "2026-07-06", proveedor: "ONUS COMERCIAL" },
+  ]}];
+  const r = S.conciliarSAT([
+    { uuid: "11111111-2222-3333-4444-555555555555", folio: "11111111-2222-3333-4444-555555555555",
+      serie: "FCPF", folioComp: "4010508626", proveedor: "ONUS COMERCIAL",
+      fecha: "2026-07-06", total: 34034.36, tipo: "I" },
+  ], "", "", "");
+  assert.equal(r.diferencias.length, 0, "la suma de los renglones cuadra con el CFDI");
+  assert.equal(r.conciliadas.length, 1);
+});
+
 console.log("\n== conciliación SAT: el folio se compara contra la FACTURA, no contra el UUID ==");
 const UUID_A = "BC46CB99-12D7-E945-0000-000000002450";
 t("un folio corto no se empareja con un UUID que lo contenga por casualidad", () => {
