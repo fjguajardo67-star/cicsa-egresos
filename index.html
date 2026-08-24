@@ -2000,7 +2000,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-22-a";
+const APP_BUILD = "2026-08-24-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -10491,7 +10491,12 @@ function guardarRetiro() {
 // pueda leer, evita duplicar por folio, y deja que el usuario clasifique cada egreso. La
 // conciliación (si el efectivo cuadra) es la pantalla de Caja que ya existe, con estos datos
 // dentro. Ver docs/CONTRATO_CORTES_A_EGRESOS.md.
-const CORTES_VERSIONES_OK = [1, 2];
+// La app de cortes subió a la versión 3 del contrato y aquí no se actualizó, así que el
+// concentrado del mes se rechazaba de entrada. Se revisó un archivo v3 real (133 cortes,
+// 53 egresos) contra este mismo validador: pasa sin un solo error, y sus totales cuadran al
+// centavo. Lo único nuevo es 'aportaciones', que aquí no se importa — se avisa abajo en vez de
+// tragárselo en silencio.
+const CORTES_VERSIONES_OK = [1, 2, 3];
 const CORTES_STORAGE_PREFIJO = "cortes";
 function _esFechaISO(s){ return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
 function _esNum(x){ return typeof x === "number" && isFinite(x); }
@@ -10540,6 +10545,14 @@ function avisosControlCortes(obj){
     if(_esNum(t.efectivo) && !cerca(ef, t.efectivo)) av.push(`El efectivo sumado de los cortes (${fmt(ef)}) no coincide con el total del archivo (${fmt(t.efectivo)}). ¿Llegó completo?`);
     const eg = suma(obj.egresos,"monto");
     if(_esNum(t.egresos) && !cerca(eg, t.egresos)) av.push(`Los egresos sumados (${fmt(eg)}) no coinciden con el total del archivo (${fmt(t.egresos)}).`);
+  }
+  // 'aportaciones' (dinero que se METE a la caja) llegó con la v3 y este importador no la lee:
+  // ingresa los cortes y clasifica los egresos, nada más. Callarlo haría que el saldo de caja
+  // saliera bajo sin explicación, así que se dice y la persona decide.
+  if(Array.isArray(obj.aportaciones) && obj.aportaciones.length){
+    const sa = obj.aportaciones.reduce((s,x)=>s+(parseFloat(x && (x.monto!=null?x.monto:x.importe))||0),0);
+    av.push(`El archivo trae ${obj.aportaciones.length} aportación(es) por ${fmt(sa)} que esta pantalla NO importa. `+
+            `Si son dinero que entró a la caja, hay que capturarlo aparte o el saldo quedará corto por esa cantidad.`);
   }
   const cont = obj.conteo;
   if(cont && cont.capturado === true && _esNum(cont.total)){
