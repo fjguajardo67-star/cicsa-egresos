@@ -96,7 +96,7 @@ const FUNCS = [
   "normalizarParaComparar", "posibleMismoIngrediente", "esGastoEfectivo",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
-  "allGastosAllWeeks", "todosLosCortes", "todosLosRetiros",
+  "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros",
   "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "separarNombresMenu", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
@@ -1379,6 +1379,50 @@ t("si de verdad falta dinero, la conciliación lo sigue diciendo", () => {
   assert.equal(r.diferencias.length, 1, "juntar renglones no debe tapar un faltante real");
   close(r.diferencias[0].capturado, 1000);
   close(r.diferencias[0].diferencia, 2500);
+});
+
+console.log("\n== ingresos excluidos: se marcan, no se borran ==");
+// Los seis globales de julio son cierres acumulados tecleados a mano junto a los cortes
+// individuales que YA los contienen. Verificado contra el JSON real, al centavo:
+//   63,175 = cortes 18..21 jul   |   72,792 = cortes 22..24 jul
+//   74,379 = RCE-2026-00081 (1,915) + cortes 25..28 jul  <- fechado el 14 jul por error
+// El corte RCE-2026-00081 termina contado TRES veces: solo, y dentro de dos resumenes.
+t("un corte marcado no contable deja de sumar pero sigue guardado", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:[], cortes:[
+    { id:"c1", fecha:"2026-07-18", monto:15535, _folioCorte:"RCE-1" },
+    { id:"g1", fecha:"2026-07-22", monto:63175, _noContable:{ motivo:"Cierre acumulado", por:"Paco", ts:"2026-08-24T00:00:00Z" } },
+  ]}]};
+  close(S.todosLosCortes().reduce((t,c)=>t+c.monto,0), 15535, 0.01);
+  assert.equal(S.todosLosCortes().length, 1, "el excluido no aparece en los contables");
+  assert.equal(S.todosLosCortesNoContables().length, 1, "pero sigue ahi, entero");
+  close(S.todosLosCortesNoContables()[0].monto, 63175, 0.01);
+  assert.equal(S.state.weeks[0].cortes.length, 2, "no se borro ningun movimiento");
+});
+t("esCorteContable distingue, y no truena con basura", () => {
+  assert.equal(S.esCorteContable({ monto:1 }), true);
+  assert.equal(S.esCorteContable({ monto:1, _noContable:{ motivo:"x" } }), false);
+  assert.equal(S.esCorteContable(null), true, "un nulo no es un excluido; no se inventa nada");
+});
+t("los cuatro dictaminados suman 256,800 y el ingreso queda en 430,054", () => {
+  const F = JSON.parse(fs.readFileSync(path.join(__dirname, "fixture_cortes_v3.json"), "utf8"));
+  const ef = c => (parseFloat(c.boletos25)||0)+(parseFloat(c.contratistas)||0)+(parseFloat(c.otrosIngresos)||0);
+  const globales = [["2026-07-14",74379],["2026-07-24",72792],["2026-07-22",63175],["2026-07-18",46454]];
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:[], cortes: [
+    ...F.cortes.map((c,i)=>({ id:"i"+i, fecha:c.fecha, monto:ef(c), _folioCorte:c.folio })),
+    ...globales.map(([f,m],i)=>({ id:"g"+i, fecha:f, monto:m })),
+  ]}]};
+  close(S.todosLosCortes().reduce((t,c)=>t+c.monto,0), 430054 + 256800, 0.01);
+  // Se excluyen los cuatro
+  S.state.weeks[0].cortes.forEach(c=>{ if(String(c.id).startsWith("g")) c._noContable = { motivo:"Cierre acumulado" }; });
+  close(S.todosLosCortes().reduce((t,c)=>t+c.monto,0), 430054, 0.01);
+  close(S.todosLosCortesNoContables().reduce((t,c)=>t+c.monto,0), 256800, 0.01);
+  assert.equal(S.todosLosCortes().length, 133, "quedan los 133 folios unicos");
+});
+t("un corte importado nunca se excluye solo", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:[], cortes:[
+    { id:"c1", fecha:"2026-07-18", monto:15535, _folioCorte:"RCE-1" },
+  ]}]};
+  assert.deepEqual(S.todosLosCortesNoContables(), [], "excluir es siempre una decision humana");
 });
 
 console.log("\n== importacion atomica: se arma primero, se escribe despues ==");
