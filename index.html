@@ -2002,7 +2002,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-24-e";
+const APP_BUILD = "2026-08-24-f";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4906,13 +4906,17 @@ function balanceOperativo(cfdis, ini, fin, rfcEmpresa){
   const cortes=(typeof todosLosCortes==="function"?todosLosCortes():[]).filter(c=>enRango(c.fecha));
   const efectivo=cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
   const efectivoPorOrigen=desglosarPorOrigen(cortes,"monto");
+  // Lo excluido NO suma, pero se informa: un número que baja sin explicación no es auditable.
+  const excluidos=(typeof todosLosCortesNoContables==="function"?todosLosCortesNoContables():[]).filter(c=>enRango(c.fecha));
+  const efectivoExcluido=excluidos.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
   const retiros=(typeof todosLosRetiros==="function"?todosLosRetiros():[]).filter(r=>enRango(r.fecha))
     .reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
   const gastos=(typeof allGastosAllWeeks==="function"?allGastosAllWeeks():[]).filter(g=>enRango(g.fecha));
   const salidas=gastos.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
   const entradas=facturado-notasCredito+efectivo;
   return {
-    facturado, notasCredito, nFacturas, efectivo, nCortes:cortes.length, efectivoPorOrigen, retiros,
+    facturado, notasCredito, nFacturas, efectivo, nCortes:cortes.length, efectivoPorOrigen,
+    efectivoExcluido, nExcluidos:excluidos.length, retiros,
     entradas, salidas, nGastos:gastos.length,
     resultado: entradas-salidas,
     margen: entradas>0 ? ((entradas-salidas)/entradas)*100 : 0,
@@ -5032,6 +5036,8 @@ function renderBalance(){
         ${fila("<strong>Facturado a cliente</strong>", b.facturado, `${b.nFacturas} CFDI emitido(s) · subtotal, sin IVA`, "var(--vd)")}
         ${b.notasCredito>0?fila("Notas de crédito emitidas", -b.notasCredito, "restan de lo facturado", "var(--red)"):""}
         ${fila("<strong>Ventas en efectivo</strong>", b.efectivo, `${b.nCortes} corte(s) de caja · no facturadas`, "var(--vd)")}
+        ${b.nExcluidos ? `<tr><td style="padding:2px 4px 2px 22px;font-size:11.5px;color:var(--txt2)">· excluidos por duplicidad <span style="opacity:.7">(${b.nExcluidos})</span></td>`+
+          `<td class="amount-cell" style="padding:2px 4px;font-size:11.5px;color:var(--txt2);text-decoration:line-through">${fmt(b.efectivoExcluido)}</td></tr>` : ""}
         ${(b.efectivoPorOrigen||[]).length>1 ? (b.efectivoPorOrigen||[]).map(o=>
           `<tr><td style="padding:2px 4px 2px 22px;font-size:11.5px;color:${o.origen==="cortes"?"var(--txt2)":"var(--do)"}">· ${esc(o.etiqueta)} <span style="opacity:.7">(${o.n})</span></td>`+
           `<td class="amount-cell" style="padding:2px 4px;font-size:11.5px;color:${o.origen==="cortes"?"var(--txt2)":"var(--do)"}">${fmt(o.monto)}</td></tr>`).join("") : ""}
@@ -5118,6 +5124,12 @@ function exportarBalancePDF(){
   // El PDF se archiva y se comparte: si el efectivo viene de dos fuentes distintas hay que
   // decirlo AQUI, no solo en pantalla. Un global tecleado a mano junto a los cortes importados
   // es doble conteo, y en el documento impreso no habia forma de notarlo.
+  if(b.nExcluidos){
+    doc.setFontSize(8.5); doc.setFont("helvetica","normal"); doc.setTextColor(110,110,110);
+    doc.text(`   - excluidos por duplicidad (${b.nExcluidos}), NO sumados`, MAR+3, Y+3);
+    doc.text(fmt(b.efectivoExcluido), MAR+W-3, Y+3, {align:"right"});
+    Y += 5.5;
+  }
   if((b.efectivoPorOrigen||[]).length > 1){
     doc.setFontSize(8.5); doc.setFont("helvetica","normal");
     (b.efectivoPorOrigen||[]).forEach(o=>{
@@ -10465,7 +10477,17 @@ function revisarGastosEnAuditoria(){
 
 // Junta cortes/retiros de TODAS las semanas (no solo la activa) — para la consulta por
 // rango de fechas, que ignora en qué "semana" (bolsa de captura) quedó archivado cada uno.
-function todosLosCortes(){ return filtrarPorCorte(state.weeks.flatMap(w => (w.cortes||[]).map(c => ({...c})))); }
+// Un corte marcado NO CONTABLE sigue guardado tal cual —no se borra ningún movimiento— pero deja
+// de sumar. Es el caso de un cierre acumulado tecleado a mano junto a los cortes individuales que
+// ya lo contienen: contarlo otra vez infla el ingreso.
+// El filtro va AQUÍ, en la puerta por la que pasan los seis consumidores (balance, caja, saldo
+// del periodo, arrastre anterior, PDF): ponerlo en cada uno garantizaba olvidarse de alguno.
+// Que no sume no significa que se esconda: el balance y Caja imprimen una línea propia con lo
+// excluido, para que el número siga siendo reconstruible.
+function esCorteContable(c){ return !(c && c._noContable); }
+function _cortesCrudos(){ return filtrarPorCorte(state.weeks.flatMap(w => (w.cortes||[]).map(c => ({...c})))); }
+function todosLosCortes(){ return _cortesCrudos().filter(esCorteContable); }
+function todosLosCortesNoContables(){ return _cortesCrudos().filter(c=>!esCorteContable(c)); }
 function todosLosRetiros(){ return filtrarPorCorte(state.weeks.flatMap(w => (w.retiros||[]).map(r => ({...r})))); }
 
 // Saldo de caja acumulado hasta ANTES de una fecha dada (estrictamente por fecha, cruzando
@@ -10615,6 +10637,49 @@ function guardarCorte() {
   renderCaja();
   document.getElementById("cajaMonto").value = "";
   setStatus("cajaStatus", `✅ Corte del ${label} registrado: ${fmt(monto)}`, "ok");
+}
+
+// Busca el corte REAL dentro de state.weeks (todosLosCortes devuelve copias con {...c}, que no
+// sirven para escribir).
+function _corteRealPorId(id){
+  for(const w of (state.weeks||[])){
+    const c = (w.cortes||[]).find(x=>x && x.id===id);
+    if(c) return c;
+  }
+  return null;
+}
+// No borra: marca. El movimiento se conserva entero para auditoría, con quién lo excluyó, cuándo
+// y por qué, y se puede revertir.
+function marcarCorteNoContable(id, motivo){
+  if(typeof currentRole!=="undefined" && currentRole!=="admin"){
+    alert("🔒 Solo un administrador puede excluir un ingreso del reporte."); return false;
+  }
+  const c = _corteRealPorId(id);
+  if(!c){ alert("No encontré ese corte. Recarga la página."); return false; }
+  if(c._noContable){ return false; }
+  const m = String(motivo||"").trim() || "Duplicado o mal clasificado";
+  if(!confirm(`Excluir ${fmt(c.monto)} del ${fmtDate(c.fecha)} del reporte de ingresos.\n\n`+
+              `Motivo: ${m}\n\n`+
+              `NO se borra: el movimiento se conserva y aparece aparte como excluido. Se puede revertir.\n\n¿Continuar?`)) return false;
+  c._noContable = { motivo:m, por:(typeof currentNombre!=="undefined" && currentNombre) || (currentUser&&currentUser.email) || "",
+                    ts:new Date().toISOString() };
+  save();
+  try{ renderCaja(); }catch(_){}
+  try{ if(document.getElementById("balanceContenido")) renderBalance(); }catch(_){}
+  return true;
+}
+function revertirCorteNoContable(id){
+  if(typeof currentRole!=="undefined" && currentRole!=="admin"){
+    alert("🔒 Solo un administrador puede revertirlo."); return false;
+  }
+  const c = _corteRealPorId(id);
+  if(!c || !c._noContable) return false;
+  if(!confirm(`Volver a contabilizar ${fmt(c.monto)} del ${fmtDate(c.fecha)} como ingreso.\n\n¿Continuar?`)) return false;
+  delete c._noContable;
+  save();
+  try{ renderCaja(); }catch(_){}
+  try{ if(document.getElementById("balanceContenido")) renderBalance(); }catch(_){}
+  return true;
 }
 
 function eliminarCorte(id) {
@@ -11167,8 +11232,24 @@ function _pintarAuditoriaCaja(){
   // El terminal se guarda en cada corte importado y hasta ahora no se mostraba en ningún lado:
   // es cobro con tarjeta, no entra al efectivo, pero es dinero que la empresa cobró.
   const term = cortes.filter(c=>enRango(c.fecha)).reduce((t,c)=>t+(parseFloat(c.terminal)||0),0);
+  const esAdminCaja = (typeof currentRole!=="undefined" && currentRole==="admin");
+  const excluidos = (typeof todosLosCortesNoContables==="function" ? todosLosCortesNoContables() : [])
+    .filter(c=>enRango(c.fecha)).sort((a,b)=>(b.monto||0)-(a.monto||0));
 
   let h = "";
+  if(excluidos.length){
+    const tot = excluidos.reduce((t,c)=>t+(parseFloat(c.monto)||0),0);
+    h += `<div style="background:#F1F8E9;border:1.5px solid var(--vd);border-radius:10px;padding:12px 14px;margin-top:16px">
+      <div style="font-weight:700;color:var(--vd);font-size:13px">✅ Ingresos excluidos del reporte: ${excluidos.length} · ${fmt(tot)}</div>
+      <div style="font-size:12px;color:var(--txt2);margin:6px 0 8px">No se borraron: siguen guardados y no suman. Se pueden volver a contabilizar.</div>
+      <div class="tbl-wrap"><table style="width:100%;font-size:12px"><thead><tr>
+        <th>Fecha</th><th style="text-align:right">Monto</th><th>Motivo</th><th></th></tr></thead><tbody>
+        ${excluidos.map(c=>`<tr><td style="white-space:nowrap">${esc(fmtDate(c.fecha))}</td>
+          <td class="amount-cell" style="text-decoration:line-through;color:var(--txt2)">${fmt(c.monto)}</td>
+          <td style="font-size:11px;color:var(--txt2)">${esc((c._noContable&&c._noContable.motivo)||"—")}${c._noContable&&c._noContable.por?`<div>${esc(c._noContable.por)}</div>`:""}</td>
+          <td style="text-align:right">${esAdminCaja?`<button onclick="revertirCorteNoContable('${escAttrJs(c.id)}')" style="border:1px solid var(--vd);background:#fff;color:var(--vd);border-radius:6px;padding:2px 8px;font-size:10.5px;cursor:pointer;white-space:nowrap">Revertir</button>`:""}</td></tr>`).join("")}
+      </tbody></table></div></div>`;
+  }
   if(diag.hallazgos.length){
     const dentro = diag.hallazgos.filter(x=>x.dentroDelTramo);
     const monto = dentro.reduce((t,x)=>t+x.monto,0);
@@ -11184,7 +11265,8 @@ function _pintarAuditoriaCaja(){
         <th>Fecha</th><th style="text-align:right">Monto</th><th></th></tr></thead><tbody>
         ${dentro.map(x=>`<tr><td>${esc(fmtDate(x.fecha))}</td>
           <td class="amount-cell">${fmt(x.monto)}</td>
-          <td style="font-size:11px;color:var(--txt2)">${x.mismoDia?"ese día ya tiene cortes importados":"dentro del tramo importado"}</td></tr>`).join("")}
+          <td style="font-size:11px;color:var(--txt2)">${x.mismoDia?"ese día ya tiene cortes importados":"dentro del tramo importado"}</td>
+          <td style="text-align:right">${esAdminCaja?`<button onclick="marcarCorteNoContable('${escAttrJs(x.id)}','Cierre acumulado: sus cortes individuales ya están capturados')" style="border:1px solid var(--red);background:#fff;color:var(--red);border-radius:6px;padding:2px 8px;font-size:10.5px;cursor:pointer;white-space:nowrap">Excluir</button>`:""}</td></tr>`).join("")}
       </tbody></table></div></div>`;
   }
   if(exclRango.length){
