@@ -106,7 +106,7 @@ const FUNCS = [
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
   "cortesManualesSospechosos", "egresosExcluidos", "totalExcluido", "folioDeIgnorado", "_unirIgnorados",
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
-  "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen",
+  "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
@@ -1379,6 +1379,114 @@ t("si de verdad falta dinero, la conciliación lo sigue diciendo", () => {
   assert.equal(r.diferencias.length, 1, "juntar renglones no debe tapar un faltante real");
   close(r.diferencias[0].capturado, 1000);
   close(r.diferencias[0].diferencia, 2500);
+});
+
+console.log("\n== importacion atomica: se arma primero, se escribe despues ==");
+// Antes se empujaba de uno en uno sobre week.cortes/gastos/retiros. Si algo tronaba a media
+// vuelta quedaba una importacion a medias, sin forma de saber donde se corto ni de deshacerla.
+const _previosVacios = () => ({ cortes:[], gastos:[], retiros:[], ignorados:[] });
+const _impBase = (egresos, cortesNuevos) => ({
+  obj:{ periodo:{ ini:"2026-07-11", fin:"2026-08-02" }, saldoInicial:0 },
+  cortesNuevos: cortesNuevos || [], egresos: egresos || [],
+});
+
+t("no muta lo que recibe: devuelve listas nuevas", () => {
+  const previos = { cortes:[{id:"viejo"}], gastos:[], retiros:[], ignorados:[] };
+  const r = S.construirImportacionCortes(
+    _impBase([], [{ folio:"RCE-1", fecha:"2026-07-11", boletos25:100, contratistas:0, otrosIngresos:0, terminal:0 }]),
+    previos, "Diana", 1000);
+  assert.equal(previos.cortes.length, 1, "la lista original NO se toca");
+  assert.equal(r.cortes.length, 2, "la nueva trae lo viejo mas lo importado");
+  assert.equal(r.cortes[0].id, "viejo", "lo previo va primero y sobrevive");
+});
+
+t("clasifica cada egreso a su destino y cuenta bien", () => {
+  const r = S.construirImportacionCortes(_impBase([
+    { folio:"EGR-a", fecha:"2026-07-22", concepto:"COMPRA", monto:100, _clase:"gasto",   _cat:"Otro" },
+    { folio:"EGR-b", fecha:"2026-07-22", concepto:"RETIRO", monto:200, _clase:"retiro" },
+    { folio:"EGR-c", fecha:"2026-07-22", concepto:"YA ESTA",monto:300, _clase:"ignorar" },
+  ]), _previosVacios(), "Diana", 1000);
+  assert.equal(r.nG, 1); assert.equal(r.nR, 1); assert.equal(r.nI, 1);
+  assert.equal(r.gastos[0]._folioEgreso, "EGR-a");
+  assert.equal(r.retiros[0]._folioEgreso, "EGR-b");
+  close(r.ignorados[0].monto, 300, 0.01);
+  assert.equal(r.ignorados[0].por, "Diana", "queda quien lo excluyo");
+});
+
+t("un excluido que ya estaba no se duplica", () => {
+  const r = S.construirImportacionCortes(
+    _impBase([{ folio:"EGR-c", fecha:"2026-07-22", concepto:"X", monto:300, _clase:"ignorar" }]),
+    { cortes:[], gastos:[], retiros:[], ignorados:["EGR-c"] }, "Diana", 1000);
+  assert.equal(r.ignorados.length, 1, "sigue habiendo uno solo");
+  assert.equal(r.nI, 0, "y no se cuenta como excluido nuevo");
+});
+
+t("un egreso sin folio se salta en vez de crear basura", () => {
+  const r = S.construirImportacionCortes(
+    _impBase([{ folio:"", fecha:"2026-07-22", concepto:"X", monto:300, _clase:"gasto", _cat:"Otro" }]),
+    _previosVacios(), "Diana", 1000);
+  assert.equal(r.nG, 0);
+  assert.equal(r.gastos.length, 0);
+});
+
+t("los ids no chocan entre cortes, gastos y retiros", () => {
+  const r = S.construirImportacionCortes(_impBase(
+    [{ folio:"EGR-a", fecha:"2026-07-22", concepto:"A", monto:1, _clase:"gasto", _cat:"Otro" },
+     { folio:"EGR-b", fecha:"2026-07-22", concepto:"B", monto:2, _clase:"retiro" }],
+    [{ folio:"RCE-1", fecha:"2026-07-11", boletos25:1, contratistas:0, otrosIngresos:0, terminal:0 }]),
+    _previosVacios(), "Diana", 1000);
+  const ids = [...r.cortes, ...r.gastos, ...r.retiros].map(x=>x.id);
+  assert.equal(new Set(ids).size, ids.length, "ids repetidos romperian el borrado y la fusion");
+});
+
+t("el saldo inicial se devuelve como dato, no se escribe", () => {
+  const d = _impBase([]); d.obj.saldoInicial = -1500;   // un periodo puede abrir en rojo
+  const r = S.construirImportacionCortes(d, _previosVacios(), "Diana", 1000);
+  assert.equal(r.saldo.fecha, "2026-07-11");
+  close(r.saldo.entrada.valor, -1500);
+});
+t("sin saldoInicial numerico no se inventa uno", () => {
+  const d = _impBase([]); d.obj.saldoInicial = null;
+  assert.equal(S.construirImportacionCortes(d, _previosVacios(), "Diana", 1000).saldo, null);
+});
+
+// LA prueba que importa: si truena, no debe quedar nada a medias.
+t("si truena a media vuelta, NO deja una importacion parcial", () => {
+  const previos = { cortes:[], gastos:[{ id:"g0", importe:99 }], retiros:[], ignorados:[] };
+  const real = S.canonizarCategoria;
+  let vueltas = 0;
+  S.canonizarCategoria = (c) => { if(++vueltas === 3) throw new Error("categoria imposible"); return real(c); };
+  try{
+    const egresos = [1,2,3,4,5].map(i => (
+      { folio:"EGR-"+i, fecha:"2026-07-22", concepto:"C"+i, monto:i*10, _clase:"gasto", _cat:"Otro" }));
+    assert.throws(() => S.construirImportacionCortes(_impBase(egresos), previos, "Diana", 1000),
+      /categoria imposible/);
+    // Lo que el llamador ve: sus listas intactas. Los dos gastos que alcanzaron a construirse
+    // vivian en el arreglo local, que se descarta con la excepcion.
+    assert.equal(previos.gastos.length, 1, "no se colo ningun gasto a medias");
+    assert.equal(previos.gastos[0].id, "g0");
+    assert.equal(previos.cortes.length, 0);
+    assert.equal(previos.ignorados.length, 0);
+  } finally { S.canonizarCategoria = real; }
+});
+
+t("el fixture real entra completo por esta via", () => {
+  // Se lee aqui y no se usa la constante FIX de mas abajo: depender del orden de declaracion
+  // hace que mover un bloque de pruebas rompa otro por un motivo que no tiene nada que ver.
+  const F = JSON.parse(fs.readFileSync(path.join(__dirname, "fixture_cortes_v3.json"), "utf8"));
+  const egresos = F.egresos.map(e => ({ ...e, _clase:"gasto", _cat:"Otro" }));
+  const r = S.construirImportacionCortes(
+    { obj:{ periodo:{ ini:"2026-07-04", fin:"2026-08-02" }, saldoInicial:0 },
+      cortesNuevos: F.cortes, egresos },
+    _previosVacios(), "Diana", 1000);
+  assert.equal(r.nC, 133); assert.equal(r.nG, 53); assert.equal(r.nR, 0); assert.equal(r.nI, 0);
+  close(r.cortes.reduce((t,c)=>t+c.monto,0), 430054, 0.01);
+  close(r.gastos.reduce((t,g)=>t+g.importe,0), 369415.97, 0.01);
+  // La terminal viaja en el corte pero NO entra al efectivo.
+  close(r.cortes.reduce((t,c)=>t+(c.terminal||0),0), 8945, 0.01);
+  // Y todo lo importado se reconoce como tal.
+  const d = S.desglosarPorOrigen(r.cortes, "monto");
+  assert.equal(d.length, 1); assert.equal(d[0].origen, "cortes");
 });
 
 console.log("\n== origen de cada movimiento: de donde salio de verdad ==");
