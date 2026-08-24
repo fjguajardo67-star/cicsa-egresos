@@ -76,15 +76,19 @@ function extractFunction(name) {
 // Constantes de nivel superior que las funciones extraídas necesitan (CATS es la lista de
 // categorías de fábrica sobre la que trabaja catsActuales).
 function extractConst(name) {
-  const m = script.match(new RegExp("const\\s+" + name + "\\s*=\\s*\\[[\\s\\S]*?\\];"));
-  if (!m) throw new Error("No encontré la constante: " + name);
-  return m[0];
+  // Arrays (pueden abarcar varias lineas) y escalares (const X = 50;). Se EXTRAEN, nunca se
+  // copian: una copia se queda vieja y la prueba acaba comparando el valor contra si mismo.
+  const arr = script.match(new RegExp("const\\s+" + name + "\\s*=\\s*\\[[\\s\\S]*?\\];"));
+  if (arr) return arr[0];
+  const esc = script.match(new RegExp("const\\s+" + name + "\\s*=\\s*[^;\\n]+;"));
+  if (esc) return esc[0];
+  throw new Error("No encontré la constante: " + name);
 }
 // Se EXTRAEN de index.html, nunca se copian aquí: una copia se queda vieja y la prueba pasa
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "CORTES_VERSIONES_OK"];
+const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX"];
 
 
 const FUNCS = [
@@ -100,6 +104,7 @@ const FUNCS = [
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
   "cortesManualesSospechosos", "egresosExcluidos", "totalExcluido", "folioDeIgnorado", "_unirIgnorados",
+  "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
@@ -140,7 +145,10 @@ const sandbox = {
   // fetchStorage habla con Firebase Storage: se le pone una sesión y un fetch de mentira.
   auth: { currentUser: { getIdToken: async () => "TOKEN" } },
   FB_BASE: "https://firestore/x", FB_KEY: "K",
-  fbSet: async () => {}, fbDeleteDoc: async () => {},
+  fbSet: async () => {},
+  // fbDeleteDoc ya NO se stubea: se extrae la real desde index.html (esta en FUNCS). El stub
+  // le ganaba a la declaracion y devolvia undefined, con lo que la prueba del 403 no probaba nada.
+  // Con el fetch stubeado (ok:true) la real es igual de inofensiva para el resto de pruebas.
   fetch: async () => ({ ok: true, status: 200 }),
 };
 vm.createContext(sandbox);
@@ -167,6 +175,11 @@ async function tAsync(name, fn) {
   try { await fn(); pass++; console.log("  ok - " + name); }
   catch (e) { fail++; console.error("  FAIL - " + name + "\n        " + e.message); }
 }
+// El archivo corre de arriba a abajo de forma SINCRONA. Llamar a tAsync directamente devuelve una
+// promesa que nadie espera: las pruebas se entremezclan, comparten estado y el resumen se imprime
+// antes de que terminen. Se encolan y se corren en fila al final.
+const _colaAsync = [];
+function tAsyncQ(name, fn) { _colaAsync.push([name, fn]); }
 
 console.log("\n== precioPorUnidadBase / contenidoTotalGramos ==");
 t("kg con merma: Rollo de Res $92.90, 1kg, 30% → $132.71/kg", () => {
@@ -1360,6 +1373,112 @@ t("si de verdad falta dinero, la conciliación lo sigue diciendo", () => {
   close(r.diferencias[0].diferencia, 2500);
 });
 
+console.log("\n== guardrail: ninguna escritura falla en silencio ==");
+// fetch() solo rechaza por fallo de red: un 403 llega como respuesta normal. fbUpdateDoc y
+// fbDeleteDoc ni miraban r.ok, asi que toda escritura rechazada por Firestore "salia bien".
+// Por eso los respaldos estuvieron meses sin guardarse sin que nadie se enterara.
+t("registrarFallo acumula y respeta el tope", () => {
+  let l = [];
+  for(let i = 0; i < 60; i++) l = S.registrarFallo(l, "guardar", "err " + i, "2026-08-24T00:00:00Z");
+  assert.equal(l.length, 50, "se guardan los ultimos 50, no crece sin fin");
+  assert.equal(l[l.length-1].detalle, "err 59", "el mas reciente sobrevive");
+});
+t("registrarFallo no truena con lista invalida", () => {
+  assert.equal(S.registrarFallo(null, "x", "y").length, 1);
+  assert.equal(S.registrarFallo(undefined, "x", "y").length, 1);
+});
+t("resumenFallos: sin fallos, silencio total", () => {
+  const r = S.resumenFallos([]);
+  assert.equal(r.n, 0);
+  assert.equal(r.texto, "", "no se pinta nada si no hay nada que decir");
+  assert.deepEqual(S.resumenFallos(null).ops, []);
+});
+t("resumenFallos: singular y plural", () => {
+  assert.ok(/^1 cambio no se guard/.test(S.resumenFallos([{op:"a",detalle:""}]).texto));
+  assert.ok(/^3 cambios no se guard/.test(
+    S.resumenFallos([{op:"a"},{op:"a"},{op:"b"}]).texto));
+});
+t("resumenFallos agrupa por operacion, la mas frecuente primero", () => {
+  const r = S.resumenFallos([{op:"guardar en cfdis"},{op:"guardar estado"},{op:"guardar en cfdis"}]);
+  assert.equal(r.n, 3);
+  assert.equal(r.ops[0], "guardar en cfdis");
+  assert.equal(r.porOp["guardar en cfdis"], 2);
+});
+t("pistaFallo nombra el 403 como lo que es, y no adivina de mas", () => {
+  assert.ok(/regla/i.test(S.pistaFallo(403)), "un 403 casi siempre es una regla que falta");
+  assert.ok(/regla/i.test(S.pistaFallo(401)));
+  assert.ok(/minuto/i.test(S.pistaFallo(429)));
+  assert.ok(S.pistaFallo(500).length > 0);
+  assert.equal(S.pistaFallo(404), "", "sin pista inventada para lo que no se reconoce");
+  assert.equal(S.pistaFallo(200), "");
+});
+
+// Prueba de fuego: un 403 de verdad, no un objeto inventado. Si fbUpdateDoc vuelve a dejar de
+// mirar r.ok, esto falla.
+vm.runInContext("let _fallosEscritura = []; const FB_BASE='x'; const FB_KEY='k';" +
+  "async function fbAuthHeader(){ return {}; } function pintarAvisoFallos(){}", sandbox);
+const _leerFallos = () => vm.runInContext("_fallosEscritura", sandbox);
+const _resetFallos = () => vm.runInContext("_fallosEscritura = [];", sandbox);
+const _conRespuesta = (resp) => { sandbox.fetch = async () => resp; };
+
+tAsyncQ("un 403 en fbUpdateDoc se registra y devuelve false", async () => {
+  _resetFallos(); _conRespuesta({ ok:false, status:403 });
+  const ok = await S.fbUpdateDoc("gmail_revisados", "h1", { a:1 });
+  assert.equal(ok, false, "el llamador tiene que poder enterarse");
+  const f = _leerFallos();
+  assert.equal(f.length, 1, "quedo registrado");
+  assert.ok(/403/.test(f[0].detalle));
+  assert.ok(/regla/i.test(f[0].detalle), "y dice donde se arregla");
+  assert.ok(/gmail_revisados/.test(f[0].op), "y en que coleccion");
+});
+tAsyncQ("un 200 no registra nada", async () => {
+  _resetFallos(); _conRespuesta({ ok:true, status:200 });
+  assert.equal(await S.fbUpdateDoc("cfdis", "u1", {}), true);
+  assert.equal(_leerFallos().length, 0, "no se molesta al usuario cuando todo va bien");
+});
+tAsyncQ("un fallo de red tambien se registra", async () => {
+  _resetFallos();
+  sandbox.fetch = async () => { throw new Error("Failed to fetch"); };
+  assert.equal(await S.fbUpdateDoc("cfdis", "u1", {}), false);
+  assert.equal(_leerFallos().length, 1);
+});
+tAsyncQ("un borrado rechazado no se da por hecho", async () => {
+  _resetFallos(); _conRespuesta({ ok:false, status:403 });
+  assert.equal(await S.fbDeleteDoc("cfdis", "u1"), false);
+  assert.ok(/borrar/.test(_leerFallos()[0].op));
+});
+
+console.log("\n== guardrail: toda coleccion usada tiene regla en firestore.rules ==");
+// Dos bugs reales de esta misma sesion: se agregaron gmail_revisados y respaldos al codigo y no
+// a las reglas. El encabezado de firestore.rules ya advertia que hay que hacerlo — pero una
+// advertencia escrita no la ejecuta nadie. Esta prueba si.
+const RULES = fs.readFileSync(path.join(__dirname, "..", "firestore.rules"), "utf8");
+function coleccionesUsadas(){
+  const cols = new Set();
+  // const XXX_COL = "nombre"
+  for(const m of script.matchAll(/const\s+\w*_COL\w*\s*=\s*["'`]([a-z_]+)["'`]/g)) cols.add(m[1]);
+  // rutas literales tipo 'estado/cicsa' o `datos/precios`
+  for(const m of script.matchAll(/fb(?:Get|Set)\(\s*["'`]([a-z_]+)\//g)) cols.add(m[1]);
+  // db.collection(ALGO) con constante conocida
+  for(const m of script.matchAll(/db\.collection\((\w+)\)/g)){
+    const c = script.match(new RegExp("const\\s+" + m[1] + "\\s*=\\s*[\"'`]([a-z_]+)[\"'`]"));
+    if(c) cols.add(c[1]);
+  }
+  return [...cols].sort();
+}
+t("cada coleccion que usa index.html esta declarada en firestore.rules", () => {
+  const usadas = coleccionesUsadas();
+  assert.ok(usadas.length >= 5, "el detector debe encontrar algo, si no la prueba no prueba nada: " + usadas.join(","));
+  const sinRegla = usadas.filter(c => !new RegExp("match\\s+/" + c + "/").test(RULES));
+  assert.deepEqual(sinRegla, [],
+    "sin regla, Firestore devuelve 403 y la pantalla se queda vacia. Agregalas a firestore.rules: " + sinRegla.join(", "));
+});
+t("el detector reconoce las colecciones que sabemos que existen", () => {
+  const u = coleccionesUsadas();
+  ["cfdis", "productos_comerciales", "proveedores", "gmail_revisados", "respaldos", "actividad"]
+    .forEach(c => assert.ok(u.includes(c), "el detector deberia ver " + c + "; vio: " + u.join(",")));
+});
+
 console.log("\n== fixture real v3: importar, reimportar, idempotencia ==");
 // Archivo real de Manejo de Cortes (133 cortes, 53 egresos, 4 jul - 2 ago 2026). Es el mismo que
 // se rechazaba por version y el que destapo el doble conteo de ingresos.
@@ -2549,6 +2668,11 @@ console.log("\n== Respaldos (asíncrono) ==");
 async function pruebasStorage() {
   const T = tAsync;
 
+  // Los espias PISABAN S.fbDeleteDoc / S.fbSet y no los devolvian nunca: cualquier prueba
+  // posterior recibia el espia en vez de la funcion real y fallaba por un motivo que no tenia
+  // nada que ver consigo misma. Se restauran al terminar.
+  const _realDelete = S.fbDeleteDoc, _realSet = S.fbSet;
+  const restaurarEspias = () => { S.fbDeleteDoc = _realDelete; S.fbSet = _realSet; };
   const espiarPoda = () => {
     const borrados = [], indices = [];
     S.fbDeleteDoc = async (col, id) => { borrados.push(col + "/" + id); };
@@ -2694,6 +2818,8 @@ async function pruebasStorage() {
     assert.equal(S.esImagenRespaldo(""), false);
     assert.equal(S.esImagenRespaldo(null), false);
   });
+
+  restaurarEspias();   // que las pruebas de despues reciban las funciones reales
 }
 
 pruebasStorage().then(() => {
@@ -2909,6 +3035,12 @@ t("los folios ya importados se detectan para no repetir", () => {
   assert.ok(!S.foliosCorteImportados().has("RCE-2026-99999"));
 });
 
-console.log(`\n${pass} pasaron, ${fail} fallaron`);
-  process.exit(fail ? 1 : 0);
+  // Las pruebas encoladas corren AQUI, en fila, antes del resumen y antes de salir. Ponerlas
+  // sueltas dejaba promesas sin esperar: se entremezclaban, compartian estado y process.exit
+  // mataba el proceso antes de que terminaran.
+  (async () => {
+    for (const [nombre, fn] of _colaAsync) await tAsync(nombre, fn);
+    console.log(`\n${pass} pasaron, ${fail} fallaron`);
+    process.exit(fail ? 1 : 0);
+  })();
 });

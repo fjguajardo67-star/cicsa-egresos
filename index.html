@@ -622,6 +622,7 @@ body.snav-min .side-theme span { display:none; }
 </style>
 </head>
 <body>
+<div id="avisoFallos" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:100000;background:var(--red);color:#fff;padding:10px 14px;font-size:12.5px;box-shadow:0 -2px 10px rgba(0,0,0,.25)"></div>
 <div id="syncBadge" onclick="sincronizarAhora()" title="Última sincronización con la nube — toca para sincronizar y refrescar ahora"
   style="position:fixed;bottom:22px;right:7px;font-size:10px;color:var(--txt2);background:rgba(255,255,255,.85);border:1px solid var(--border);border-radius:6px;padding:2px 7px;z-index:99999;cursor:pointer;font-family:'JetBrains Mono',monospace">⟳ …</div>
 <div id="buildBadge" onclick="recargarSinCache()" title="Versión instalada — toca para recargar la última versión"
@@ -2001,7 +2002,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-24-b";
+const APP_BUILD = "2026-08-24-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2169,26 +2170,45 @@ async function fbCreateDoc(col, data){
       method:'POST', headers,
       body: JSON.stringify({ fields: { json:{stringValue:JSON.stringify(data)}, ts:{stringValue:new Date().toISOString()} } })
     });
+    if(!r.ok){
+      const pista = pistaFallo(r.status);
+      _anotarFallo(`crear en ${col}`, `el servidor respondió ${r.status}${pista?" — "+pista:""}`);
+      return null;
+    }
     const d = await r.json();
     return d.name ? d.name.split('/').pop() : null;
-  } catch(e){ console.warn('fbCreateDoc error:', e); return null; }
+  } catch(e){ _anotarFallo(`crear en ${col}`, e && e.message || "error de red"); return null; }
 }
 
+// Devuelven true/false. Antes no miraban r.ok y devolvían undefined pasara lo que pasara, así
+// que un 403 era indistinguible de un guardado correcto.
 async function fbUpdateDoc(col, id, data){
   try {
     const headers = { 'Content-Type':'application/json', ...(await fbAuthHeader()) };
-    await fetch(`${FB_BASE}/${col}/${id}?key=${FB_KEY}`, {
+    const r = await fetch(`${FB_BASE}/${col}/${id}?key=${FB_KEY}`, {
       method:'PATCH', headers,
       body: JSON.stringify({ fields: { json:{stringValue:JSON.stringify(data)}, ts:{stringValue:new Date().toISOString()} } })
     });
-  } catch(e){ console.warn('fbUpdateDoc error:', e); }
+    if(r && r.ok === false){
+      const pista = pistaFallo(r.status);
+      _anotarFallo(`guardar en ${col}`, `el servidor respondió ${r.status}${pista?" — "+pista:""}`);
+      return false;
+    }
+    return true;
+  } catch(e){ _anotarFallo(`guardar en ${col}`, e && e.message || "error de red"); return false; }
 }
 
 async function fbDeleteDoc(col, id){
   try {
     const headers = await fbAuthHeader();
-    await fetch(`${FB_BASE}/${col}/${id}?key=${FB_KEY}`, { method:'DELETE', headers });
-  } catch(e){ console.warn('fbDeleteDoc error:', e); }
+    const r = await fetch(`${FB_BASE}/${col}/${id}?key=${FB_KEY}`, { method:'DELETE', headers });
+    if(r && r.ok === false){
+      const pista = pistaFallo(r.status);
+      _anotarFallo(`borrar de ${col}`, `el servidor respondió ${r.status}${pista?" — "+pista:""}`);
+      return false;
+    }
+    return true;
+  } catch(e){ _anotarFallo(`borrar de ${col}`, e && e.message || "error de red"); return false; }
 }
 
 // Busca el gasto REAL dentro de state.weeks (no una copia) para poder mutarlo — a diferencia
@@ -2401,8 +2421,66 @@ async function fbGet(path) {
   return null;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// FALLOS DE ESCRITURA — que nada se pierda en silencio
+// ═══════════════════════════════════════════════════════════════════
+// fetch() SOLO rechaza por fallo de red: un 403 o un 500 llegan como respuesta normal. Como
+// fbUpdateDoc y fbDeleteDoc ni siquiera miraban r.ok, toda escritura rechazada por Firestore
+// "salía bien" y el error se perdía. Así estuvieron meses sin guardarse los respaldos: nadie
+// tenía forma de enterarse. Ahora cada escritura fallida se registra y se ve en pantalla.
+let _fallosEscritura = [];
+const _FALLOS_MAX = 50;   // se guardan los últimos; el contador cuenta todos
+
+// Puras y probadas: la lógica de qué se registra y cómo se resume no depende del DOM.
+function registrarFallo(lista, op, detalle, ts){
+  const l = Array.isArray(lista) ? lista : [];
+  l.push({ op:String(op||"escritura"), detalle:String(detalle||""), ts: ts || new Date().toISOString() });
+  return l.length > _FALLOS_MAX ? l.slice(-_FALLOS_MAX) : l;
+}
+function resumenFallos(lista){
+  const l = (lista||[]).filter(Boolean);
+  if(!l.length) return { n:0, texto:"", ops:[] };
+  const porOp = {};
+  l.forEach(f=>{ porOp[f.op] = (porOp[f.op]||0) + 1; });
+  const ops = Object.keys(porOp).sort((a,b)=>porOp[b]-porOp[a]);
+  const texto = l.length === 1
+    ? "1 cambio no se guardó en la nube"
+    : `${l.length} cambios no se guardaron en la nube`;
+  return { n:l.length, texto, ops, porOp };
+}
+// Un permiso denegado no se arregla reintentando y casi siempre significa que falta la regla de
+// esa colección; decirlo evita media hora de buscar en el lugar equivocado.
+function pistaFallo(status){
+  if(status === 403 || status === 401)
+    return "Firestore negó el permiso. Suele faltar la regla de esa colección (Firebase Console → Firestore → Reglas).";
+  if(status === 429) return "Demasiadas escrituras seguidas. Vuelve a intentar en un minuto.";
+  if(status >= 500) return "Firestore respondió con un error propio. Normalmente es pasajero.";
+  return "";
+}
+
+function _anotarFallo(op, detalle){
+  _fallosEscritura = registrarFallo(_fallosEscritura, op, detalle);
+  try{ pintarAvisoFallos(); }catch(_){}
+}
+function limpiarFallos(){ _fallosEscritura = []; try{ pintarAvisoFallos(); }catch(_){} }
+function pintarAvisoFallos(){
+  const el = document.getElementById("avisoFallos");
+  if(!el) return;
+  const r = resumenFallos(_fallosEscritura);
+  if(!r.n){ el.style.display = "none"; el.innerHTML = ""; return; }
+  const ult = _fallosEscritura[_fallosEscritura.length-1] || {};
+  el.style.display = "block";
+  el.innerHTML = `<div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap">
+      <div><strong>⚠ ${esc(r.texto)}.</strong>
+        <span style="font-weight:400">Lo que capturaste vive sólo en este dispositivo: nadie más lo ve, y se pierde si borras los datos del navegador.</span>
+        <div style="font-size:11.5px;opacity:.9;margin-top:4px">Último: ${esc(ult.op||"")} — ${esc(ult.detalle||"")}</div>
+      </div>
+      <button onclick="limpiarFallos()" style="border:1px solid #fff;background:transparent;color:#fff;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;white-space:nowrap">Entendido</button>
+    </div>`;
+}
+
 async function fbSet(path, data) {
-  await fetch(`${FB_BASE}/${path}?key=${FB_KEY}`, {
+  const r = await fetch(`${FB_BASE}/${path}?key=${FB_KEY}`, {
     method: 'PATCH',
     headers: {'Content-Type': 'application/json', ...(await fbAuthHeader())},
     body: JSON.stringify({
@@ -2412,6 +2490,13 @@ async function fbSet(path, data) {
       }
     })
   });
+  // Antes no se miraba r.ok: un 403 pasaba por guardado bueno.
+  if(r && r.ok === false){
+    const pista = pistaFallo(r.status);
+    _anotarFallo(`guardar ${path}`, `el servidor respondió ${r.status}${pista?" — "+pista:""}`);
+    throw new Error(`fbSet ${path}: ${r.status}`);
+  }
+  return true;
 }
 // ═══════════════════════════════════════════════════════════════════
 // RESPALDOS
@@ -2834,7 +2919,16 @@ function textoSync(ultimo, ahora){
 }
 function pintarSyncBadge(){
   const el = document.getElementById("syncBadge");
-  if(el) el.textContent = textoSync(_syncUltimo, Date.now());
+  if(!el) return;
+  // Con fallos pendientes, "hace 12 min" se lee como deriva normal. Tiene que verse como avería.
+  const r = resumenFallos(_fallosEscritura);
+  if(r.n){
+    el.textContent = `⚠ ${r.n} sin guardar`;
+    el.style.color = "#fff"; el.style.background = "var(--red)"; el.style.borderColor = "var(--red)";
+    return;
+  }
+  el.style.color = ""; el.style.background = ""; el.style.borderColor = "";
+  el.textContent = textoSync(_syncUltimo, Date.now());
 }
 setInterval(pintarSyncBadge, 30000);
 
