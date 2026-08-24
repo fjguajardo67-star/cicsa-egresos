@@ -76,15 +76,20 @@ function extractFunction(name) {
 // Constantes de nivel superior que las funciones extraídas necesitan (CATS es la lista de
 // categorías de fábrica sobre la que trabaja catsActuales).
 function extractConst(name) {
-  const m = script.match(new RegExp("const\\s+" + name + "\\s*=\\s*\\[[\\s\\S]*?\\];"));
-  if (!m) throw new Error("No encontré la constante: " + name);
-  return m[0];
+  // Arrays (pueden abarcar varias lineas) y escalares (const X = 50;). Se EXTRAEN, nunca se
+  // copian: una copia se queda vieja y la prueba acaba comparando el valor contra si mismo.
+  const arr = script.match(new RegExp("const\\s+" + name + "\\s*=\\s*\\[[\\s\\S]*?\\];"));
+  if (arr) return arr[0];
+  const esc = script.match(new RegExp("const\\s+" + name + "\\s*=\\s*[^;\\n]+;"));
+  if (esc) return esc[0];
+  throw new Error("No encontré la constante: " + name);
 }
 // Se EXTRAEN de index.html, nunca se copian aquí: una copia se queda vieja y la prueba pasa
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "CORTES_VERSIONES_OK"];
+const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX"];
+const CONSTS_OBJ = ["ORIGEN_ETIQUETA"];
 
 
 const FUNCS = [
@@ -99,6 +104,9 @@ const FUNCS = [
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "_cfdiNomina", "corridasDeNomina", "corridaNominaRegistrada", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
+  "cortesManualesSospechosos", "egresosExcluidos", "totalExcluido", "folioDeIgnorado", "_unirIgnorados",
+  "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
+  "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
@@ -139,11 +147,20 @@ const sandbox = {
   // fetchStorage habla con Firebase Storage: se le pone una sesión y un fetch de mentira.
   auth: { currentUser: { getIdToken: async () => "TOKEN" } },
   FB_BASE: "https://firestore/x", FB_KEY: "K",
-  fbSet: async () => {}, fbDeleteDoc: async () => {},
+  fbSet: async () => {},
+  // fbDeleteDoc ya NO se stubea: se extrae la real desde index.html (esta en FUNCS). El stub
+  // le ganaba a la declaracion y devolvia undefined, con lo que la prueba del 403 no probaba nada.
+  // Con el fetch stubeado (ok:true) la real es igual de inofensiva para el resto de pruebas.
   fetch: async () => ({ ok: true, status: 200 }),
 };
 vm.createContext(sandbox);
 for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
+// Constantes objeto (const X = { ... };) — mismo principio: se extraen, no se copian.
+for (const c of CONSTS_OBJ) {
+  const m = script.match(new RegExp("const\\s+" + c + "\\s*=\\s*\\{[\\s\\S]*?\\};"));
+  if (!m) throw new Error("No encontré la constante objeto: " + c);
+  vm.runInContext(m[0], sandbox);
+}
 vm.runInContext("const TOL_DIVIDIDA = 0.05;", sandbox);
 vm.runInContext('const CORTES_STORAGE_PREFIJO = "cortes";', sandbox);
 vm.runInContext("let _storageAuthScheme = null;", sandbox);   // memo del esquema que funcionó
@@ -166,6 +183,11 @@ async function tAsync(name, fn) {
   try { await fn(); pass++; console.log("  ok - " + name); }
   catch (e) { fail++; console.error("  FAIL - " + name + "\n        " + e.message); }
 }
+// El archivo corre de arriba a abajo de forma SINCRONA. Llamar a tAsync directamente devuelve una
+// promesa que nadie espera: las pruebas se entremezclan, comparten estado y el resumen se imprime
+// antes de que terminen. Se encolan y se corren en fila al final.
+const _colaAsync = [];
+function tAsyncQ(name, fn) { _colaAsync.push([name, fn]); }
 
 console.log("\n== precioPorUnidadBase / contenidoTotalGramos ==");
 t("kg con merma: Rollo de Res $92.90, 1kg, 30% → $132.71/kg", () => {
@@ -1359,6 +1381,376 @@ t("si de verdad falta dinero, la conciliación lo sigue diciendo", () => {
   close(r.diferencias[0].diferencia, 2500);
 });
 
+console.log("\n== origen de cada movimiento: de donde salio de verdad ==");
+// No hay campo _origen: se deduce de las marcas que cada camino ya deja. Asi funciona sobre todo
+// el historico, cosa que un campo nuevo nunca haria.
+t("cada camino se reconoce por su marca", () => {
+  assert.equal(S.origenDeMovimiento({ importe:100, _folioEgreso:"EGR-1" }), "cortes");
+  assert.equal(S.origenDeMovimiento({ monto:100, _folioCorte:"RCE-1" }),   "cortes");
+  assert.equal(S.origenDeMovimiento({ importe:100, _nominaCorrida:"2026-07-18" }), "nomina");
+  assert.equal(S.origenDeMovimiento({ importe:100, _gmailMsgId:"abc" }),   "gmail");
+  assert.equal(S.origenDeMovimiento({ importe:100, cfdiUuid:"U-1" }),      "sat");
+  assert.equal(S.origenDeMovimiento({ importe:100, _importado:true }),     "excel");
+});
+t("un corte tecleado a mano es 'manual', sin ambiguedad", () => {
+  // guardarCorte crea {id,fecha,tipo,monto,label} y nunca dejo marca: la ausencia SI significa
+  // capturado a mano. Estos son los seis globales que inflaron julio en $384,542.
+  assert.equal(S.origenDeMovimiento({ id:"1", fecha:"2026-07-07", monto:74676, label:"Martes" }), "manual");
+  assert.equal(S.origenDeMovimiento({ id:"2", fecha:"2026-07-10", monto:53066, motivo:"retiro" }), "manual");
+});
+t("un gasto que NO trae la llave _gmailMsgId no se da por manual", () => {
+  // La captura escribe _gmailMsgId aunque sea null. Sin la llave, el registro es de un formato
+  // anterior: suponer su procedencia produce una cifra que parece verificada sin serlo.
+  assert.equal(S.origenDeMovimiento({ importe:100, proveedor:"X" }), "sin_marcar");
+  assert.equal(S.origenDeMovimiento({ importe:100, proveedor:"X", _gmailMsgId:null }), "manual");
+});
+t("basura no truena y no se inventa un origen", () => {
+  ["", null, undefined, 42, []].forEach(x =>
+    assert.equal(S.origenDeMovimiento(x), "sin_marcar", JSON.stringify(x)));
+});
+t("cortes gana sobre las demas marcas: es el camino por el que entro", () => {
+  assert.equal(S.origenDeMovimiento({ importe:1, _folioEgreso:"E", _gmailMsgId:"g", cfdiUuid:"u" }), "cortes");
+});
+t("etiquetaOrigen traduce, y no rompe con algo desconocido", () => {
+  assert.equal(S.etiquetaOrigen("cortes"), "importado de Cortes");
+  assert.equal(S.etiquetaOrigen("sin_marcar"), "origen no registrado");
+  assert.equal(S.etiquetaOrigen("loquesea"), "loquesea");
+});
+
+t("desglosarPorOrigen separa lo importado de lo tecleado — el caso de julio", () => {
+  const cortes = [
+    ...Array.from({length:133}, (_, i) => ({ id:"i"+i, monto:430054/133, _folioCorte:"RCE-"+i })),
+    { id:"g1", fecha:"2026-07-07", monto:74676 }, { id:"g2", fecha:"2026-07-10", monto:53066 },
+    { id:"g3", fecha:"2026-07-14", monto:74379 }, { id:"g4", fecha:"2026-07-18", monto:46454 },
+    { id:"g5", fecha:"2026-07-22", monto:63175 }, { id:"g6", fecha:"2026-07-24", monto:72792 },
+  ];
+  const d = S.desglosarPorOrigen(cortes, "monto");
+  assert.equal(d.length, 2, "dos fuentes distintas, no una sola cifra");
+  assert.equal(d[0].origen, "cortes");   // el mayor primero
+  close(d[0].monto, 430054); assert.equal(d[0].n, 133);
+  assert.equal(d[1].origen, "manual");
+  close(d[1].monto, 384542); assert.equal(d[1].n, 6);
+  close(d.reduce((t,x)=>t+x.monto,0), 814596, 0.01);   // el total sigue siendo el mismo
+});
+t("desglosarPorOrigen usa el campo que se le pida", () => {
+  const d = S.desglosarPorOrigen([{ importe:500, _gmailMsgId:"a" }], "importe");
+  assert.equal(d[0].origen, "gmail"); close(d[0].monto, 500);
+});
+t("con una sola fuente devuelve una sola linea (no se ensucia el reporte)", () => {
+  const d = S.desglosarPorOrigen([{ monto:10, _folioCorte:"A" }, { monto:20, _folioCorte:"B" }], "monto");
+  assert.equal(d.length, 1);
+  close(d[0].monto, 30);
+});
+t("sin movimientos, nada que desglosar", () => {
+  assert.deepEqual(S.desglosarPorOrigen([], "monto"), []);
+  assert.deepEqual(S.desglosarPorOrigen(null, "monto"), []);
+});
+
+console.log("\n== guardrail: ninguna escritura falla en silencio ==");
+// fetch() solo rechaza por fallo de red: un 403 llega como respuesta normal. fbUpdateDoc y
+// fbDeleteDoc ni miraban r.ok, asi que toda escritura rechazada por Firestore "salia bien".
+// Por eso los respaldos estuvieron meses sin guardarse sin que nadie se enterara.
+t("registrarFallo acumula y respeta el tope", () => {
+  let l = [];
+  for(let i = 0; i < 60; i++) l = S.registrarFallo(l, "guardar", "err " + i, "2026-08-24T00:00:00Z");
+  assert.equal(l.length, 50, "se guardan los ultimos 50, no crece sin fin");
+  assert.equal(l[l.length-1].detalle, "err 59", "el mas reciente sobrevive");
+});
+t("registrarFallo no truena con lista invalida", () => {
+  assert.equal(S.registrarFallo(null, "x", "y").length, 1);
+  assert.equal(S.registrarFallo(undefined, "x", "y").length, 1);
+});
+t("resumenFallos: sin fallos, silencio total", () => {
+  const r = S.resumenFallos([]);
+  assert.equal(r.n, 0);
+  assert.equal(r.texto, "", "no se pinta nada si no hay nada que decir");
+  assert.deepEqual(S.resumenFallos(null).ops, []);
+});
+t("resumenFallos: singular y plural", () => {
+  assert.ok(/^1 cambio no se guard/.test(S.resumenFallos([{op:"a",detalle:""}]).texto));
+  assert.ok(/^3 cambios no se guard/.test(
+    S.resumenFallos([{op:"a"},{op:"a"},{op:"b"}]).texto));
+});
+t("resumenFallos agrupa por operacion, la mas frecuente primero", () => {
+  const r = S.resumenFallos([{op:"guardar en cfdis"},{op:"guardar estado"},{op:"guardar en cfdis"}]);
+  assert.equal(r.n, 3);
+  assert.equal(r.ops[0], "guardar en cfdis");
+  assert.equal(r.porOp["guardar en cfdis"], 2);
+});
+t("pistaFallo nombra el 403 como lo que es, y no adivina de mas", () => {
+  assert.ok(/regla/i.test(S.pistaFallo(403)), "un 403 casi siempre es una regla que falta");
+  assert.ok(/regla/i.test(S.pistaFallo(401)));
+  assert.ok(/minuto/i.test(S.pistaFallo(429)));
+  assert.ok(S.pistaFallo(500).length > 0);
+  assert.equal(S.pistaFallo(404), "", "sin pista inventada para lo que no se reconoce");
+  assert.equal(S.pistaFallo(200), "");
+});
+
+// Prueba de fuego: un 403 de verdad, no un objeto inventado. Si fbUpdateDoc vuelve a dejar de
+// mirar r.ok, esto falla.
+vm.runInContext("let _fallosEscritura = []; const FB_BASE='x'; const FB_KEY='k';" +
+  "async function fbAuthHeader(){ return {}; } function pintarAvisoFallos(){}", sandbox);
+const _leerFallos = () => vm.runInContext("_fallosEscritura", sandbox);
+const _resetFallos = () => vm.runInContext("_fallosEscritura = [];", sandbox);
+const _conRespuesta = (resp) => { sandbox.fetch = async () => resp; };
+
+tAsyncQ("un 403 en fbUpdateDoc se registra y devuelve false", async () => {
+  _resetFallos(); _conRespuesta({ ok:false, status:403 });
+  const ok = await S.fbUpdateDoc("gmail_revisados", "h1", { a:1 });
+  assert.equal(ok, false, "el llamador tiene que poder enterarse");
+  const f = _leerFallos();
+  assert.equal(f.length, 1, "quedo registrado");
+  assert.ok(/403/.test(f[0].detalle));
+  assert.ok(/regla/i.test(f[0].detalle), "y dice donde se arregla");
+  assert.ok(/gmail_revisados/.test(f[0].op), "y en que coleccion");
+});
+tAsyncQ("un 200 no registra nada", async () => {
+  _resetFallos(); _conRespuesta({ ok:true, status:200 });
+  assert.equal(await S.fbUpdateDoc("cfdis", "u1", {}), true);
+  assert.equal(_leerFallos().length, 0, "no se molesta al usuario cuando todo va bien");
+});
+tAsyncQ("un fallo de red tambien se registra", async () => {
+  _resetFallos();
+  sandbox.fetch = async () => { throw new Error("Failed to fetch"); };
+  assert.equal(await S.fbUpdateDoc("cfdis", "u1", {}), false);
+  assert.equal(_leerFallos().length, 1);
+});
+tAsyncQ("un borrado rechazado no se da por hecho", async () => {
+  _resetFallos(); _conRespuesta({ ok:false, status:403 });
+  assert.equal(await S.fbDeleteDoc("cfdis", "u1"), false);
+  assert.ok(/borrar/.test(_leerFallos()[0].op));
+});
+
+console.log("\n== guardrail: toda coleccion usada tiene regla en firestore.rules ==");
+// Dos bugs reales de esta misma sesion: se agregaron gmail_revisados y respaldos al codigo y no
+// a las reglas. El encabezado de firestore.rules ya advertia que hay que hacerlo — pero una
+// advertencia escrita no la ejecuta nadie. Esta prueba si.
+const RULES = fs.readFileSync(path.join(__dirname, "..", "firestore.rules"), "utf8");
+function coleccionesUsadas(){
+  const cols = new Set();
+  // const XXX_COL = "nombre"
+  for(const m of script.matchAll(/const\s+\w*_COL\w*\s*=\s*["'`]([a-z_]+)["'`]/g)) cols.add(m[1]);
+  // rutas literales tipo 'estado/cicsa' o `datos/precios`
+  for(const m of script.matchAll(/fb(?:Get|Set)\(\s*["'`]([a-z_]+)\//g)) cols.add(m[1]);
+  // db.collection(ALGO) con constante conocida
+  for(const m of script.matchAll(/db\.collection\((\w+)\)/g)){
+    const c = script.match(new RegExp("const\\s+" + m[1] + "\\s*=\\s*[\"'`]([a-z_]+)[\"'`]"));
+    if(c) cols.add(c[1]);
+  }
+  return [...cols].sort();
+}
+t("cada coleccion que usa index.html esta declarada en firestore.rules", () => {
+  const usadas = coleccionesUsadas();
+  assert.ok(usadas.length >= 5, "el detector debe encontrar algo, si no la prueba no prueba nada: " + usadas.join(","));
+  const sinRegla = usadas.filter(c => !new RegExp("match\\s+/" + c + "/").test(RULES));
+  assert.deepEqual(sinRegla, [],
+    "sin regla, Firestore devuelve 403 y la pantalla se queda vacia. Agregalas a firestore.rules: " + sinRegla.join(", "));
+});
+t("el detector reconoce las colecciones que sabemos que existen", () => {
+  const u = coleccionesUsadas();
+  ["cfdis", "productos_comerciales", "proveedores", "gmail_revisados", "respaldos", "actividad"]
+    .forEach(c => assert.ok(u.includes(c), "el detector deberia ver " + c + "; vio: " + u.join(",")));
+});
+
+console.log("\n== fixture real v3: importar, reimportar, idempotencia ==");
+// Archivo real de Manejo de Cortes (133 cortes, 53 egresos, 4 jul - 2 ago 2026). Es el mismo que
+// se rechazaba por version y el que destapo el doble conteo de ingresos.
+const FIX = JSON.parse(fs.readFileSync(path.join(__dirname, "fixture_cortes_v3.json"), "utf8"));
+const _sum = (a, k) => a.reduce((t, x) => t + (parseFloat(x[k]) || 0), 0);
+const _efectivoCorte = c => (parseFloat(c.boletos25)||0)+(parseFloat(c.contratistas)||0)+(parseFloat(c.otrosIngresos)||0);
+
+t("el fixture v3 se acepta sin errores ni avisos", () => {
+  const v = S.validarArchivoCortes(FIX);
+  assert.equal(v.ok, true, v.errores.join(" | "));
+  assert.deepEqual(S.avisosControlCortes(FIX), [], "sus totales cuadran solos");
+});
+t("cifras de control del fixture", () => {
+  assert.equal(FIX.cortes.length, 133);
+  assert.equal(new Set(FIX.cortes.map(c => c.folio)).size, 133, "sin folios repetidos");
+  assert.equal(FIX.egresos.length, 53);
+  assert.equal(new Set(FIX.egresos.map(e => e.folio)).size, 53);
+  close(_sum(FIX.cortes, "total"), 430054);
+  close(_sum(FIX.cortes, "terminal"), 8945);
+  close(_sum(FIX.egresos, "monto"), 369415.97);
+  close(430054 - 369415.97, FIX.totales.efectivoAEntregar);
+});
+t("el efectivo contable de cada corte NO incluye la terminal", () => {
+  // total = boletos25 + contratistas + otrosIngresos; la terminal va aparte. Si algun dia el
+  // contrato cambiara y 'total' incluyera la terminal, el ingreso se inflaria en silencio.
+  const malos = FIX.cortes.filter(c => Math.abs(_efectivoCorte(c) - (parseFloat(c.total)||0)) > 0.001);
+  assert.equal(malos.length, 0, "total debe ser exactamente la suma de los tres conceptos de efectivo");
+  assert.ok(_sum(FIX.cortes, "terminal") > 0, "y si hay terminal, para que la prueba signifique algo");
+});
+t("los totales del archivo son control, no transacciones", () => {
+  // Ninguna cifra global debe convertirse en movimiento: se comparan contra la suma de renglones.
+  close(_sum(FIX.cortes, "total"), FIX.totales.efectivo);
+  close(_sum(FIX.cortes, "terminal"), FIX.totales.terminal);
+  close(_sum(FIX.egresos, "monto"), FIX.totales.egresos);
+});
+t("tocar totales.efectivo dispara alerta de integridad y NO crea ingreso", () => {
+  const a = JSON.parse(JSON.stringify(FIX));
+  a.totales.efectivo = a.totales.efectivo + 50000;
+  const av = S.avisosControlCortes(a);
+  assert.ok(av.some(x => /efectivo/i.test(x)), "debe avisar que no cuadra");
+  assert.equal(S.validarArchivoCortes(a).ok, true, "pero no bloquea: es un aviso, no un rechazo");
+  close(_sum(a.cortes, "total"), 430054, 0.01);   // los cortes no cambiaron
+});
+
+// ── idempotencia: la reimportacion se decide por folio ────────────────────────
+// foliosCorteImportados/foliosEgresoImportados leen _folioCorte/_folioEgreso del estado. Se
+// simula el estado que dejaria una importacion para comprobar que la segunda no crea nada.
+t("primera importacion: 133 cortes nuevos, 53 egresos", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[] }], cortesIgnorados:[] };
+  const yaC = S.foliosCorteImportados();
+  const nuevos = FIX.cortes.filter(c => !yaC.has(String(c.folio).trim()));
+  assert.equal(nuevos.length, 133);
+  close(nuevos.reduce((t, c) => t + _efectivoCorte(c), 0), 430054);
+});
+t("segunda importacion identica: 0 nuevos, 0 duplicados", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:
+      FIX.egresos.map((e, i) => ({ id:"g"+i, importe:e.monto, fecha:e.fecha, _folioEgreso:e.folio })),
+    cortes: FIX.cortes.map((c, i) => ({ id:"c"+i, fecha:c.fecha, monto:_efectivoCorte(c), _folioCorte:c.folio })) }],
+    cortesIgnorados:[] };
+  const yaC = S.foliosCorteImportados(), yaE = S.foliosEgresoImportados();
+  assert.equal(FIX.cortes.filter(c => !yaC.has(String(c.folio).trim())).length, 0, "cero cortes nuevos");
+  assert.equal(FIX.egresos.filter(e => !yaE.has(String(e.folio).trim())).length, 0, "cero egresos nuevos");
+  assert.equal(yaC.size, 133);
+  assert.equal(yaE.size, 53);
+  close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), 430054, 0.01);
+});
+t("el ingreso NO cambia al reimportar", () => {
+  const antes = S.todosLosCortes().reduce((t, c) => t + c.monto, 0);
+  const yaC = S.foliosCorteImportados();
+  FIX.cortes.filter(c => !yaC.has(String(c.folio).trim()))
+    .forEach(c => S.state.weeks[0].cortes.push({ id:"x", fecha:c.fecha, monto:_efectivoCorte(c), _folioCorte:c.folio }));
+  close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), antes, 0.01);
+});
+t("un global tecleado sobre ese mismo estado se detecta, y explica los $384,542", () => {
+  // Los seis cierres reales que inflaron el balance de julio.
+  [["2026-07-07",74676],["2026-07-10",53066],["2026-07-14",74379],
+   ["2026-07-18",46454],["2026-07-22",63175],["2026-07-24",72792]]
+    .forEach(([f, m], i) => S.state.weeks[0].cortes.push({ id:"glob"+i, fecha:f, monto:m }));
+  close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), 814596, 0.01);   // el numero que salio en pantalla
+  const r = S.cortesManualesSospechosos(S.todosLosCortes(), "", "");
+  assert.equal(r.hallazgos.length, 6, "los seis quedan señalados");
+  close(r.montoManual, 384542);
+  close(r.montoImportado, 430054);
+  // Los del 7 y 10 de julio son ANTERIORES al primer corte importado (11 jul): quedan listados
+  // pero fuera del tramo, que es justo la distincion que hay que poder hacer.
+  assert.equal(r.hallazgos.filter(h => h.dentroDelTramo).length, 4);
+});
+
+console.log("\n== auditoría de caja: doble conteo de ingresos y egresos excluidos ==");
+// Caso real: el balance mostro $814,596 de ingreso cuando los 133 cortes del archivo suman
+// $430,054. Los $384,542 de diferencia eran 6 cortes GLOBALES tecleados a mano (cierres de
+// semana) que conviven con los cortes individuales importados. No hay folio que comparar, asi
+// que la importacion no puede verlo sola: hay que señalarlo.
+t("un global tecleado dentro del tramo importado se señala como doble conteo", () => {
+  const cortes = [
+    { id:"i1", fecha:"2026-07-18", monto:10000, _folioCorte:"RCE-1" },
+    { id:"i2", fecha:"2026-07-19", monto:12000, _folioCorte:"RCE-2" },
+    { id:"i3", fecha:"2026-07-21", monto:9000,  _folioCorte:"RCE-3" },
+    { id:"m1", fecha:"2026-07-18", monto:63175 },                      // cierre tecleado a mano
+  ];
+  const r = S.cortesManualesSospechosos(cortes, "2026-07-01", "2026-07-31");
+  assert.equal(r.hallazgos.length, 1);
+  assert.equal(r.hallazgos[0].id, "m1");
+  assert.equal(r.hallazgos[0].dentroDelTramo, true);
+  assert.equal(r.hallazgos[0].mismoDia, true, "ese dia YA tiene cortes importados");
+  close(r.montoImportado, 31000);
+  close(r.montoManual, 63175);
+});
+t("si no hay cortes importados no se acusa a nadie", () => {
+  const r = S.cortesManualesSospechosos([{ id:"m1", fecha:"2026-07-18", monto:63175 }], "", "");
+  assert.equal(r.hallazgos.length, 1, "se lista");
+  assert.equal(r.hallazgos[0].dentroDelTramo, false, "pero NO como doble conteo: no hay tramo importado");
+});
+t("solo con cortes importados no hay hallazgos", () => {
+  const r = S.cortesManualesSospechosos([{ id:"i1", fecha:"2026-07-18", monto:10000, _folioCorte:"RCE-1" }], "", "");
+  assert.deepEqual(r.hallazgos, []);
+});
+t("el diagnostico respeta el periodo pedido", () => {
+  const cortes = [
+    { id:"i1", fecha:"2026-07-18", monto:10000, _folioCorte:"RCE-1" },
+    { id:"m1", fecha:"2026-06-30", monto:5000 },                       // fuera del rango
+  ];
+  assert.deepEqual(S.cortesManualesSospechosos(cortes, "2026-07-01", "2026-07-31").hallazgos, []);
+});
+
+// Antes se guardaba SOLO el folio, asi que un egreso excluido desaparecia sin dejar importe ni
+// concepto: el reporte no podia explicar su propio faltante.
+t("un excluido con detalle dice cuanto y por que", () => {
+  const st = { cortesIgnorados:[
+    { folio:"EGR-a", fecha:"2026-07-22", concepto:"PAGO SEM ING FRANCISCO", monto:20000,
+      motivo:"Mismo importe en fecha cercana", por:"Diana", ts:"2026-08-01T10:00:00Z" },
+  ]};
+  const r = S.egresosExcluidos(st);
+  assert.equal(r.length, 1);
+  close(r[0].monto, 20000);
+  assert.equal(r[0]._sinDetalle, false);
+  close(S.totalExcluido(st), 20000);
+});
+t("los excluidos viejos (solo folio) se siguen leyendo, marcados como sin detalle", () => {
+  const st = { cortesIgnorados:["EGR-viejo", { folio:"EGR-nuevo", monto:500 }] };
+  const r = S.egresosExcluidos(st);
+  assert.equal(r.length, 2);
+  assert.equal(r[0]._sinDetalle, true, "del viejo no se sabe el monto");
+  assert.equal(r[0].monto, null);
+  close(S.totalExcluido(st), 500, 0.01);
+});
+// REGRESIÓN REAL: mergeEstados hacía [...new Set(...map(String))] sobre esta lista. Con los
+// renglones nuevos (objetos), String() da "[object Object]": el Set los colapsaba en UNO, se
+// perdía el detalle de todos, y sus folios dejaban de coincidir — así que los egresos ya
+// descartados volvían a ofrecerse como nuevos, listos para contarse dos veces.
+t("fusionar excluidos NO los colapsa en [object Object]", () => {
+  const a = [{ folio:"EGR-a", monto:20000, ts:"2026-08-01T10:00:00Z" }];
+  const b = [{ folio:"EGR-b", monto:500,   ts:"2026-08-01T11:00:00Z" }];
+  const r = S._unirIgnorados(a, b);
+  assert.equal(r.length, 2, "dos folios distintos siguen siendo dos");
+  assert.deepEqual(r.map(S.folioDeIgnorado).sort(), ["EGR-a", "EGR-b"]);
+  assert.ok(r.every(x => typeof x !== "string"), "conservan el detalle");
+  close(S.totalExcluido({ cortesIgnorados:r }), 20500);
+});
+t("el mismo folio en los dos dispositivos no se duplica", () => {
+  const r = S._unirIgnorados([{ folio:"EGR-a", monto:100, ts:"2026-08-01T10:00:00Z" }],
+                             [{ folio:"EGR-a", monto:100, ts:"2026-08-02T10:00:00Z" }]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].ts, "2026-08-02T10:00:00Z", "gana el más reciente");
+});
+t("un folio suelto viejo no pisa al renglón con detalle", () => {
+  const r = S._unirIgnorados(["EGR-a"], [{ folio:"EGR-a", monto:33000, ts:"2026-08-02T10:00:00Z" }]);
+  assert.equal(r.length, 1);
+  assert.equal(typeof r[0], "object", "gana el que trae el importe");
+  close(r[0].monto, 33000);
+  // y en el otro orden
+  const r2 = S._unirIgnorados([{ folio:"EGR-a", monto:33000 }], ["EGR-a"]);
+  assert.equal(typeof r2[0], "object");
+});
+t("mergeEstados conserva el detalle de los excluidos", () => {
+  const remote = { weeks:[], cortesIgnorados:[{ folio:"EGR-a", monto:20000, ts:"2026-08-01T10:00:00Z" }] };
+  const local  = { weeks:[], cortesIgnorados:["EGR-b"] };
+  const m = S.mergeEstados(remote, local);
+  assert.equal(m.cortesIgnorados.length, 2);
+  close(S.totalExcluido(m), 20000, 0.01);
+  assert.ok(m.cortesIgnorados.some(x => typeof x === "object" && x.monto === 20000),
+            "el renglón con importe sobrevive al sync");
+});
+t("foliosCorteIgnorados devuelve folios, no [object Object]", () => {
+  S.state = { budget:{}, weeks:[], cortesIgnorados:["EGR-viejo", { folio:"EGR-nuevo", monto:500 }] };
+  const f = S.foliosCorteIgnorados();
+  assert.ok(f.has("EGR-viejo") && f.has("EGR-nuevo"), "los dos formatos se reconocen");
+  assert.ok(!f.has("[object Object]"), "nunca la cadena basura");
+});
+
+t("folioDeIgnorado lee las dos formas", () => {
+  assert.equal(S.folioDeIgnorado("EGR-a"), "EGR-a");
+  assert.equal(S.folioDeIgnorado({ folio:"EGR-b" }), "EGR-b");
+});
+t("sin nada excluido, cero", () => {
+  assert.deepEqual(S.egresosExcluidos({}), []);
+  close(S.totalExcluido({}), 0);
+});
+
 console.log("\n== conciliación SAT: el folio se compara contra la FACTURA, no contra el UUID ==");
 const UUID_A = "BC46CB99-12D7-E945-0000-000000002450";
 t("un folio corto no se empareja con un UUID que lo contenga por casualidad", () => {
@@ -2349,6 +2741,11 @@ console.log("\n== Respaldos (asíncrono) ==");
 async function pruebasStorage() {
   const T = tAsync;
 
+  // Los espias PISABAN S.fbDeleteDoc / S.fbSet y no los devolvian nunca: cualquier prueba
+  // posterior recibia el espia en vez de la funcion real y fallaba por un motivo que no tenia
+  // nada que ver consigo misma. Se restauran al terminar.
+  const _realDelete = S.fbDeleteDoc, _realSet = S.fbSet;
+  const restaurarEspias = () => { S.fbDeleteDoc = _realDelete; S.fbSet = _realSet; };
   const espiarPoda = () => {
     const borrados = [], indices = [];
     S.fbDeleteDoc = async (col, id) => { borrados.push(col + "/" + id); };
@@ -2494,6 +2891,8 @@ async function pruebasStorage() {
     assert.equal(S.esImagenRespaldo(""), false);
     assert.equal(S.esImagenRespaldo(null), false);
   });
+
+  restaurarEspias();   // que las pruebas de despues reciban las funciones reales
 }
 
 pruebasStorage().then(() => {
@@ -2626,13 +3025,27 @@ t("gastoMismoImporte ignora si la fecha está lejos", () => {
   ]}]};
   assert.equal(S.gastoMismoImporte(5124, "2026-08-06"), null);
 });
-t("el SAMS se caza al importar aunque la factura tenga nombre fiscal distinto", () => {
+// El SAMS se SEÑALA, pero ya no se preselecciona "ignorar": la coincidencia es solo por importe
+// y +-4 dias, sin mirar proveedor ni concepto. Con montos redondos engancha cualquier cosa (dos
+// cargas de gas de $500, dos pagos de $20,000), y preseleccionar "ignorar" hacia que bastara con
+// darle a Importar sin revisar para que el dinero desapareciera. Candidato, no veredicto.
+t("el SAMS se SEÑALA por importe, pero entra como gasto — no se preselecciona ignorar", () => {
   S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
     { id:"gmail", proveedor:"NUEVA WAL-MART DE MEXICO", factura:"A-88213", importe:5124, fecha:"2026-08-06" }
   ]}]};
   const c = S.clasificacionInicialEgreso({ concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06", clase:"gasto" });
+  assert.equal(c.clase, "gasto", "no se descuenta dinero sin que alguien lo confirme");
+  assert.ok(c.dup, "pero se muestra el gasto parecido");
+  assert.ok(c.aviso && /importe/i.test(c.aviso), "y se dice que la coincidencia es solo por importe");
+});
+// Una coincidencia FUERTE (mismo proveedor y misma factura) si puede preseleccionar ignorar:
+// ahi no hay ambiguedad, es literalmente el mismo documento.
+t("una coincidencia por proveedor+factura si preselecciona ignorar", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"ya", proveedor:"COMPRA SAMS", factura:"ICAJG470108", importe:5124, fecha:"2026-08-06" }
+  ]}]};
+  const c = S.clasificacionInicialEgreso({ concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06", clase:"gasto" });
   assert.equal(c.clase, "ignorar");
-  assert.ok(c.dup, "trae el gasto que ya existía por factura");
 });
 t("un egreso con comprobante de factura pero sin duplicado se avisa, no se ignora", () => {
   S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[] }] };
@@ -2695,6 +3108,12 @@ t("los folios ya importados se detectan para no repetir", () => {
   assert.ok(!S.foliosCorteImportados().has("RCE-2026-99999"));
 });
 
-console.log(`\n${pass} pasaron, ${fail} fallaron`);
-  process.exit(fail ? 1 : 0);
+  // Las pruebas encoladas corren AQUI, en fila, antes del resumen y antes de salir. Ponerlas
+  // sueltas dejaba promesas sin esperar: se entremezclaban, compartian estado y process.exit
+  // mataba el proceso antes de que terminaran.
+  (async () => {
+    for (const [nombre, fn] of _colaAsync) await tAsync(nombre, fn);
+    console.log(`\n${pass} pasaron, ${fail} fallaron`);
+    process.exit(fail ? 1 : 0);
+  })();
 });

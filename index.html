@@ -622,6 +622,7 @@ body.snav-min .side-theme span { display:none; }
 </style>
 </head>
 <body>
+<div id="avisoFallos" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:100000;background:var(--red);color:#fff;padding:10px 14px;font-size:12.5px;box-shadow:0 -2px 10px rgba(0,0,0,.25)"></div>
 <div id="syncBadge" onclick="sincronizarAhora()" title="Última sincronización con la nube — toca para sincronizar y refrescar ahora"
   style="position:fixed;bottom:22px;right:7px;font-size:10px;color:var(--txt2);background:rgba(255,255,255,.85);border:1px solid var(--border);border-radius:6px;padding:2px 7px;z-index:99999;cursor:pointer;font-family:'JetBrains Mono',monospace">⟳ …</div>
 <div id="buildBadge" onclick="recargarSinCache()" title="Versión instalada — toca para recargar la última versión"
@@ -1984,6 +1985,7 @@ body.snav-min .side-theme span { display:none; }
     <div id="cajaConciliacion">
       <p style="color:var(--txt2);font-size:14px">Cargando...</p>
     </div>
+    <div id="cajaAuditoria"></div>
   </div>
 </div>
 
@@ -2000,7 +2002,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-24-a";
+const APP_BUILD = "2026-08-24-d";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2168,26 +2170,45 @@ async function fbCreateDoc(col, data){
       method:'POST', headers,
       body: JSON.stringify({ fields: { json:{stringValue:JSON.stringify(data)}, ts:{stringValue:new Date().toISOString()} } })
     });
+    if(!r.ok){
+      const pista = pistaFallo(r.status);
+      _anotarFallo(`crear en ${col}`, `el servidor respondió ${r.status}${pista?" — "+pista:""}`);
+      return null;
+    }
     const d = await r.json();
     return d.name ? d.name.split('/').pop() : null;
-  } catch(e){ console.warn('fbCreateDoc error:', e); return null; }
+  } catch(e){ _anotarFallo(`crear en ${col}`, e && e.message || "error de red"); return null; }
 }
 
+// Devuelven true/false. Antes no miraban r.ok y devolvían undefined pasara lo que pasara, así
+// que un 403 era indistinguible de un guardado correcto.
 async function fbUpdateDoc(col, id, data){
   try {
     const headers = { 'Content-Type':'application/json', ...(await fbAuthHeader()) };
-    await fetch(`${FB_BASE}/${col}/${id}?key=${FB_KEY}`, {
+    const r = await fetch(`${FB_BASE}/${col}/${id}?key=${FB_KEY}`, {
       method:'PATCH', headers,
       body: JSON.stringify({ fields: { json:{stringValue:JSON.stringify(data)}, ts:{stringValue:new Date().toISOString()} } })
     });
-  } catch(e){ console.warn('fbUpdateDoc error:', e); }
+    if(r && r.ok === false){
+      const pista = pistaFallo(r.status);
+      _anotarFallo(`guardar en ${col}`, `el servidor respondió ${r.status}${pista?" — "+pista:""}`);
+      return false;
+    }
+    return true;
+  } catch(e){ _anotarFallo(`guardar en ${col}`, e && e.message || "error de red"); return false; }
 }
 
 async function fbDeleteDoc(col, id){
   try {
     const headers = await fbAuthHeader();
-    await fetch(`${FB_BASE}/${col}/${id}?key=${FB_KEY}`, { method:'DELETE', headers });
-  } catch(e){ console.warn('fbDeleteDoc error:', e); }
+    const r = await fetch(`${FB_BASE}/${col}/${id}?key=${FB_KEY}`, { method:'DELETE', headers });
+    if(r && r.ok === false){
+      const pista = pistaFallo(r.status);
+      _anotarFallo(`borrar de ${col}`, `el servidor respondió ${r.status}${pista?" — "+pista:""}`);
+      return false;
+    }
+    return true;
+  } catch(e){ _anotarFallo(`borrar de ${col}`, e && e.message || "error de red"); return false; }
 }
 
 // Busca el gasto REAL dentro de state.weeks (no una copia) para poder mutarlo — a diferencia
@@ -2400,8 +2421,66 @@ async function fbGet(path) {
   return null;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// FALLOS DE ESCRITURA — que nada se pierda en silencio
+// ═══════════════════════════════════════════════════════════════════
+// fetch() SOLO rechaza por fallo de red: un 403 o un 500 llegan como respuesta normal. Como
+// fbUpdateDoc y fbDeleteDoc ni siquiera miraban r.ok, toda escritura rechazada por Firestore
+// "salía bien" y el error se perdía. Así estuvieron meses sin guardarse los respaldos: nadie
+// tenía forma de enterarse. Ahora cada escritura fallida se registra y se ve en pantalla.
+let _fallosEscritura = [];
+const _FALLOS_MAX = 50;   // se guardan los últimos; el contador cuenta todos
+
+// Puras y probadas: la lógica de qué se registra y cómo se resume no depende del DOM.
+function registrarFallo(lista, op, detalle, ts){
+  const l = Array.isArray(lista) ? lista : [];
+  l.push({ op:String(op||"escritura"), detalle:String(detalle||""), ts: ts || new Date().toISOString() });
+  return l.length > _FALLOS_MAX ? l.slice(-_FALLOS_MAX) : l;
+}
+function resumenFallos(lista){
+  const l = (lista||[]).filter(Boolean);
+  if(!l.length) return { n:0, texto:"", ops:[] };
+  const porOp = {};
+  l.forEach(f=>{ porOp[f.op] = (porOp[f.op]||0) + 1; });
+  const ops = Object.keys(porOp).sort((a,b)=>porOp[b]-porOp[a]);
+  const texto = l.length === 1
+    ? "1 cambio no se guardó en la nube"
+    : `${l.length} cambios no se guardaron en la nube`;
+  return { n:l.length, texto, ops, porOp };
+}
+// Un permiso denegado no se arregla reintentando y casi siempre significa que falta la regla de
+// esa colección; decirlo evita media hora de buscar en el lugar equivocado.
+function pistaFallo(status){
+  if(status === 403 || status === 401)
+    return "Firestore negó el permiso. Suele faltar la regla de esa colección (Firebase Console → Firestore → Reglas).";
+  if(status === 429) return "Demasiadas escrituras seguidas. Vuelve a intentar en un minuto.";
+  if(status >= 500) return "Firestore respondió con un error propio. Normalmente es pasajero.";
+  return "";
+}
+
+function _anotarFallo(op, detalle){
+  _fallosEscritura = registrarFallo(_fallosEscritura, op, detalle);
+  try{ pintarAvisoFallos(); }catch(_){}
+}
+function limpiarFallos(){ _fallosEscritura = []; try{ pintarAvisoFallos(); }catch(_){} }
+function pintarAvisoFallos(){
+  const el = document.getElementById("avisoFallos");
+  if(!el) return;
+  const r = resumenFallos(_fallosEscritura);
+  if(!r.n){ el.style.display = "none"; el.innerHTML = ""; return; }
+  const ult = _fallosEscritura[_fallosEscritura.length-1] || {};
+  el.style.display = "block";
+  el.innerHTML = `<div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap">
+      <div><strong>⚠ ${esc(r.texto)}.</strong>
+        <span style="font-weight:400">Lo que capturaste vive sólo en este dispositivo: nadie más lo ve, y se pierde si borras los datos del navegador.</span>
+        <div style="font-size:11.5px;opacity:.9;margin-top:4px">Último: ${esc(ult.op||"")} — ${esc(ult.detalle||"")}</div>
+      </div>
+      <button onclick="limpiarFallos()" style="border:1px solid #fff;background:transparent;color:#fff;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;white-space:nowrap">Entendido</button>
+    </div>`;
+}
+
 async function fbSet(path, data) {
-  await fetch(`${FB_BASE}/${path}?key=${FB_KEY}`, {
+  const r = await fetch(`${FB_BASE}/${path}?key=${FB_KEY}`, {
     method: 'PATCH',
     headers: {'Content-Type': 'application/json', ...(await fbAuthHeader())},
     body: JSON.stringify({
@@ -2411,6 +2490,13 @@ async function fbSet(path, data) {
       }
     })
   });
+  // Antes no se miraba r.ok: un 403 pasaba por guardado bueno.
+  if(r && r.ok === false){
+    const pista = pistaFallo(r.status);
+    _anotarFallo(`guardar ${path}`, `el servidor respondió ${r.status}${pista?" — "+pista:""}`);
+    throw new Error(`fbSet ${path}: ${r.status}`);
+  }
+  return true;
 }
 // ═══════════════════════════════════════════════════════════════════
 // RESPALDOS
@@ -2732,7 +2818,7 @@ function mergeEstados(remote, local){
     cajaSaldoInicial: { ...(remote.cajaSaldoInicial||{}), ...(local.cajaSaldoInicial||{}) },
     // Los folios de cortes ignorados se UNEN (no "gana el último"): si un dispositivo marcó un
     // egreso como "ya facturado", esa decisión no se debe perder porque otro no la tenga.
-    cortesIgnorados: [...new Set([...(remote.cortesIgnorados||[]), ...(local.cortesIgnorados||[])].map(String))],
+    cortesIgnorados: _unirIgnorados(remote.cortesIgnorados, local.cortesIgnorados),
   };
 }
 // Marca un id como borrado para que la fusión no lo resucite desde una copia vieja de otro
@@ -2833,7 +2919,16 @@ function textoSync(ultimo, ahora){
 }
 function pintarSyncBadge(){
   const el = document.getElementById("syncBadge");
-  if(el) el.textContent = textoSync(_syncUltimo, Date.now());
+  if(!el) return;
+  // Con fallos pendientes, "hace 12 min" se lee como deriva normal. Tiene que verse como avería.
+  const r = resumenFallos(_fallosEscritura);
+  if(r.n){
+    el.textContent = `⚠ ${r.n} sin guardar`;
+    el.style.color = "#fff"; el.style.background = "var(--red)"; el.style.borderColor = "var(--red)";
+    return;
+  }
+  el.style.color = ""; el.style.background = ""; el.style.borderColor = "";
+  el.textContent = textoSync(_syncUltimo, Date.now());
 }
 setInterval(pintarSyncBadge, 30000);
 
@@ -3942,7 +4037,10 @@ function guardarManual(){
     formaPago:fp,
     vencimiento:fp==="credito"?(document.getElementById("mVencimiento")?.value||""):"",
     estadoPago:fp==="credito"?"pendiente":"pagado",
-    comprobantePago:null,fechaPago:null,referenciaPago:null
+    comprobantePago:null,fechaPago:null,referenciaPago:null,
+    // Marca de procedencia: este formulario es captura a mano. Sin la llave, origenDeMovimiento
+    // no podría distinguirlo de un registro de formato antiguo y lo daría por no verificable.
+    _gmailMsgId:null, _gmailFile:null
   };
   if(!gasto.proveedor||!(gasto.importe>0)){ alert("Proveedor e importe (mayor que cero) son obligatorios."); return; }
   getActiveWeek().gastos.push(gasto);
@@ -4741,6 +4839,56 @@ function restaurarCategorias(){
 //  · Las notas de crédito (tipo E) restan; los complementos de pago (P) no son venta nueva.
 //  · Los retiros de caja NO son salida: es efectivo que se movió, y lo que se pagó con él ya
 //    está capturado como gasto. Se informan aparte para no contarlos dos veces.
+// ═══════════════════════════════════════════════════════════════════
+// ORIGEN DE UN MOVIMIENTO — de dónde salió realmente
+// ═══════════════════════════════════════════════════════════════════
+// No hay campo _origen ni hace falta: cada camino por el que nace un movimiento ya deja su
+// marca. Deducirlo en vez de guardarlo tiene dos ventajas: no hay migración que hacer, y
+// funciona sobre TODO el histórico, cosa que un campo nuevo nunca haría.
+//
+// Existe porque el balance de julio mostró $814,596 de ingreso cuando los cortes importados
+// suman $430,054: los $384,542 de diferencia eran cortes globales tecleados a mano que se
+// sumaban junto a los individuales sin que nada los distinguiera.
+const ORIGEN_ETIQUETA = {
+  cortes:     "importado de Cortes",
+  gmail:      "capturado de Gmail",
+  sat:        "del SAT (CFDI)",
+  nomina:     "nómina timbrada",
+  excel:      "importado de Excel",
+  manual:     "capturado a mano",
+  sin_marcar: "origen no registrado",
+};
+function etiquetaOrigen(o){ return ORIGEN_ETIQUETA[o] || String(o||""); }
+function origenDeMovimiento(m){
+  if(!m || typeof m !== "object") return "sin_marcar";
+  if(m._folioEgreso || m._folioCorte) return "cortes";
+  if(m._nominaCorrida) return "nomina";
+  if(m._gmailMsgId)    return "gmail";
+  if(m.cfdiUuid)       return "sat";
+  if(m._importado)     return "excel";
+  // Cortes y retiros: el camino manual (guardarCorte / agregarRetiro) nunca dejó marca y sigue
+  // sin dejarla, así que aquí la ausencia SÍ significa "tecleado a mano". No hay ambigüedad.
+  if(m.monto !== undefined && m.importe === undefined) return "manual";
+  // Gastos: la captura escribe _gmailMsgId aunque sea null. Un gasto que ni siquiera trae la
+  // llave viene de un formato anterior, y su procedencia no se puede afirmar. Decirlo es más
+  // útil que suponerla: una cifra supuesta parece verificada sin serlo.
+  if(Object.prototype.hasOwnProperty.call(m, "_gmailMsgId")) return "manual";
+  return "sin_marcar";
+}
+// Agrupa por origen y devuelve de mayor a menor. `campo` es "monto" (cortes/retiros) o
+// "importe" (gastos).
+function desglosarPorOrigen(movs, campo){
+  const k = campo || "monto";
+  const g = {};
+  (movs||[]).forEach(m=>{
+    const o = origenDeMovimiento(m);
+    if(!g[o]) g[o] = { origen:o, etiqueta:etiquetaOrigen(o), n:0, monto:0 };
+    g[o].n++;
+    g[o].monto += parseFloat(m && m[k]) || 0;
+  });
+  return Object.values(g).sort((a,b)=>b.monto-a.monto);
+}
+
 function balanceOperativo(cfdis, ini, fin, rfcEmpresa){
   const propio=(rfcEmpresa||"").trim().toUpperCase();
   const enRango=(f)=>!!f && (!ini || f>=ini) && (!fin || f<=fin);
@@ -4757,13 +4905,14 @@ function balanceOperativo(cfdis, ini, fin, rfcEmpresa){
   });
   const cortes=(typeof todosLosCortes==="function"?todosLosCortes():[]).filter(c=>enRango(c.fecha));
   const efectivo=cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  const efectivoPorOrigen=desglosarPorOrigen(cortes,"monto");
   const retiros=(typeof todosLosRetiros==="function"?todosLosRetiros():[]).filter(r=>enRango(r.fecha))
     .reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
   const gastos=(typeof allGastosAllWeeks==="function"?allGastosAllWeeks():[]).filter(g=>enRango(g.fecha));
   const salidas=gastos.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
   const entradas=facturado-notasCredito+efectivo;
   return {
-    facturado, notasCredito, nFacturas, efectivo, nCortes:cortes.length, retiros,
+    facturado, notasCredito, nFacturas, efectivo, nCortes:cortes.length, efectivoPorOrigen, retiros,
     entradas, salidas, nGastos:gastos.length,
     resultado: entradas-salidas,
     margen: entradas>0 ? ((entradas-salidas)/entradas)*100 : 0,
@@ -4883,6 +5032,9 @@ function renderBalance(){
         ${fila("<strong>Facturado a cliente</strong>", b.facturado, `${b.nFacturas} CFDI emitido(s) · subtotal, sin IVA`, "var(--vd)")}
         ${b.notasCredito>0?fila("Notas de crédito emitidas", -b.notasCredito, "restan de lo facturado", "var(--red)"):""}
         ${fila("<strong>Ventas en efectivo</strong>", b.efectivo, `${b.nCortes} corte(s) de caja · no facturadas`, "var(--vd)")}
+        ${(b.efectivoPorOrigen||[]).length>1 ? (b.efectivoPorOrigen||[]).map(o=>
+          `<tr><td style="padding:2px 4px 2px 22px;font-size:11.5px;color:${o.origen==="cortes"?"var(--txt2)":"var(--do)"}">· ${esc(o.etiqueta)} <span style="opacity:.7">(${o.n})</span></td>`+
+          `<td class="amount-cell" style="padding:2px 4px;font-size:11.5px;color:${o.origen==="cortes"?"var(--txt2)":"var(--do)"}">${fmt(o.monto)}</td></tr>`).join("") : ""}
         <tr style="border-top:2px solid var(--border)"><td style="padding:10px 4px"><strong>Total entradas</strong></td><td class="amount-cell" style="padding:10px 4px;font-weight:700;color:var(--vd)">${fmt(b.entradas)}</td></tr>
         ${fila("<strong>Egresos de la operación</strong>", -b.salidas, `${b.nGastos} factura(s) capturada(s) · por su importe pagado`, "var(--red)")}
         <tr style="border-top:2px solid var(--border);background:${sano?"#F0F7F0":"#FFF6F5"}"><td style="padding:12px 4px"><strong>Resultado del periodo</strong></td>
@@ -4963,6 +5115,19 @@ function exportarBalancePDF(){
   reng(`Facturado a cliente (${b.nFacturas} CFDI, subtotal sin IVA)`, b.facturado, false);
   if(b.notasCredito>0) reng("Notas de credito emitidas", -b.notasCredito, true);
   reng(`Ventas en efectivo (${b.nCortes} cortes de caja)`, b.efectivo, false);
+  // El PDF se archiva y se comparte: si el efectivo viene de dos fuentes distintas hay que
+  // decirlo AQUI, no solo en pantalla. Un global tecleado a mano junto a los cortes importados
+  // es doble conteo, y en el documento impreso no habia forma de notarlo.
+  if((b.efectivoPorOrigen||[]).length > 1){
+    doc.setFontSize(8.5); doc.setFont("helvetica","normal");
+    (b.efectivoPorOrigen||[]).forEach(o=>{
+      doc.setTextColor(...(o.origen==="cortes" ? [110,110,110] : RED));
+      doc.text(`   - ${o.etiqueta} (${o.n})`, MAR+3, Y+3);
+      doc.text(fmt(o.monto), MAR+W-3, Y+3, {align:"right"});
+      Y += 4.5;
+    });
+    Y += 2;
+  }
   reng("TOTAL ENTRADAS", b.entradas, false, true);
   Y+=4;
   doc.setTextColor(...VD); doc.setFontSize(12); doc.setFont("helvetica","bold");
@@ -10575,9 +10740,83 @@ function foliosCorteImportados(){
 // Folios que el usuario marcó «ignorar» (ya entraron por factura). No crean gasto ni retiro,
 // pero sí se recuerdan: sin esto, reimportar el mismo archivo los volvería a ofrecer y podrían
 // colarse. Reimportar tiene que ser idempotente también para lo que se decidió NO importar.
+// Compatible con las dos formas guardadas: folio suelto (viejo) y renglón completo (nuevo).
 function foliosCorteIgnorados(){
-  return new Set((state.cortesIgnorados||[]).map(String));
+  return new Set((state.cortesIgnorados||[]).map(folioDeIgnorado).filter(Boolean));
 }
+// ── Diagnóstico de doble contabilización de ingresos ───────────────────────────
+// Un corte importado trae _folioCorte (viene de Manejo de Cortes). Uno capturado a mano con
+// «Registrar corte» NO trae nada: es un importe global tecleado, normalmente el cierre de una
+// semana o de un periodo.
+// Los dos se suman igual en el balance (balanceOperativo → todosLosCortes), así que si alguien
+// tecleó el cierre de la semana Y además se importaron los cortes de esos mismos días, el
+// ingreso queda contado dos veces. No hay folio que comparar, así que la importación no puede
+// detectarlo sola: hay que decirlo aquí.
+// Devuelve SOLO evidencia; no borra ni modifica nada.
+function cortesManualesSospechosos(cortes, ini, fin){
+  const enRango = f => !!f && (!ini || f>=ini) && (!fin || f<=fin);
+  const lista = (cortes||[]).filter(c=>c && enRango(c.fecha));
+  const importados = lista.filter(c=>c._folioCorte);
+  const manuales   = lista.filter(c=>!c._folioCorte);
+  if(!manuales.length) return { manuales:[], montoManual:0, montoImportado:0, diasConAmbos:[], hallazgos:[] };
+  // Días que ya tienen cortes importados: un global tecleado que cae dentro del tramo cubierto
+  // por la importación es el caso sospechoso.
+  const diasImp = new Set(importados.map(c=>c.fecha));
+  const fechasImp = [...diasImp].sort();
+  const desde = fechasImp[0] || "", hasta = fechasImp[fechasImp.length-1] || "";
+  const hallazgos = manuales.map(c=>{
+    const m = parseFloat(c.monto)||0;
+    const dentro = !!desde && c.fecha>=desde && c.fecha<=hasta;
+    return { id:c.id, fecha:c.fecha, monto:m, mismoDia:diasImp.has(c.fecha), dentroDelTramo:dentro };
+  }).sort((a,b)=>b.monto-a.monto);
+  return {
+    manuales, hallazgos,
+    montoManual:   manuales.reduce((t,c)=>t+(parseFloat(c.monto)||0),0),
+    montoImportado: importados.reduce((t,c)=>t+(parseFloat(c.monto)||0),0),
+    diasConAmbos: hallazgos.filter(h=>h.mismoDia).map(h=>h.fecha),
+    tramo: desde ? { desde, hasta } : null,
+  };
+}
+
+// ── Egresos excluidos: qué se dejó fuera y por qué ────────────────────────────
+// state.cortesIgnorados guardaba SOLO el folio ("EGR-xxx"), así que un egreso marcado «ignorar»
+// desaparecía sin dejar importe, concepto ni fecha: el reporte no podía explicar el faltante y
+// nadie podía revisar la decisión. Ahora se guarda el renglón completo. Se admiten las dos
+// formas para no perder lo ya marcado.
+function folioDeIgnorado(x){ return typeof x === "string" ? x : String((x && x.folio) || ""); }
+// Fusión de excluidos entre dispositivos. Se dedupe por FOLIO, no por el valor entero: la lista
+// mezcla folios sueltos (formato viejo) y renglones completos (nuevo).
+// Antes esto era [...new Set(...map(String))], y String() sobre un objeto da "[object Object]":
+// la fusión de cada sync habría colapsado TODOS los excluidos en un solo elemento basura,
+// borrando el detalle y dejando sus folios sin coincidir — con lo que los egresos ya descartados
+// se habrían vuelto a ofrecer como nuevos, listos para contarse dos veces.
+function _unirIgnorados(a, b){
+  const out = new Map();
+  [...(a||[]), ...(b||[])].forEach(x=>{
+    const f = folioDeIgnorado(x);
+    if(!f) return;
+    const prev = out.get(f);
+    if(prev === undefined){ out.set(f, x); return; }
+    // Gana el que trae detalle; entre dos con detalle, el más reciente.
+    const prevObj = typeof prev !== "string", xObj = typeof x !== "string";
+    if(!prevObj && xObj) out.set(f, x);
+    else if(prevObj && xObj && String(x.ts||"") > String(prev.ts||"")) out.set(f, x);
+  });
+  return [...out.values()];
+}
+function egresosExcluidos(state){
+  return ((state && state.cortesIgnorados) || [])
+    .map(x => typeof x === "string"
+      ? { folio:x, fecha:"", concepto:"", monto:null, por:"", ts:"", _sinDetalle:true }
+      : { folio:String(x.folio||""), fecha:x.fecha||"", concepto:x.concepto||"",
+          monto:(x.monto==null?null:parseFloat(x.monto)||0), por:x.por||"", ts:x.ts||"",
+          motivo:x.motivo||"", _sinDetalle:false })
+    .filter(x=>x.folio);
+}
+function totalExcluido(state){
+  return egresosExcluidos(state).reduce((t,x)=>t+(x.monto||0),0);
+}
+
 function foliosEgresoImportados(){
   const s = new Set();
   (state.weeks||[]).forEach(w=>{
@@ -10627,9 +10866,15 @@ function clasificacionInicialEgreso(egreso){
   // 2) Mismo importe en fecha cercana AUNQUE el nombre no coincida: es el caso del SAMS, la factura
   //    ya entró con su nombre fiscal. Se preselecciona «ignorar» pero se muestra para confirmar —
   //    dos gastos reales del mismo monto el mismo día existen, y ahí el usuario decide.
+  // OJO: esta coincidencia es SOLO por importe y ±4 días — no mira proveedor ni concepto. Con
+  // montos redondos (dos cargas de gas de $500, dos pagos de $20,000) engancha cualquier cosa.
+  // Antes preseleccionaba «ignorar», así que bastaba con darle a Importar sin revisar para que el
+  // dinero se fuera sin dejar rastro. Ahora entra como GASTO con el aviso a la vista: es un
+  // candidato a revisar, no un veredicto.
   const mismo = gastoMismoImporte(egreso.monto, egreso.fecha);
-  if(mismo) return { clase:"ignorar",
-    dup:{ gasto:mismo, reason:"Mismo importe en fecha cercana — ¿ya entró como factura?" }, aviso:null };
+  if(mismo) return { clase:"gasto",
+    dup:{ gasto:mismo, reason:"Mismo importe en fecha cercana — ¿ya entró como factura?" },
+    aviso:"Coincide SOLO por importe y fecha (no por proveedor). Revísalo antes de marcarlo «Ignorar»." };
   // 3) El comprobante parece folio de factura: puede que la factura no haya llegado aún. No se
   //    cambia la clase, solo se avisa para que el usuario esté pendiente.
   if(_pareceFolioFactura(egreso.comprobante)){
@@ -10787,12 +11032,22 @@ function confirmarImportarCortes(){
 
   // Egresos: según la clasificación del usuario.
   if(!Array.isArray(state.cortesIgnorados)) state.cortesIgnorados = [];
-  const yaIgn = new Set(state.cortesIgnorados.map(String));
+  const yaIgn = new Set(state.cortesIgnorados.map(folioDeIgnorado));
   d.egresos.forEach(e=>{
     const folio = String(e.folio).trim();
     if(e._clase === "ignorar"){
-      // Se recuerda para que la próxima reimportación no lo vuelva a ofrecer como nuevo.
-      if(!yaIgn.has(folio)){ state.cortesIgnorados.push(folio); yaIgn.add(folio); }
+      // Se recuerda para que la próxima reimportación no lo vuelva a ofrecer como nuevo. Se guarda
+      // el renglón ENTERO, no solo el folio: excluir dinero sin dejar cuánto ni por qué hace que
+      // el reporte no pueda explicar su propio faltante.
+      if(!yaIgn.has(folio)){
+        state.cortesIgnorados.push({
+          folio, fecha:e.fecha||"", concepto:e.concepto||"", monto:parseFloat(e.monto)||0,
+          motivo: e._dup ? (e._dup.reason||"Ya capturado") : "Marcado a mano",
+          por: (typeof currentNombre!=="undefined" && currentNombre) || (currentUser&&currentUser.email) || "",
+          ts: new Date().toISOString(),
+        });
+        yaIgn.add(folio);
+      }
       return;
     }
     if(e._clase === "retiro"){
@@ -10836,6 +11091,7 @@ function confirmarImportarCortes(){
     if(eFin) eFin.value = p.fin;
   }
   const saldoMsg = saldoFijado!=null ? ` Saldo inicial fijado en ${fmt(saldoFijado)}.` : "";
+  _pintarAuditoriaCaja();
   setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s).${saldoMsg} La conciliación de abajo ya quedó en el periodo ${fmtDate(p.ini)}–${fmtDate(p.fin)}.`, "ok");
   renderCaja();
 }
@@ -10851,6 +11107,69 @@ async function subirArchivoCortesAStorage(obj){
       { method:"POST", headers:{ "Content-Type":"application/json" }, body: blob });
     if(!r.ok) console.warn("subirArchivoCortesAStorage:", r.status);
   }catch(e){ console.warn("subirArchivoCortesAStorage:", e); }
+}
+
+// Panel de solo lectura: dice qué hay que revisar antes de fiarse del saldo. No borra nada.
+function _pintarAuditoriaCaja(){
+  const el = document.getElementById("cajaAuditoria");
+  if(!el) return;
+  const ini = (document.getElementById("cajaRangoIni")||{}).value || "";
+  const fin = (document.getElementById("cajaRangoFin")||{}).value || "";
+  // Sin periodo, enRango() daria true para todo y el panel acusaria movimientos de cualquier mes.
+  // Mejor no decir nada que decir algo de un periodo que nadie pidio.
+  if(!ini || !fin){ el.innerHTML = ""; return; }
+  const cortes = (typeof todosLosCortes==="function") ? todosLosCortes() : [];
+  const diag = cortesManualesSospechosos(cortes, ini, fin);
+  const excl = egresosExcluidos(state);
+  const enRango = f => !!f && (!ini || f>=ini) && (!fin || f<=fin);
+  const exclRango = excl.filter(x => !x.fecha || enRango(x.fecha));
+  // El terminal se guarda en cada corte importado y hasta ahora no se mostraba en ningún lado:
+  // es cobro con tarjeta, no entra al efectivo, pero es dinero que la empresa cobró.
+  const term = cortes.filter(c=>enRango(c.fecha)).reduce((t,c)=>t+(parseFloat(c.terminal)||0),0);
+
+  let h = "";
+  if(diag.hallazgos.length){
+    const dentro = diag.hallazgos.filter(x=>x.dentroDelTramo);
+    const monto = dentro.reduce((t,x)=>t+x.monto,0);
+    h += `<div style="background:#FFEBEE;border:1.5px solid var(--red);border-radius:10px;padding:12px 14px;margin-top:16px">
+      <div style="font-weight:700;color:var(--red);font-size:13px">⚠ Ingreso posiblemente contado dos veces: ${fmt(monto)}</div>
+      <div style="font-size:12px;color:var(--txt2);margin:6px 0 8px">
+        Hay <strong>${dentro.length}</strong> corte(s) capturado(s) a mano dentro del mismo tramo que ya trae
+        cortes importados de Manejo de Cortes${diag.tramo?` (${fmtDate(diag.tramo.desde)} – ${fmtDate(diag.tramo.hasta)})`:""}.
+        Los importados suman ${fmt(diag.montoImportado)}. Un global tecleado suele ser el cierre de una semana,
+        y el cierre ya está dentro de los cortes del día. <strong>Revísalos antes de borrar nada.</strong>
+      </div>
+      <div class="tbl-wrap"><table style="width:100%;font-size:12px"><thead><tr>
+        <th>Fecha</th><th style="text-align:right">Monto</th><th></th></tr></thead><tbody>
+        ${dentro.map(x=>`<tr><td>${esc(fmtDate(x.fecha))}</td>
+          <td class="amount-cell">${fmt(x.monto)}</td>
+          <td style="font-size:11px;color:var(--txt2)">${x.mismoDia?"ese día ya tiene cortes importados":"dentro del tramo importado"}</td></tr>`).join("")}
+      </tbody></table></div></div>`;
+  }
+  if(exclRango.length){
+    const conDetalle = exclRango.filter(x=>!x._sinDetalle);
+    const sinDetalle = exclRango.filter(x=>x._sinDetalle);
+    const monto = conDetalle.reduce((t,x)=>t+(x.monto||0),0);
+    h += `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:12px 14px;margin-top:14px">
+      <div style="font-weight:700;color:var(--do);font-size:13px">🚫 Egresos excluidos del reporte: ${exclRango.length}${monto?` · ${fmt(monto)}`:""}</div>
+      <div style="font-size:12px;color:var(--txt2);margin:6px 0 8px">Se marcaron «Ignorar» al importar, así que no aparecen como gasto ni como retiro. Si alguno era un gasto real, el reporte está corto por esa cantidad.</div>
+      ${conDetalle.length?`<div class="tbl-wrap"><table style="width:100%;font-size:12px"><thead><tr>
+        <th>Fecha</th><th>Concepto</th><th style="text-align:right">Monto</th><th>Motivo</th></tr></thead><tbody>
+        ${conDetalle.map(x=>`<tr><td style="white-space:nowrap">${esc(fmtDate(x.fecha)||"—")}</td>
+          <td>${esc(x.concepto||"—")}<div style="font-size:10px;color:var(--txt2);font-family:'JetBrains Mono',monospace">${esc(x.folio)}</div></td>
+          <td class="amount-cell">${fmt(x.monto||0)}</td>
+          <td style="font-size:11px;color:var(--txt2)">${esc(x.motivo||"—")}${x.por?`<div>${esc(x.por)}</div>`:""}</td></tr>`).join("")}
+      </tbody></table></div>`:""}
+      ${sinDetalle.length?`<div style="font-size:11.5px;color:var(--txt2);margin-top:8px">
+        Otros <strong>${sinDetalle.length}</strong> se excluyeron antes de que se guardara el detalle, así que solo queda el folio:
+        <span style="font-family:'JetBrains Mono',monospace;font-size:11px">${sinDetalle.map(x=>esc(x.folio)).join(", ")}</span>.
+        Para saber cuánto eran hay que buscarlos en el .json del periodo.</div>`:""}
+    </div>`;
+  }
+  if(term>0){
+    h += `<div style="font-size:12px;color:var(--txt2);margin-top:14px">💳 Cobrado por terminal en el periodo: <strong>${fmt(term)}</strong> — no entra al efectivo de caja ni al saldo físico, se informa aparte.</div>`;
+  }
+  el.innerHTML = h;
 }
 
 function eliminarRetiro(id) {
@@ -10872,6 +11191,9 @@ function renderCaja() {
   if(!conc) return;
   if(vacio){
     conc.innerHTML = `<p style="color:var(--txt2);font-size:14px">Selecciona fecha inicio y fin del periodo.</p>`;
+    // Sin periodo no hay nada que auditar. Si no se limpia, el panel se queda con los hallazgos
+    // del periodo anterior y se leen como si fueran de este — cifras contables rancias.
+    const _aud = document.getElementById("cajaAuditoria"); if(_aud) _aud.innerHTML = "";
     return;
   }
 
@@ -10884,6 +11206,7 @@ function renderCaja() {
   const baseInicial = usaManual ? saldoInicialManual : 0;
   // Mismo numero que muestra el Resumen: ambos salen de calcularSaldoCajaPeriodo.
   const saldoFinal = calcularSaldoCajaPeriodo(datos.ini, datos.fin).saldo;
+  setTimeout(_pintarAuditoriaCaja, 0);   // tras pintar la conciliación, para no competir por el DOM
 
   // 1. Saldo inicial del periodo
   const btnAjuste = esAdmin
