@@ -80,7 +80,11 @@ function extractConst(name) {
   if (!m) throw new Error("No encontré la constante: " + name);
   return m[0];
 }
-const CONSTS = ["CATS"];
+// Se EXTRAEN de index.html, nunca se copian aquí: una copia se queda vieja y la prueba pasa
+// comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
+// el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
+// ninguna prueba lo notara.
+const CONSTS = ["CATS", "CORTES_VERSIONES_OK"];
 
 
 const FUNCS = [
@@ -141,7 +145,7 @@ const sandbox = {
 vm.createContext(sandbox);
 for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
 vm.runInContext("const TOL_DIVIDIDA = 0.05;", sandbox);
-vm.runInContext('const CORTES_VERSIONES_OK = [1, 2]; const CORTES_STORAGE_PREFIJO = "cortes";', sandbox);
+vm.runInContext('const CORTES_STORAGE_PREFIJO = "cortes";', sandbox);
 vm.runInContext("let _storageAuthScheme = null;", sandbox);   // memo del esquema que funcionó
 vm.runInContext('const CAT_SIN = "__SIN__";', sandbox);       // centinela de "sin categoría"
 vm.runInContext('const RESPALDO_PREFIJO = "respaldo-"; const RESPALDOS_A_CONSERVAR = 30;', sandbox);
@@ -2556,6 +2560,32 @@ t("un saldo inicial NEGATIVO es válido, no un error", () => {
 t("acepta también la versión 1 del contrato", () => {
   const a = archivoBase(); a.version = 1;
   assert.equal(S.validarArchivoCortes(a).ok, true);
+});
+
+// La app de cortes pasó a la v3 y aquí no se actualizó la lista, así que el concentrado del mes
+// se rechazaba de entrada con "Versión de archivo no reconocida (3)".
+t("acepta la versión 3, que es la que exporta la app de cortes hoy", () => {
+  const a = archivoBase(); a.version = 3;
+  const r = S.validarArchivoCortes(a);
+  assert.equal(r.ok, true, r.errores.join(" | "));
+});
+t("una versión que de verdad no se conoce se sigue rechazando", () => {
+  const a = archivoBase(); a.version = 99;
+  assert.equal(S.validarArchivoCortes(a).ok, false, "no se debe aceptar cualquier número");
+});
+
+// 'aportaciones' llegó con la v3 y esta pantalla no la importa. Tragárselo dejaría el saldo de
+// caja corto sin explicación posible.
+t("avisa que las aportaciones del archivo NO se importan", () => {
+  const a = archivoBase();
+  a.aportaciones = [{ folio: "APT-1", fecha: "2026-07-10", concepto: "Fondo", monto: 5000 }];
+  const av = S.avisosControlCortes(a);
+  assert.ok(av.some(x => /aportaci/i.test(x)), "debe mencionarlas");
+  assert.ok(av.some(x => x.includes("5,000")), "debe decir cuánto dinero es");
+});
+t("sin aportaciones no inventa el aviso", () => {
+  const a = archivoBase(); a.aportaciones = [];
+  assert.ok(!S.avisosControlCortes(a).some(x => /aportaci/i.test(x)));
 });
 
 t("avisa si los totales no cuadran (archivo incompleto)", () => {
