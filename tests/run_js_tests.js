@@ -99,7 +99,7 @@ const FUNCS = [
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "_cfdiNomina", "corridasDeNomina", "corridaNominaRegistrada", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
-  "cortesManualesSospechosos", "egresosExcluidos", "totalExcluido", "folioDeIgnorado",
+  "cortesManualesSospechosos", "egresosExcluidos", "totalExcluido", "folioDeIgnorado", "_unirIgnorados",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
@@ -1506,6 +1506,50 @@ t("los excluidos viejos (solo folio) se siguen leyendo, marcados como sin detall
   assert.equal(r[0].monto, null);
   close(S.totalExcluido(st), 500, 0.01);
 });
+// REGRESIÓN REAL: mergeEstados hacía [...new Set(...map(String))] sobre esta lista. Con los
+// renglones nuevos (objetos), String() da "[object Object]": el Set los colapsaba en UNO, se
+// perdía el detalle de todos, y sus folios dejaban de coincidir — así que los egresos ya
+// descartados volvían a ofrecerse como nuevos, listos para contarse dos veces.
+t("fusionar excluidos NO los colapsa en [object Object]", () => {
+  const a = [{ folio:"EGR-a", monto:20000, ts:"2026-08-01T10:00:00Z" }];
+  const b = [{ folio:"EGR-b", monto:500,   ts:"2026-08-01T11:00:00Z" }];
+  const r = S._unirIgnorados(a, b);
+  assert.equal(r.length, 2, "dos folios distintos siguen siendo dos");
+  assert.deepEqual(r.map(S.folioDeIgnorado).sort(), ["EGR-a", "EGR-b"]);
+  assert.ok(r.every(x => typeof x !== "string"), "conservan el detalle");
+  close(S.totalExcluido({ cortesIgnorados:r }), 20500);
+});
+t("el mismo folio en los dos dispositivos no se duplica", () => {
+  const r = S._unirIgnorados([{ folio:"EGR-a", monto:100, ts:"2026-08-01T10:00:00Z" }],
+                             [{ folio:"EGR-a", monto:100, ts:"2026-08-02T10:00:00Z" }]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].ts, "2026-08-02T10:00:00Z", "gana el más reciente");
+});
+t("un folio suelto viejo no pisa al renglón con detalle", () => {
+  const r = S._unirIgnorados(["EGR-a"], [{ folio:"EGR-a", monto:33000, ts:"2026-08-02T10:00:00Z" }]);
+  assert.equal(r.length, 1);
+  assert.equal(typeof r[0], "object", "gana el que trae el importe");
+  close(r[0].monto, 33000);
+  // y en el otro orden
+  const r2 = S._unirIgnorados([{ folio:"EGR-a", monto:33000 }], ["EGR-a"]);
+  assert.equal(typeof r2[0], "object");
+});
+t("mergeEstados conserva el detalle de los excluidos", () => {
+  const remote = { weeks:[], cortesIgnorados:[{ folio:"EGR-a", monto:20000, ts:"2026-08-01T10:00:00Z" }] };
+  const local  = { weeks:[], cortesIgnorados:["EGR-b"] };
+  const m = S.mergeEstados(remote, local);
+  assert.equal(m.cortesIgnorados.length, 2);
+  close(S.totalExcluido(m), 20000, 0.01);
+  assert.ok(m.cortesIgnorados.some(x => typeof x === "object" && x.monto === 20000),
+            "el renglón con importe sobrevive al sync");
+});
+t("foliosCorteIgnorados devuelve folios, no [object Object]", () => {
+  S.state = { budget:{}, weeks:[], cortesIgnorados:["EGR-viejo", { folio:"EGR-nuevo", monto:500 }] };
+  const f = S.foliosCorteIgnorados();
+  assert.ok(f.has("EGR-viejo") && f.has("EGR-nuevo"), "los dos formatos se reconocen");
+  assert.ok(!f.has("[object Object]"), "nunca la cadena basura");
+});
+
 t("folioDeIgnorado lee las dos formas", () => {
   assert.equal(S.folioDeIgnorado("EGR-a"), "EGR-a");
   assert.equal(S.folioDeIgnorado({ folio:"EGR-b" }), "EGR-b");

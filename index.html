@@ -2733,7 +2733,7 @@ function mergeEstados(remote, local){
     cajaSaldoInicial: { ...(remote.cajaSaldoInicial||{}), ...(local.cajaSaldoInicial||{}) },
     // Los folios de cortes ignorados se UNEN (no "gana el último"): si un dispositivo marcó un
     // egreso como "ya facturado", esa decisión no se debe perder porque otro no la tenga.
-    cortesIgnorados: [...new Set([...(remote.cortesIgnorados||[]), ...(local.cortesIgnorados||[])].map(String))],
+    cortesIgnorados: _unirIgnorados(remote.cortesIgnorados, local.cortesIgnorados),
   };
 }
 // Marca un id como borrado para que la fusión no lo resucite desde una copia vieja de otro
@@ -10578,7 +10578,7 @@ function foliosCorteImportados(){
 // colarse. Reimportar tiene que ser idempotente también para lo que se decidió NO importar.
 // Compatible con las dos formas guardadas: folio suelto (viejo) y renglón completo (nuevo).
 function foliosCorteIgnorados(){
-  return new Set((state.cortesIgnorados||[]).map(String));
+  return new Set((state.cortesIgnorados||[]).map(folioDeIgnorado).filter(Boolean));
 }
 // ── Diagnóstico de doble contabilización de ingresos ───────────────────────────
 // Un corte importado trae _folioCorte (viene de Manejo de Cortes). Uno capturado a mano con
@@ -10620,6 +10620,26 @@ function cortesManualesSospechosos(cortes, ini, fin){
 // nadie podía revisar la decisión. Ahora se guarda el renglón completo. Se admiten las dos
 // formas para no perder lo ya marcado.
 function folioDeIgnorado(x){ return typeof x === "string" ? x : String((x && x.folio) || ""); }
+// Fusión de excluidos entre dispositivos. Se dedupe por FOLIO, no por el valor entero: la lista
+// mezcla folios sueltos (formato viejo) y renglones completos (nuevo).
+// Antes esto era [...new Set(...map(String))], y String() sobre un objeto da "[object Object]":
+// la fusión de cada sync habría colapsado TODOS los excluidos en un solo elemento basura,
+// borrando el detalle y dejando sus folios sin coincidir — con lo que los egresos ya descartados
+// se habrían vuelto a ofrecer como nuevos, listos para contarse dos veces.
+function _unirIgnorados(a, b){
+  const out = new Map();
+  [...(a||[]), ...(b||[])].forEach(x=>{
+    const f = folioDeIgnorado(x);
+    if(!f) return;
+    const prev = out.get(f);
+    if(prev === undefined){ out.set(f, x); return; }
+    // Gana el que trae detalle; entre dos con detalle, el más reciente.
+    const prevObj = typeof prev !== "string", xObj = typeof x !== "string";
+    if(!prevObj && xObj) out.set(f, x);
+    else if(prevObj && xObj && String(x.ts||"") > String(prev.ts||"")) out.set(f, x);
+  });
+  return [...out.values()];
+}
 function egresosExcluidos(state){
   return ((state && state.cortesIgnorados) || [])
     .map(x => typeof x === "string"
