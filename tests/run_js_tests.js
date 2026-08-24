@@ -89,6 +89,7 @@ function extractConst(name) {
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
 const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX"];
+const CONSTS_OBJ = ["ORIGEN_ETIQUETA"];
 
 
 const FUNCS = [
@@ -105,6 +106,7 @@ const FUNCS = [
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
   "cortesManualesSospechosos", "egresosExcluidos", "totalExcluido", "folioDeIgnorado", "_unirIgnorados",
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
+  "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
@@ -153,6 +155,12 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
+// Constantes objeto (const X = { ... };) — mismo principio: se extraen, no se copian.
+for (const c of CONSTS_OBJ) {
+  const m = script.match(new RegExp("const\\s+" + c + "\\s*=\\s*\\{[\\s\\S]*?\\};"));
+  if (!m) throw new Error("No encontré la constante objeto: " + c);
+  vm.runInContext(m[0], sandbox);
+}
 vm.runInContext("const TOL_DIVIDIDA = 0.05;", sandbox);
 vm.runInContext('const CORTES_STORAGE_PREFIJO = "cortes";', sandbox);
 vm.runInContext("let _storageAuthScheme = null;", sandbox);   // memo del esquema que funcionó
@@ -1371,6 +1379,71 @@ t("si de verdad falta dinero, la conciliación lo sigue diciendo", () => {
   assert.equal(r.diferencias.length, 1, "juntar renglones no debe tapar un faltante real");
   close(r.diferencias[0].capturado, 1000);
   close(r.diferencias[0].diferencia, 2500);
+});
+
+console.log("\n== origen de cada movimiento: de donde salio de verdad ==");
+// No hay campo _origen: se deduce de las marcas que cada camino ya deja. Asi funciona sobre todo
+// el historico, cosa que un campo nuevo nunca haria.
+t("cada camino se reconoce por su marca", () => {
+  assert.equal(S.origenDeMovimiento({ importe:100, _folioEgreso:"EGR-1" }), "cortes");
+  assert.equal(S.origenDeMovimiento({ monto:100, _folioCorte:"RCE-1" }),   "cortes");
+  assert.equal(S.origenDeMovimiento({ importe:100, _nominaCorrida:"2026-07-18" }), "nomina");
+  assert.equal(S.origenDeMovimiento({ importe:100, _gmailMsgId:"abc" }),   "gmail");
+  assert.equal(S.origenDeMovimiento({ importe:100, cfdiUuid:"U-1" }),      "sat");
+  assert.equal(S.origenDeMovimiento({ importe:100, _importado:true }),     "excel");
+});
+t("un corte tecleado a mano es 'manual', sin ambiguedad", () => {
+  // guardarCorte crea {id,fecha,tipo,monto,label} y nunca dejo marca: la ausencia SI significa
+  // capturado a mano. Estos son los seis globales que inflaron julio en $384,542.
+  assert.equal(S.origenDeMovimiento({ id:"1", fecha:"2026-07-07", monto:74676, label:"Martes" }), "manual");
+  assert.equal(S.origenDeMovimiento({ id:"2", fecha:"2026-07-10", monto:53066, motivo:"retiro" }), "manual");
+});
+t("un gasto que NO trae la llave _gmailMsgId no se da por manual", () => {
+  // La captura escribe _gmailMsgId aunque sea null. Sin la llave, el registro es de un formato
+  // anterior: suponer su procedencia produce una cifra que parece verificada sin serlo.
+  assert.equal(S.origenDeMovimiento({ importe:100, proveedor:"X" }), "sin_marcar");
+  assert.equal(S.origenDeMovimiento({ importe:100, proveedor:"X", _gmailMsgId:null }), "manual");
+});
+t("basura no truena y no se inventa un origen", () => {
+  ["", null, undefined, 42, []].forEach(x =>
+    assert.equal(S.origenDeMovimiento(x), "sin_marcar", JSON.stringify(x)));
+});
+t("cortes gana sobre las demas marcas: es el camino por el que entro", () => {
+  assert.equal(S.origenDeMovimiento({ importe:1, _folioEgreso:"E", _gmailMsgId:"g", cfdiUuid:"u" }), "cortes");
+});
+t("etiquetaOrigen traduce, y no rompe con algo desconocido", () => {
+  assert.equal(S.etiquetaOrigen("cortes"), "importado de Cortes");
+  assert.equal(S.etiquetaOrigen("sin_marcar"), "origen no registrado");
+  assert.equal(S.etiquetaOrigen("loquesea"), "loquesea");
+});
+
+t("desglosarPorOrigen separa lo importado de lo tecleado — el caso de julio", () => {
+  const cortes = [
+    ...Array.from({length:133}, (_, i) => ({ id:"i"+i, monto:430054/133, _folioCorte:"RCE-"+i })),
+    { id:"g1", fecha:"2026-07-07", monto:74676 }, { id:"g2", fecha:"2026-07-10", monto:53066 },
+    { id:"g3", fecha:"2026-07-14", monto:74379 }, { id:"g4", fecha:"2026-07-18", monto:46454 },
+    { id:"g5", fecha:"2026-07-22", monto:63175 }, { id:"g6", fecha:"2026-07-24", monto:72792 },
+  ];
+  const d = S.desglosarPorOrigen(cortes, "monto");
+  assert.equal(d.length, 2, "dos fuentes distintas, no una sola cifra");
+  assert.equal(d[0].origen, "cortes");   // el mayor primero
+  close(d[0].monto, 430054); assert.equal(d[0].n, 133);
+  assert.equal(d[1].origen, "manual");
+  close(d[1].monto, 384542); assert.equal(d[1].n, 6);
+  close(d.reduce((t,x)=>t+x.monto,0), 814596, 0.01);   // el total sigue siendo el mismo
+});
+t("desglosarPorOrigen usa el campo que se le pida", () => {
+  const d = S.desglosarPorOrigen([{ importe:500, _gmailMsgId:"a" }], "importe");
+  assert.equal(d[0].origen, "gmail"); close(d[0].monto, 500);
+});
+t("con una sola fuente devuelve una sola linea (no se ensucia el reporte)", () => {
+  const d = S.desglosarPorOrigen([{ monto:10, _folioCorte:"A" }, { monto:20, _folioCorte:"B" }], "monto");
+  assert.equal(d.length, 1);
+  close(d[0].monto, 30);
+});
+t("sin movimientos, nada que desglosar", () => {
+  assert.deepEqual(S.desglosarPorOrigen([], "monto"), []);
+  assert.deepEqual(S.desglosarPorOrigen(null, "monto"), []);
 });
 
 console.log("\n== guardrail: ninguna escritura falla en silencio ==");

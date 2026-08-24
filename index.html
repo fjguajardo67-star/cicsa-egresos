@@ -2002,7 +2002,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-24-c";
+const APP_BUILD = "2026-08-24-d";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4037,7 +4037,10 @@ function guardarManual(){
     formaPago:fp,
     vencimiento:fp==="credito"?(document.getElementById("mVencimiento")?.value||""):"",
     estadoPago:fp==="credito"?"pendiente":"pagado",
-    comprobantePago:null,fechaPago:null,referenciaPago:null
+    comprobantePago:null,fechaPago:null,referenciaPago:null,
+    // Marca de procedencia: este formulario es captura a mano. Sin la llave, origenDeMovimiento
+    // no podría distinguirlo de un registro de formato antiguo y lo daría por no verificable.
+    _gmailMsgId:null, _gmailFile:null
   };
   if(!gasto.proveedor||!(gasto.importe>0)){ alert("Proveedor e importe (mayor que cero) son obligatorios."); return; }
   getActiveWeek().gastos.push(gasto);
@@ -4836,6 +4839,56 @@ function restaurarCategorias(){
 //  · Las notas de crédito (tipo E) restan; los complementos de pago (P) no son venta nueva.
 //  · Los retiros de caja NO son salida: es efectivo que se movió, y lo que se pagó con él ya
 //    está capturado como gasto. Se informan aparte para no contarlos dos veces.
+// ═══════════════════════════════════════════════════════════════════
+// ORIGEN DE UN MOVIMIENTO — de dónde salió realmente
+// ═══════════════════════════════════════════════════════════════════
+// No hay campo _origen ni hace falta: cada camino por el que nace un movimiento ya deja su
+// marca. Deducirlo en vez de guardarlo tiene dos ventajas: no hay migración que hacer, y
+// funciona sobre TODO el histórico, cosa que un campo nuevo nunca haría.
+//
+// Existe porque el balance de julio mostró $814,596 de ingreso cuando los cortes importados
+// suman $430,054: los $384,542 de diferencia eran cortes globales tecleados a mano que se
+// sumaban junto a los individuales sin que nada los distinguiera.
+const ORIGEN_ETIQUETA = {
+  cortes:     "importado de Cortes",
+  gmail:      "capturado de Gmail",
+  sat:        "del SAT (CFDI)",
+  nomina:     "nómina timbrada",
+  excel:      "importado de Excel",
+  manual:     "capturado a mano",
+  sin_marcar: "origen no registrado",
+};
+function etiquetaOrigen(o){ return ORIGEN_ETIQUETA[o] || String(o||""); }
+function origenDeMovimiento(m){
+  if(!m || typeof m !== "object") return "sin_marcar";
+  if(m._folioEgreso || m._folioCorte) return "cortes";
+  if(m._nominaCorrida) return "nomina";
+  if(m._gmailMsgId)    return "gmail";
+  if(m.cfdiUuid)       return "sat";
+  if(m._importado)     return "excel";
+  // Cortes y retiros: el camino manual (guardarCorte / agregarRetiro) nunca dejó marca y sigue
+  // sin dejarla, así que aquí la ausencia SÍ significa "tecleado a mano". No hay ambigüedad.
+  if(m.monto !== undefined && m.importe === undefined) return "manual";
+  // Gastos: la captura escribe _gmailMsgId aunque sea null. Un gasto que ni siquiera trae la
+  // llave viene de un formato anterior, y su procedencia no se puede afirmar. Decirlo es más
+  // útil que suponerla: una cifra supuesta parece verificada sin serlo.
+  if(Object.prototype.hasOwnProperty.call(m, "_gmailMsgId")) return "manual";
+  return "sin_marcar";
+}
+// Agrupa por origen y devuelve de mayor a menor. `campo` es "monto" (cortes/retiros) o
+// "importe" (gastos).
+function desglosarPorOrigen(movs, campo){
+  const k = campo || "monto";
+  const g = {};
+  (movs||[]).forEach(m=>{
+    const o = origenDeMovimiento(m);
+    if(!g[o]) g[o] = { origen:o, etiqueta:etiquetaOrigen(o), n:0, monto:0 };
+    g[o].n++;
+    g[o].monto += parseFloat(m && m[k]) || 0;
+  });
+  return Object.values(g).sort((a,b)=>b.monto-a.monto);
+}
+
 function balanceOperativo(cfdis, ini, fin, rfcEmpresa){
   const propio=(rfcEmpresa||"").trim().toUpperCase();
   const enRango=(f)=>!!f && (!ini || f>=ini) && (!fin || f<=fin);
@@ -4852,13 +4905,14 @@ function balanceOperativo(cfdis, ini, fin, rfcEmpresa){
   });
   const cortes=(typeof todosLosCortes==="function"?todosLosCortes():[]).filter(c=>enRango(c.fecha));
   const efectivo=cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  const efectivoPorOrigen=desglosarPorOrigen(cortes,"monto");
   const retiros=(typeof todosLosRetiros==="function"?todosLosRetiros():[]).filter(r=>enRango(r.fecha))
     .reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
   const gastos=(typeof allGastosAllWeeks==="function"?allGastosAllWeeks():[]).filter(g=>enRango(g.fecha));
   const salidas=gastos.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
   const entradas=facturado-notasCredito+efectivo;
   return {
-    facturado, notasCredito, nFacturas, efectivo, nCortes:cortes.length, retiros,
+    facturado, notasCredito, nFacturas, efectivo, nCortes:cortes.length, efectivoPorOrigen, retiros,
     entradas, salidas, nGastos:gastos.length,
     resultado: entradas-salidas,
     margen: entradas>0 ? ((entradas-salidas)/entradas)*100 : 0,
@@ -4978,6 +5032,9 @@ function renderBalance(){
         ${fila("<strong>Facturado a cliente</strong>", b.facturado, `${b.nFacturas} CFDI emitido(s) · subtotal, sin IVA`, "var(--vd)")}
         ${b.notasCredito>0?fila("Notas de crédito emitidas", -b.notasCredito, "restan de lo facturado", "var(--red)"):""}
         ${fila("<strong>Ventas en efectivo</strong>", b.efectivo, `${b.nCortes} corte(s) de caja · no facturadas`, "var(--vd)")}
+        ${(b.efectivoPorOrigen||[]).length>1 ? (b.efectivoPorOrigen||[]).map(o=>
+          `<tr><td style="padding:2px 4px 2px 22px;font-size:11.5px;color:${o.origen==="cortes"?"var(--txt2)":"var(--do)"}">· ${esc(o.etiqueta)} <span style="opacity:.7">(${o.n})</span></td>`+
+          `<td class="amount-cell" style="padding:2px 4px;font-size:11.5px;color:${o.origen==="cortes"?"var(--txt2)":"var(--do)"}">${fmt(o.monto)}</td></tr>`).join("") : ""}
         <tr style="border-top:2px solid var(--border)"><td style="padding:10px 4px"><strong>Total entradas</strong></td><td class="amount-cell" style="padding:10px 4px;font-weight:700;color:var(--vd)">${fmt(b.entradas)}</td></tr>
         ${fila("<strong>Egresos de la operación</strong>", -b.salidas, `${b.nGastos} factura(s) capturada(s) · por su importe pagado`, "var(--red)")}
         <tr style="border-top:2px solid var(--border);background:${sano?"#F0F7F0":"#FFF6F5"}"><td style="padding:12px 4px"><strong>Resultado del periodo</strong></td>
@@ -5058,6 +5115,19 @@ function exportarBalancePDF(){
   reng(`Facturado a cliente (${b.nFacturas} CFDI, subtotal sin IVA)`, b.facturado, false);
   if(b.notasCredito>0) reng("Notas de credito emitidas", -b.notasCredito, true);
   reng(`Ventas en efectivo (${b.nCortes} cortes de caja)`, b.efectivo, false);
+  // El PDF se archiva y se comparte: si el efectivo viene de dos fuentes distintas hay que
+  // decirlo AQUI, no solo en pantalla. Un global tecleado a mano junto a los cortes importados
+  // es doble conteo, y en el documento impreso no habia forma de notarlo.
+  if((b.efectivoPorOrigen||[]).length > 1){
+    doc.setFontSize(8.5); doc.setFont("helvetica","normal");
+    (b.efectivoPorOrigen||[]).forEach(o=>{
+      doc.setTextColor(...(o.origen==="cortes" ? [110,110,110] : RED));
+      doc.text(`   - ${o.etiqueta} (${o.n})`, MAR+3, Y+3);
+      doc.text(fmt(o.monto), MAR+W-3, Y+3, {align:"right"});
+      Y += 4.5;
+    });
+    Y += 2;
+  }
   reng("TOTAL ENTRADAS", b.entradas, false, true);
   Y+=4;
   doc.setTextColor(...VD); doc.setFontSize(12); doc.setFont("helvetica","bold");
