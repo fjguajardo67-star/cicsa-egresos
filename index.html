@@ -10931,6 +10931,9 @@ function _pintarAuditoriaCaja(){
   if(!el) return;
   const ini = (document.getElementById("cajaRangoIni")||{}).value || "";
   const fin = (document.getElementById("cajaRangoFin")||{}).value || "";
+  // Sin periodo, enRango() daria true para todo y el panel acusaria movimientos de cualquier mes.
+  // Mejor no decir nada que decir algo de un periodo que nadie pidio.
+  if(!ini || !fin){ el.innerHTML = ""; return; }
   const cortes = (typeof todosLosCortes==="function") ? todosLosCortes() : [];
   const diag = cortesManualesSospechosos(cortes, ini, fin);
   const excl = egresosExcluidos(state);
@@ -11004,6 +11007,9 @@ function renderCaja() {
   if(!conc) return;
   if(vacio){
     conc.innerHTML = `<p style="color:var(--txt2);font-size:14px">Selecciona fecha inicio y fin del periodo.</p>`;
+    // Sin periodo no hay nada que auditar. Si no se limpia, el panel se queda con los hallazgos
+    // del periodo anterior y se leen como si fueran de este — cifras contables rancias.
+    const _aud = document.getElementById("cajaAuditoria"); if(_aud) _aud.innerHTML = "";
     return;
   }
 
