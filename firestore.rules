@@ -14,8 +14,14 @@
 // IMPORTANTE: al quitar el comodín, cualquier colección NO listada abajo queda
 // denegada. Las colecciones que la app usa hoy están todas cubiertas:
 //   datos · estado · usuarios · chat · productos_comerciales · proveedores
-//   cfdis · actividad
+//   cfdis · actividad · gmail_revisados · respaldos
 // Si más adelante se agrega una colección nueva, hay que agregarla aquí también.
+//
+// Ya pasó dos veces: se agregaron 'gmail_revisados' y 'respaldos' al código sin
+// agregarlas aquí. La primera daba 403 al abrir la pestaña de Gmail; la segunda
+// fallaba en silencio porque el código traga el error, así que los respaldos de
+// facturas llevaban tiempo sin guardarse sin que nadie lo notara.
+// Antes de dar por terminada una colección nueva: buscarla en este archivo.
 
 rules_version = '2';
 service cloud.firestore {
@@ -96,6 +102,24 @@ service cloud.firestore {
     // Cualquiera con sesión puede subir XML y consultarlos; BORRAR es solo del
     // admin (igual que en la interfaz, pero ahora sí aplicado de verdad).
     match /cfdis/{uuid} {
+      allow read, create, update: if conSesion();
+      allow delete: if esAdmin();
+    }
+
+    // ── gmail_revisados — qué adjuntos de Gmail ya se atendieron ───────────
+    // Es memoria COMPARTIDA a propósito: si cada quien llevara la suya, el mismo
+    // correo se capturaría dos veces. Todos leen y marcan; no se borra desde la
+    // interfaz, así que delete queda denegado (un borrado haría reaparecer
+    // facturas ya capturadas como si fueran nuevas).
+    match /gmail_revisados/{doc} {
+      allow read, create, update: if conSesion();
+      allow delete: if esAdmin();
+    }
+
+    // ── respaldos — copias de seguridad del estado ─────────────────────────
+    // Cualquiera con sesión genera respaldos al capturar; PODAR los viejos es
+    // solo del admin, que es justo lo que ya asume podarRespaldos().
+    match /respaldos/{doc} {
       allow read, create, update: if conSesion();
       allow delete: if esAdmin();
     }

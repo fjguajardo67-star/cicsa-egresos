@@ -2121,16 +2121,18 @@ async function fbListCollection(col){
   let pageToken = "";
   do {
     const url = `${FB_BASE}/${col}?pageSize=300&key=${FB_KEY}${pageToken?`&pageToken=${encodeURIComponent(pageToken)}`:""}`;
-    let d = null, ultimoError = "";
+    let d = null, ultimoError = "", ultimoStatus = 0;
     for(let intento=1; intento<=3; intento++){
       try {
         const r = await fetch(url, { headers });
         if(r.ok){ d = await r.json(); break; }
+        ultimoStatus = r.status;
         ultimoError = `el servidor respondió ${r.status}`;
+        if(r.status===401 || r.status===403) break;   // un permiso denegado no mejora reintentando
       } catch(e){ ultimoError = e.message || "error de red"; }
       if(intento < 3) await new Promise(res=>setTimeout(res, 400*intento));
     }
-    if(!d) throw new Error(`No se pudo leer "${col}" completo (${ultimoError}). Se leyeron ${out.length} registro(s) de más que hay: mejor no mostrar nada que mostrar la mitad como si fuera todo.`);
+    if(!d) throw new Error(_fbErrorLista(col, out.length, ultimoStatus, ultimoError));
     (d.documents||[]).forEach(doc=>{
       const id = doc.name.split('/').pop();
       let data = {};
@@ -2140,6 +2142,23 @@ async function fbListCollection(col){
     pageToken = d.nextPageToken || "";
   } while(pageToken);
   return out;
+}
+
+// El mensaje anterior decía "se leyeron 0 registros de más que hay", que además de estar mal
+// escrito hablaba de una lectura a medias cuando el problema era otro: un 403 es que la colección
+// no tiene regla en Firestore, y el aviso no lo decía — así que no había forma de saber qué
+// arreglar. Cada caso se nombra por lo que es.
+function _fbErrorLista(col, leidos, status, detalle){
+  if(status===403 || status===401){
+    return `No se pudo leer "${col}": Firestore negó el permiso (${status}). `+
+           `Casi siempre es que esa colección no tiene regla publicada: `+
+           `Firebase Console → Firestore Database → Reglas, y pegar firestore.rules del repo.`;
+  }
+  if(leidos > 0){
+    return `No se pudo leer "${col}" completo (${detalle}). Alcanzaron a leerse ${leidos} registro(s) `+
+           `y faltan los demás: mejor no mostrar nada que mostrar una parte como si fuera todo.`;
+  }
+  return `No se pudo leer "${col}" (${detalle}). No se muestra nada para no dar por buena una lista vacía.`;
 }
 
 async function fbCreateDoc(col, data){
