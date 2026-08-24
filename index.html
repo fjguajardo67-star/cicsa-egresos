@@ -2002,7 +2002,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-24-d";
+const APP_BUILD = "2026-08-24-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -11008,53 +11008,58 @@ function cancelarImportarCortes(){
   document.getElementById("cortesImportStatus").style.display = "none";
 }
 
-function confirmarImportarCortes(){
-  if(!_cortesImport) return;
-  const d = _cortesImport;
-  const week = getActiveWeek();
-  if(!week){ alert("No hay una semana activa donde guardar. Crea o selecciona una semana primero."); return; }
-  if(!week.cortes) week.cortes = [];
-  if(!week.gastos) week.gastos = [];
-  if(!week.retiros) week.retiros = [];
-  let nC=0, nG=0, nR=0;
-  const base = Date.now();
+// Construye TODO lo que la importación va a dejar, sin tocar el estado. Pura y probada.
+// Antes esto se hacía empujando de uno en uno directamente sobre week.cortes/gastos/retiros y
+// sobre state.cortesIgnorados: si algo tronaba a media vuelta (una categoría rara, un concepto
+// que canonizarProveedor no digiere) quedaba una importación a medias, sin forma de saber dónde
+// se cortó ni de deshacerla. Ahora se arma todo aparte y el estado se toca al final, de un golpe.
+//
+// `previos` son las listas actuales de la semana; se devuelven CONCATENADAS, no mutadas.
+function construirImportacionCortes(d, previos, autor, base){
+  const p0 = previos || {};
+  const cortes   = [...(p0.cortes||[])];
+  const gastos   = [...(p0.gastos||[])];
+  const retiros  = [...(p0.retiros||[])];
+  const ignorados= [...(p0.ignorados||[])];
+  let nC=0, nG=0, nR=0, nI=0;
   let seq = 0;
-  const nuevoId = ()=>String(base + (seq++));
+  const semilla = base || Date.now();
+  const nuevoId = ()=>String(semilla + (seq++));
+  const ahora = new Date().toISOString();
 
   // Ingresos: cada corte nuevo, con su folio para no volver a importarlo.
-  d.cortesNuevos.forEach(c=>{
+  (d.cortesNuevos||[]).forEach(c=>{
     const monto = (parseFloat(c.boletos25)||0)+(parseFloat(c.contratistas)||0)+(parseFloat(c.otrosIngresos)||0);
     const label = (typeof diaSemanaLabel==="function") ? diaSemanaLabel(c.fecha) : "";
-    week.cortes.push({ id:nuevoId(), fecha:c.fecha, tipo:(label||"").toLowerCase(), monto, label,
+    cortes.push({ id:nuevoId(), fecha:c.fecha, tipo:(label||"").toLowerCase(), monto, label,
       _folioCorte:String(c.folio).trim(), _origenCorte:true, cajera:c.cajera||"", turno:c.turno||"", terminal:parseFloat(c.terminal)||0 });
     nC++;
   });
 
   // Egresos: según la clasificación del usuario.
-  if(!Array.isArray(state.cortesIgnorados)) state.cortesIgnorados = [];
-  const yaIgn = new Set(state.cortesIgnorados.map(folioDeIgnorado));
-  d.egresos.forEach(e=>{
-    const folio = String(e.folio).trim();
+  const yaIgn = new Set(ignorados.map(folioDeIgnorado));
+  (d.egresos||[]).forEach(e=>{
+    const folio = String(e.folio||"").trim();
+    if(!folio) return;
     if(e._clase === "ignorar"){
       // Se recuerda para que la próxima reimportación no lo vuelva a ofrecer como nuevo. Se guarda
       // el renglón ENTERO, no solo el folio: excluir dinero sin dejar cuánto ni por qué hace que
       // el reporte no pueda explicar su propio faltante.
       if(!yaIgn.has(folio)){
-        state.cortesIgnorados.push({
+        ignorados.push({
           folio, fecha:e.fecha||"", concepto:e.concepto||"", monto:parseFloat(e.monto)||0,
           motivo: e._dup ? (e._dup.reason||"Ya capturado") : "Marcado a mano",
-          por: (typeof currentNombre!=="undefined" && currentNombre) || (currentUser&&currentUser.email) || "",
-          ts: new Date().toISOString(),
+          por: autor||"", ts: ahora,
         });
-        yaIgn.add(folio);
+        yaIgn.add(folio); nI++;
       }
       return;
     }
     if(e._clase === "retiro"){
-      week.retiros.push({ id:nuevoId(), fecha:e.fecha, monto:parseFloat(e.monto)||0, motivo:e.concepto||"", _folioEgreso:folio });
+      retiros.push({ id:nuevoId(), fecha:e.fecha, monto:parseFloat(e.monto)||0, motivo:e.concepto||"", _folioEgreso:folio });
       nR++;
     } else {   // gasto en efectivo
-      week.gastos.push({ id:nuevoId(), proveedor:canonizarProveedor(e.concepto||""), fecha:e.fecha,
+      gastos.push({ id:nuevoId(), proveedor:canonizarProveedor(e.concepto||""), fecha:e.fecha,
         factura:String(e.comprobante||"").trim(), importe:parseFloat(e.monto)||0,
         categoria:canonizarCategoria(e._cat||"Otro"), notas:e.autoriza?("Autoriza: "+e.autoriza):"", esOtro:false,
         respaldo:null, formaPago:"caja_cortes", vencimiento:"", estadoPago:"pagado",
@@ -11064,19 +11069,52 @@ function confirmarImportarCortes(){
   });
 
   // Saldo inicial del periodo: el corte trae con cuánto efectivo se abrió (lo que quedó a entregar
-  // del periodo anterior). Se fija solo, para que la conciliación encadene sin capturarlo a mano.
-  // Se permite CUALQUIER valor, incluido negativo: un periodo puede abrir en rojo si el anterior
-  // cerró en rojo. fijarSaldoInicialCaja (manual) exige >0, por eso aquí se escribe directo.
-  let saldoFijado = null;
-  const p = d.obj.periodo || {};
-  if(typeof d.obj.saldoInicial === "number" && isFinite(d.obj.saldoInicial) && _esFechaISO(p.ini)){
-    if(!state.cajaSaldoInicial) state.cajaSaldoInicial = {};
-    state.cajaSaldoInicial[p.ini] = {
-      valor: d.obj.saldoInicial, conteo: {}, fecha: todayStr(),
-      porEmail: "Manejo de Cortes", ts: new Date().toISOString(), _origenCorte: true,
-    };
-    saldoFijado = d.obj.saldoInicial;
+  // del periodo anterior). Se permite CUALQUIER valor, incluido negativo: un periodo puede abrir
+  // en rojo si el anterior cerró en rojo.
+  let saldo = null;
+  const p = (d.obj && d.obj.periodo) || {};
+  if(d.obj && typeof d.obj.saldoInicial === "number" && isFinite(d.obj.saldoInicial) && _esFechaISO(p.ini)){
+    saldo = { fecha:p.ini, entrada:{ valor:d.obj.saldoInicial, conteo:{}, fecha:todayStr(),
+              porEmail:"Manejo de Cortes", ts:ahora, _origenCorte:true } };
   }
+  return { cortes, gastos, retiros, ignorados, saldo, nC, nG, nR, nI };
+}
+
+function confirmarImportarCortes(){
+  if(!_cortesImport) return;
+  const d = _cortesImport;
+  const week = getActiveWeek();
+  if(!week){ alert("No hay una semana activa donde guardar. Crea o selecciona una semana primero."); return; }
+
+  // Se arma primero, se escribe después. Si truena aquí, el estado queda EXACTAMENTE como estaba:
+  // más vale no importar nada que dejar media importación que nadie sabe dónde se cortó.
+  let plan;
+  try{
+    plan = construirImportacionCortes(d, {
+      cortes: week.cortes, gastos: week.gastos, retiros: week.retiros,
+      ignorados: Array.isArray(state.cortesIgnorados) ? state.cortesIgnorados : [],
+    }, (typeof currentNombre!=="undefined" && currentNombre) || (currentUser&&currentUser.email) || "");
+  }catch(err){
+    console.warn("construirImportacionCortes:", err);
+    setStatus("cortesImportStatus",
+      `❌ No se importó nada: algo falló al preparar los datos (${(err&&err.message)||"error"}). `+
+      `Tus movimientos quedaron como estaban. Vuelve a intentarlo o revisa el archivo.`, "error");
+    return;
+  }
+
+  // Commit: asignaciones sueltas, sin await de por medio, así que no puede quedar a medias.
+  week.cortes  = plan.cortes;
+  week.gastos  = plan.gastos;
+  week.retiros = plan.retiros;
+  state.cortesIgnorados = plan.ignorados;
+  let saldoFijado = null;
+  if(plan.saldo){
+    if(!state.cajaSaldoInicial) state.cajaSaldoInicial = {};
+    state.cajaSaldoInicial[plan.saldo.fecha] = plan.saldo.entrada;
+    saldoFijado = plan.saldo.entrada.valor;
+  }
+  const nC = plan.nC, nG = plan.nG, nR = plan.nR;
+  const p = (d.obj && d.obj.periodo) || {};
 
   save();
   subirArchivoCortesAStorage(d.obj).catch(()=>{});   // archivar copia; no bloquea si falla
@@ -11092,7 +11130,10 @@ function confirmarImportarCortes(){
   }
   const saldoMsg = saldoFijado!=null ? ` Saldo inicial fijado en ${fmt(saldoFijado)}.` : "";
   _pintarAuditoriaCaja();
-  setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s).${saldoMsg} La conciliación de abajo ya quedó en el periodo ${fmtDate(p.ini)}–${fmtDate(p.fin)}.`, "ok");
+  // Lo excluido se nombra en el mismo mensaje: es dinero que se dejó fuera a propósito, y
+  // enterarse tres semanas después de por qué el reporte no cuadra es demasiado tarde.
+  const exclMsg = plan.nI ? ` ${plan.nI} egreso(s) quedaron EXCLUIDOS (ver el detalle abajo).` : "";
+  setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s).${exclMsg}${saldoMsg} La conciliación de abajo ya quedó en el periodo ${fmtDate(p.ini)}–${fmtDate(p.fin)}.`, "ok");
   renderCaja();
 }
 
