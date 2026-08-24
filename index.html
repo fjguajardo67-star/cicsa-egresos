@@ -1984,6 +1984,7 @@ body.snav-min .side-theme span { display:none; }
     <div id="cajaConciliacion">
       <p style="color:var(--txt2);font-size:14px">Cargando...</p>
     </div>
+    <div id="cajaAuditoria"></div>
   </div>
 </div>
 
@@ -2000,7 +2001,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-24-a";
+const APP_BUILD = "2026-08-24-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -10575,9 +10576,63 @@ function foliosCorteImportados(){
 // Folios que el usuario marcó «ignorar» (ya entraron por factura). No crean gasto ni retiro,
 // pero sí se recuerdan: sin esto, reimportar el mismo archivo los volvería a ofrecer y podrían
 // colarse. Reimportar tiene que ser idempotente también para lo que se decidió NO importar.
+// Compatible con las dos formas guardadas: folio suelto (viejo) y renglón completo (nuevo).
 function foliosCorteIgnorados(){
   return new Set((state.cortesIgnorados||[]).map(String));
 }
+// ── Diagnóstico de doble contabilización de ingresos ───────────────────────────
+// Un corte importado trae _folioCorte (viene de Manejo de Cortes). Uno capturado a mano con
+// «Registrar corte» NO trae nada: es un importe global tecleado, normalmente el cierre de una
+// semana o de un periodo.
+// Los dos se suman igual en el balance (balanceOperativo → todosLosCortes), así que si alguien
+// tecleó el cierre de la semana Y además se importaron los cortes de esos mismos días, el
+// ingreso queda contado dos veces. No hay folio que comparar, así que la importación no puede
+// detectarlo sola: hay que decirlo aquí.
+// Devuelve SOLO evidencia; no borra ni modifica nada.
+function cortesManualesSospechosos(cortes, ini, fin){
+  const enRango = f => !!f && (!ini || f>=ini) && (!fin || f<=fin);
+  const lista = (cortes||[]).filter(c=>c && enRango(c.fecha));
+  const importados = lista.filter(c=>c._folioCorte);
+  const manuales   = lista.filter(c=>!c._folioCorte);
+  if(!manuales.length) return { manuales:[], montoManual:0, montoImportado:0, diasConAmbos:[], hallazgos:[] };
+  // Días que ya tienen cortes importados: un global tecleado que cae dentro del tramo cubierto
+  // por la importación es el caso sospechoso.
+  const diasImp = new Set(importados.map(c=>c.fecha));
+  const fechasImp = [...diasImp].sort();
+  const desde = fechasImp[0] || "", hasta = fechasImp[fechasImp.length-1] || "";
+  const hallazgos = manuales.map(c=>{
+    const m = parseFloat(c.monto)||0;
+    const dentro = !!desde && c.fecha>=desde && c.fecha<=hasta;
+    return { id:c.id, fecha:c.fecha, monto:m, mismoDia:diasImp.has(c.fecha), dentroDelTramo:dentro };
+  }).sort((a,b)=>b.monto-a.monto);
+  return {
+    manuales, hallazgos,
+    montoManual:   manuales.reduce((t,c)=>t+(parseFloat(c.monto)||0),0),
+    montoImportado: importados.reduce((t,c)=>t+(parseFloat(c.monto)||0),0),
+    diasConAmbos: hallazgos.filter(h=>h.mismoDia).map(h=>h.fecha),
+    tramo: desde ? { desde, hasta } : null,
+  };
+}
+
+// ── Egresos excluidos: qué se dejó fuera y por qué ────────────────────────────
+// state.cortesIgnorados guardaba SOLO el folio ("EGR-xxx"), así que un egreso marcado «ignorar»
+// desaparecía sin dejar importe, concepto ni fecha: el reporte no podía explicar el faltante y
+// nadie podía revisar la decisión. Ahora se guarda el renglón completo. Se admiten las dos
+// formas para no perder lo ya marcado.
+function folioDeIgnorado(x){ return typeof x === "string" ? x : String((x && x.folio) || ""); }
+function egresosExcluidos(state){
+  return ((state && state.cortesIgnorados) || [])
+    .map(x => typeof x === "string"
+      ? { folio:x, fecha:"", concepto:"", monto:null, por:"", ts:"", _sinDetalle:true }
+      : { folio:String(x.folio||""), fecha:x.fecha||"", concepto:x.concepto||"",
+          monto:(x.monto==null?null:parseFloat(x.monto)||0), por:x.por||"", ts:x.ts||"",
+          motivo:x.motivo||"", _sinDetalle:false })
+    .filter(x=>x.folio);
+}
+function totalExcluido(state){
+  return egresosExcluidos(state).reduce((t,x)=>t+(x.monto||0),0);
+}
+
 function foliosEgresoImportados(){
   const s = new Set();
   (state.weeks||[]).forEach(w=>{
@@ -10627,9 +10682,15 @@ function clasificacionInicialEgreso(egreso){
   // 2) Mismo importe en fecha cercana AUNQUE el nombre no coincida: es el caso del SAMS, la factura
   //    ya entró con su nombre fiscal. Se preselecciona «ignorar» pero se muestra para confirmar —
   //    dos gastos reales del mismo monto el mismo día existen, y ahí el usuario decide.
+  // OJO: esta coincidencia es SOLO por importe y ±4 días — no mira proveedor ni concepto. Con
+  // montos redondos (dos cargas de gas de $500, dos pagos de $20,000) engancha cualquier cosa.
+  // Antes preseleccionaba «ignorar», así que bastaba con darle a Importar sin revisar para que el
+  // dinero se fuera sin dejar rastro. Ahora entra como GASTO con el aviso a la vista: es un
+  // candidato a revisar, no un veredicto.
   const mismo = gastoMismoImporte(egreso.monto, egreso.fecha);
-  if(mismo) return { clase:"ignorar",
-    dup:{ gasto:mismo, reason:"Mismo importe en fecha cercana — ¿ya entró como factura?" }, aviso:null };
+  if(mismo) return { clase:"gasto",
+    dup:{ gasto:mismo, reason:"Mismo importe en fecha cercana — ¿ya entró como factura?" },
+    aviso:"Coincide SOLO por importe y fecha (no por proveedor). Revísalo antes de marcarlo «Ignorar»." };
   // 3) El comprobante parece folio de factura: puede que la factura no haya llegado aún. No se
   //    cambia la clase, solo se avisa para que el usuario esté pendiente.
   if(_pareceFolioFactura(egreso.comprobante)){
@@ -10787,12 +10848,22 @@ function confirmarImportarCortes(){
 
   // Egresos: según la clasificación del usuario.
   if(!Array.isArray(state.cortesIgnorados)) state.cortesIgnorados = [];
-  const yaIgn = new Set(state.cortesIgnorados.map(String));
+  const yaIgn = new Set(state.cortesIgnorados.map(folioDeIgnorado));
   d.egresos.forEach(e=>{
     const folio = String(e.folio).trim();
     if(e._clase === "ignorar"){
-      // Se recuerda para que la próxima reimportación no lo vuelva a ofrecer como nuevo.
-      if(!yaIgn.has(folio)){ state.cortesIgnorados.push(folio); yaIgn.add(folio); }
+      // Se recuerda para que la próxima reimportación no lo vuelva a ofrecer como nuevo. Se guarda
+      // el renglón ENTERO, no solo el folio: excluir dinero sin dejar cuánto ni por qué hace que
+      // el reporte no pueda explicar su propio faltante.
+      if(!yaIgn.has(folio)){
+        state.cortesIgnorados.push({
+          folio, fecha:e.fecha||"", concepto:e.concepto||"", monto:parseFloat(e.monto)||0,
+          motivo: e._dup ? (e._dup.reason||"Ya capturado") : "Marcado a mano",
+          por: (typeof currentNombre!=="undefined" && currentNombre) || (currentUser&&currentUser.email) || "",
+          ts: new Date().toISOString(),
+        });
+        yaIgn.add(folio);
+      }
       return;
     }
     if(e._clase === "retiro"){
@@ -10836,6 +10907,7 @@ function confirmarImportarCortes(){
     if(eFin) eFin.value = p.fin;
   }
   const saldoMsg = saldoFijado!=null ? ` Saldo inicial fijado en ${fmt(saldoFijado)}.` : "";
+  _pintarAuditoriaCaja();
   setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s).${saldoMsg} La conciliación de abajo ya quedó en el periodo ${fmtDate(p.ini)}–${fmtDate(p.fin)}.`, "ok");
   renderCaja();
 }
@@ -10851,6 +10923,66 @@ async function subirArchivoCortesAStorage(obj){
       { method:"POST", headers:{ "Content-Type":"application/json" }, body: blob });
     if(!r.ok) console.warn("subirArchivoCortesAStorage:", r.status);
   }catch(e){ console.warn("subirArchivoCortesAStorage:", e); }
+}
+
+// Panel de solo lectura: dice qué hay que revisar antes de fiarse del saldo. No borra nada.
+function _pintarAuditoriaCaja(){
+  const el = document.getElementById("cajaAuditoria");
+  if(!el) return;
+  const ini = (document.getElementById("cajaRangoIni")||{}).value || "";
+  const fin = (document.getElementById("cajaRangoFin")||{}).value || "";
+  const cortes = (typeof todosLosCortes==="function") ? todosLosCortes() : [];
+  const diag = cortesManualesSospechosos(cortes, ini, fin);
+  const excl = egresosExcluidos(state);
+  const enRango = f => !!f && (!ini || f>=ini) && (!fin || f<=fin);
+  const exclRango = excl.filter(x => !x.fecha || enRango(x.fecha));
+  // El terminal se guarda en cada corte importado y hasta ahora no se mostraba en ningún lado:
+  // es cobro con tarjeta, no entra al efectivo, pero es dinero que la empresa cobró.
+  const term = cortes.filter(c=>enRango(c.fecha)).reduce((t,c)=>t+(parseFloat(c.terminal)||0),0);
+
+  let h = "";
+  if(diag.hallazgos.length){
+    const dentro = diag.hallazgos.filter(x=>x.dentroDelTramo);
+    const monto = dentro.reduce((t,x)=>t+x.monto,0);
+    h += `<div style="background:#FFEBEE;border:1.5px solid var(--red);border-radius:10px;padding:12px 14px;margin-top:16px">
+      <div style="font-weight:700;color:var(--red);font-size:13px">⚠ Ingreso posiblemente contado dos veces: ${fmt(monto)}</div>
+      <div style="font-size:12px;color:var(--txt2);margin:6px 0 8px">
+        Hay <strong>${dentro.length}</strong> corte(s) capturado(s) a mano dentro del mismo tramo que ya trae
+        cortes importados de Manejo de Cortes${diag.tramo?` (${fmtDate(diag.tramo.desde)} – ${fmtDate(diag.tramo.hasta)})`:""}.
+        Los importados suman ${fmt(diag.montoImportado)}. Un global tecleado suele ser el cierre de una semana,
+        y el cierre ya está dentro de los cortes del día. <strong>Revísalos antes de borrar nada.</strong>
+      </div>
+      <div class="tbl-wrap"><table style="width:100%;font-size:12px"><thead><tr>
+        <th>Fecha</th><th style="text-align:right">Monto</th><th></th></tr></thead><tbody>
+        ${dentro.map(x=>`<tr><td>${esc(fmtDate(x.fecha))}</td>
+          <td class="amount-cell">${fmt(x.monto)}</td>
+          <td style="font-size:11px;color:var(--txt2)">${x.mismoDia?"ese día ya tiene cortes importados":"dentro del tramo importado"}</td></tr>`).join("")}
+      </tbody></table></div></div>`;
+  }
+  if(exclRango.length){
+    const conDetalle = exclRango.filter(x=>!x._sinDetalle);
+    const sinDetalle = exclRango.filter(x=>x._sinDetalle);
+    const monto = conDetalle.reduce((t,x)=>t+(x.monto||0),0);
+    h += `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:12px 14px;margin-top:14px">
+      <div style="font-weight:700;color:var(--do);font-size:13px">🚫 Egresos excluidos del reporte: ${exclRango.length}${monto?` · ${fmt(monto)}`:""}</div>
+      <div style="font-size:12px;color:var(--txt2);margin:6px 0 8px">Se marcaron «Ignorar» al importar, así que no aparecen como gasto ni como retiro. Si alguno era un gasto real, el reporte está corto por esa cantidad.</div>
+      ${conDetalle.length?`<div class="tbl-wrap"><table style="width:100%;font-size:12px"><thead><tr>
+        <th>Fecha</th><th>Concepto</th><th style="text-align:right">Monto</th><th>Motivo</th></tr></thead><tbody>
+        ${conDetalle.map(x=>`<tr><td style="white-space:nowrap">${esc(fmtDate(x.fecha)||"—")}</td>
+          <td>${esc(x.concepto||"—")}<div style="font-size:10px;color:var(--txt2);font-family:'JetBrains Mono',monospace">${esc(x.folio)}</div></td>
+          <td class="amount-cell">${fmt(x.monto||0)}</td>
+          <td style="font-size:11px;color:var(--txt2)">${esc(x.motivo||"—")}${x.por?`<div>${esc(x.por)}</div>`:""}</td></tr>`).join("")}
+      </tbody></table></div>`:""}
+      ${sinDetalle.length?`<div style="font-size:11.5px;color:var(--txt2);margin-top:8px">
+        Otros <strong>${sinDetalle.length}</strong> se excluyeron antes de que se guardara el detalle, así que solo queda el folio:
+        <span style="font-family:'JetBrains Mono',monospace;font-size:11px">${sinDetalle.map(x=>esc(x.folio)).join(", ")}</span>.
+        Para saber cuánto eran hay que buscarlos en el .json del periodo.</div>`:""}
+    </div>`;
+  }
+  if(term>0){
+    h += `<div style="font-size:12px;color:var(--txt2);margin-top:14px">💳 Cobrado por terminal en el periodo: <strong>${fmt(term)}</strong> — no entra al efectivo de caja ni al saldo físico, se informa aparte.</div>`;
+  }
+  el.innerHTML = h;
 }
 
 function eliminarRetiro(id) {
@@ -10884,6 +11016,7 @@ function renderCaja() {
   const baseInicial = usaManual ? saldoInicialManual : 0;
   // Mismo numero que muestra el Resumen: ambos salen de calcularSaldoCajaPeriodo.
   const saldoFinal = calcularSaldoCajaPeriodo(datos.ini, datos.fin).saldo;
+  setTimeout(_pintarAuditoriaCaja, 0);   // tras pintar la conciliación, para no competir por el DOM
 
   // 1. Saldo inicial del periodo
   const btnAjuste = esAdmin

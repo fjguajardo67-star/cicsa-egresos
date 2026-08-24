@@ -99,6 +99,7 @@ const FUNCS = [
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "_cfdiNomina", "corridasDeNomina", "corridaNominaRegistrada", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
+  "cortesManualesSospechosos", "egresosExcluidos", "totalExcluido", "folioDeIgnorado",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
@@ -1357,6 +1358,161 @@ t("si de verdad falta dinero, la conciliación lo sigue diciendo", () => {
   assert.equal(r.diferencias.length, 1, "juntar renglones no debe tapar un faltante real");
   close(r.diferencias[0].capturado, 1000);
   close(r.diferencias[0].diferencia, 2500);
+});
+
+console.log("\n== fixture real v3: importar, reimportar, idempotencia ==");
+// Archivo real de Manejo de Cortes (133 cortes, 53 egresos, 4 jul - 2 ago 2026). Es el mismo que
+// se rechazaba por version y el que destapo el doble conteo de ingresos.
+const FIX = JSON.parse(fs.readFileSync(path.join(__dirname, "fixture_cortes_v3.json"), "utf8"));
+const _sum = (a, k) => a.reduce((t, x) => t + (parseFloat(x[k]) || 0), 0);
+const _efectivoCorte = c => (parseFloat(c.boletos25)||0)+(parseFloat(c.contratistas)||0)+(parseFloat(c.otrosIngresos)||0);
+
+t("el fixture v3 se acepta sin errores ni avisos", () => {
+  const v = S.validarArchivoCortes(FIX);
+  assert.equal(v.ok, true, v.errores.join(" | "));
+  assert.deepEqual(S.avisosControlCortes(FIX), [], "sus totales cuadran solos");
+});
+t("cifras de control del fixture", () => {
+  assert.equal(FIX.cortes.length, 133);
+  assert.equal(new Set(FIX.cortes.map(c => c.folio)).size, 133, "sin folios repetidos");
+  assert.equal(FIX.egresos.length, 53);
+  assert.equal(new Set(FIX.egresos.map(e => e.folio)).size, 53);
+  close(_sum(FIX.cortes, "total"), 430054);
+  close(_sum(FIX.cortes, "terminal"), 8945);
+  close(_sum(FIX.egresos, "monto"), 369415.97);
+  close(430054 - 369415.97, FIX.totales.efectivoAEntregar);
+});
+t("el efectivo contable de cada corte NO incluye la terminal", () => {
+  // total = boletos25 + contratistas + otrosIngresos; la terminal va aparte. Si algun dia el
+  // contrato cambiara y 'total' incluyera la terminal, el ingreso se inflaria en silencio.
+  const malos = FIX.cortes.filter(c => Math.abs(_efectivoCorte(c) - (parseFloat(c.total)||0)) > 0.001);
+  assert.equal(malos.length, 0, "total debe ser exactamente la suma de los tres conceptos de efectivo");
+  assert.ok(_sum(FIX.cortes, "terminal") > 0, "y si hay terminal, para que la prueba signifique algo");
+});
+t("los totales del archivo son control, no transacciones", () => {
+  // Ninguna cifra global debe convertirse en movimiento: se comparan contra la suma de renglones.
+  close(_sum(FIX.cortes, "total"), FIX.totales.efectivo);
+  close(_sum(FIX.cortes, "terminal"), FIX.totales.terminal);
+  close(_sum(FIX.egresos, "monto"), FIX.totales.egresos);
+});
+t("tocar totales.efectivo dispara alerta de integridad y NO crea ingreso", () => {
+  const a = JSON.parse(JSON.stringify(FIX));
+  a.totales.efectivo = a.totales.efectivo + 50000;
+  const av = S.avisosControlCortes(a);
+  assert.ok(av.some(x => /efectivo/i.test(x)), "debe avisar que no cuadra");
+  assert.equal(S.validarArchivoCortes(a).ok, true, "pero no bloquea: es un aviso, no un rechazo");
+  close(_sum(a.cortes, "total"), 430054, 0.01);   // los cortes no cambiaron
+});
+
+// ── idempotencia: la reimportacion se decide por folio ────────────────────────
+// foliosCorteImportados/foliosEgresoImportados leen _folioCorte/_folioEgreso del estado. Se
+// simula el estado que dejaria una importacion para comprobar que la segunda no crea nada.
+t("primera importacion: 133 cortes nuevos, 53 egresos", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[] }], cortesIgnorados:[] };
+  const yaC = S.foliosCorteImportados();
+  const nuevos = FIX.cortes.filter(c => !yaC.has(String(c.folio).trim()));
+  assert.equal(nuevos.length, 133);
+  close(nuevos.reduce((t, c) => t + _efectivoCorte(c), 0), 430054);
+});
+t("segunda importacion identica: 0 nuevos, 0 duplicados", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:
+      FIX.egresos.map((e, i) => ({ id:"g"+i, importe:e.monto, fecha:e.fecha, _folioEgreso:e.folio })),
+    cortes: FIX.cortes.map((c, i) => ({ id:"c"+i, fecha:c.fecha, monto:_efectivoCorte(c), _folioCorte:c.folio })) }],
+    cortesIgnorados:[] };
+  const yaC = S.foliosCorteImportados(), yaE = S.foliosEgresoImportados();
+  assert.equal(FIX.cortes.filter(c => !yaC.has(String(c.folio).trim())).length, 0, "cero cortes nuevos");
+  assert.equal(FIX.egresos.filter(e => !yaE.has(String(e.folio).trim())).length, 0, "cero egresos nuevos");
+  assert.equal(yaC.size, 133);
+  assert.equal(yaE.size, 53);
+  close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), 430054, 0.01);
+});
+t("el ingreso NO cambia al reimportar", () => {
+  const antes = S.todosLosCortes().reduce((t, c) => t + c.monto, 0);
+  const yaC = S.foliosCorteImportados();
+  FIX.cortes.filter(c => !yaC.has(String(c.folio).trim()))
+    .forEach(c => S.state.weeks[0].cortes.push({ id:"x", fecha:c.fecha, monto:_efectivoCorte(c), _folioCorte:c.folio }));
+  close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), antes, 0.01);
+});
+t("un global tecleado sobre ese mismo estado se detecta, y explica los $384,542", () => {
+  // Los seis cierres reales que inflaron el balance de julio.
+  [["2026-07-07",74676],["2026-07-10",53066],["2026-07-14",74379],
+   ["2026-07-18",46454],["2026-07-22",63175],["2026-07-24",72792]]
+    .forEach(([f, m], i) => S.state.weeks[0].cortes.push({ id:"glob"+i, fecha:f, monto:m }));
+  close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), 814596, 0.01);   // el numero que salio en pantalla
+  const r = S.cortesManualesSospechosos(S.todosLosCortes(), "", "");
+  assert.equal(r.hallazgos.length, 6, "los seis quedan señalados");
+  close(r.montoManual, 384542);
+  close(r.montoImportado, 430054);
+  // Los del 7 y 10 de julio son ANTERIORES al primer corte importado (11 jul): quedan listados
+  // pero fuera del tramo, que es justo la distincion que hay que poder hacer.
+  assert.equal(r.hallazgos.filter(h => h.dentroDelTramo).length, 4);
+});
+
+console.log("\n== auditoría de caja: doble conteo de ingresos y egresos excluidos ==");
+// Caso real: el balance mostro $814,596 de ingreso cuando los 133 cortes del archivo suman
+// $430,054. Los $384,542 de diferencia eran 6 cortes GLOBALES tecleados a mano (cierres de
+// semana) que conviven con los cortes individuales importados. No hay folio que comparar, asi
+// que la importacion no puede verlo sola: hay que señalarlo.
+t("un global tecleado dentro del tramo importado se señala como doble conteo", () => {
+  const cortes = [
+    { id:"i1", fecha:"2026-07-18", monto:10000, _folioCorte:"RCE-1" },
+    { id:"i2", fecha:"2026-07-19", monto:12000, _folioCorte:"RCE-2" },
+    { id:"i3", fecha:"2026-07-21", monto:9000,  _folioCorte:"RCE-3" },
+    { id:"m1", fecha:"2026-07-18", monto:63175 },                      // cierre tecleado a mano
+  ];
+  const r = S.cortesManualesSospechosos(cortes, "2026-07-01", "2026-07-31");
+  assert.equal(r.hallazgos.length, 1);
+  assert.equal(r.hallazgos[0].id, "m1");
+  assert.equal(r.hallazgos[0].dentroDelTramo, true);
+  assert.equal(r.hallazgos[0].mismoDia, true, "ese dia YA tiene cortes importados");
+  close(r.montoImportado, 31000);
+  close(r.montoManual, 63175);
+});
+t("si no hay cortes importados no se acusa a nadie", () => {
+  const r = S.cortesManualesSospechosos([{ id:"m1", fecha:"2026-07-18", monto:63175 }], "", "");
+  assert.equal(r.hallazgos.length, 1, "se lista");
+  assert.equal(r.hallazgos[0].dentroDelTramo, false, "pero NO como doble conteo: no hay tramo importado");
+});
+t("solo con cortes importados no hay hallazgos", () => {
+  const r = S.cortesManualesSospechosos([{ id:"i1", fecha:"2026-07-18", monto:10000, _folioCorte:"RCE-1" }], "", "");
+  assert.deepEqual(r.hallazgos, []);
+});
+t("el diagnostico respeta el periodo pedido", () => {
+  const cortes = [
+    { id:"i1", fecha:"2026-07-18", monto:10000, _folioCorte:"RCE-1" },
+    { id:"m1", fecha:"2026-06-30", monto:5000 },                       // fuera del rango
+  ];
+  assert.deepEqual(S.cortesManualesSospechosos(cortes, "2026-07-01", "2026-07-31").hallazgos, []);
+});
+
+// Antes se guardaba SOLO el folio, asi que un egreso excluido desaparecia sin dejar importe ni
+// concepto: el reporte no podia explicar su propio faltante.
+t("un excluido con detalle dice cuanto y por que", () => {
+  const st = { cortesIgnorados:[
+    { folio:"EGR-a", fecha:"2026-07-22", concepto:"PAGO SEM ING FRANCISCO", monto:20000,
+      motivo:"Mismo importe en fecha cercana", por:"Diana", ts:"2026-08-01T10:00:00Z" },
+  ]};
+  const r = S.egresosExcluidos(st);
+  assert.equal(r.length, 1);
+  close(r[0].monto, 20000);
+  assert.equal(r[0]._sinDetalle, false);
+  close(S.totalExcluido(st), 20000);
+});
+t("los excluidos viejos (solo folio) se siguen leyendo, marcados como sin detalle", () => {
+  const st = { cortesIgnorados:["EGR-viejo", { folio:"EGR-nuevo", monto:500 }] };
+  const r = S.egresosExcluidos(st);
+  assert.equal(r.length, 2);
+  assert.equal(r[0]._sinDetalle, true, "del viejo no se sabe el monto");
+  assert.equal(r[0].monto, null);
+  close(S.totalExcluido(st), 500, 0.01);
+});
+t("folioDeIgnorado lee las dos formas", () => {
+  assert.equal(S.folioDeIgnorado("EGR-a"), "EGR-a");
+  assert.equal(S.folioDeIgnorado({ folio:"EGR-b" }), "EGR-b");
+});
+t("sin nada excluido, cero", () => {
+  assert.deepEqual(S.egresosExcluidos({}), []);
+  close(S.totalExcluido({}), 0);
 });
 
 console.log("\n== conciliación SAT: el folio se compara contra la FACTURA, no contra el UUID ==");
@@ -2626,13 +2782,27 @@ t("gastoMismoImporte ignora si la fecha está lejos", () => {
   ]}]};
   assert.equal(S.gastoMismoImporte(5124, "2026-08-06"), null);
 });
-t("el SAMS se caza al importar aunque la factura tenga nombre fiscal distinto", () => {
+// El SAMS se SEÑALA, pero ya no se preselecciona "ignorar": la coincidencia es solo por importe
+// y +-4 dias, sin mirar proveedor ni concepto. Con montos redondos engancha cualquier cosa (dos
+// cargas de gas de $500, dos pagos de $20,000), y preseleccionar "ignorar" hacia que bastara con
+// darle a Importar sin revisar para que el dinero desapareciera. Candidato, no veredicto.
+t("el SAMS se SEÑALA por importe, pero entra como gasto — no se preselecciona ignorar", () => {
   S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
     { id:"gmail", proveedor:"NUEVA WAL-MART DE MEXICO", factura:"A-88213", importe:5124, fecha:"2026-08-06" }
   ]}]};
   const c = S.clasificacionInicialEgreso({ concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06", clase:"gasto" });
+  assert.equal(c.clase, "gasto", "no se descuenta dinero sin que alguien lo confirme");
+  assert.ok(c.dup, "pero se muestra el gasto parecido");
+  assert.ok(c.aviso && /importe/i.test(c.aviso), "y se dice que la coincidencia es solo por importe");
+});
+// Una coincidencia FUERTE (mismo proveedor y misma factura) si puede preseleccionar ignorar:
+// ahi no hay ambiguedad, es literalmente el mismo documento.
+t("una coincidencia por proveedor+factura si preselecciona ignorar", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"ya", proveedor:"COMPRA SAMS", factura:"ICAJG470108", importe:5124, fecha:"2026-08-06" }
+  ]}]};
+  const c = S.clasificacionInicialEgreso({ concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06", clase:"gasto" });
   assert.equal(c.clase, "ignorar");
-  assert.ok(c.dup, "trae el gasto que ya existía por factura");
 });
 t("un egreso con comprobante de factura pero sin duplicado se avisa, no se ignora", () => {
   S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[] }] };
