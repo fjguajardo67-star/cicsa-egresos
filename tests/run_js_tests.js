@@ -97,14 +97,14 @@ const FUNCS = [
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros",
-  "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
+  "findDuplicate", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "separarNombresMenu", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
   "variantesLlaveMenu", "llavesMenuDeFila",
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "_cfdiNomina", "corridasDeNomina", "corridaNominaRegistrada", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
-  "cortesManualesSospechosos", "egresosExcluidos", "totalExcluido", "folioDeIgnorado", "_unirIgnorados",
+  "cortesManualesSospechosos", "egresosExcluidos", "folioDeIgnorado", "_unirIgnorados",
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
@@ -300,17 +300,6 @@ const semanas = [
   { id: "2", label: "s2", gastos: [{ id: "g2", importe: 80, formaPago: "transferencia", fecha: "2026-06-08" }], cortes: [{ id: "c2", monto: 200, fecha: "2026-06-09" }], retiros: [] },
   { id: "3", label: "s3", gastos: [], cortes: [], retiros: [] },
 ];
-t("saldoInicialSemana: semana 3 = cortes − efectivo − retiros de las 2 anteriores", () => {
-  S.state.weeks = semanas;
-  const r = S.saldoInicialSemana("3");
-  close(r.saldo, 500 - 100 - 50 + 200); // transferencia NO resta
-  assert.equal(r.fechaMin, "2026-06-01"); assert.equal(r.fechaMax, "2026-06-09");
-});
-t("saldoInicialSemana: primera semana → 0 sin movimientos", () => {
-  S.state.weeks = semanas;
-  const r = S.saldoInicialSemana("1");
-  assert.equal(r.saldo, 0); assert.equal(r.n, 0);
-});
 t("calcularSaldoAntesDe: corte estricto por fecha (<, no ≤)", () => {
   S.state.weeks = semanas;
   close(S.calcularSaldoAntesDe("2026-06-09").saldo, 500 - 100 - 50); // corte del 09 NO entra
@@ -1840,7 +1829,6 @@ t("un excluido con detalle dice cuanto y por que", () => {
   assert.equal(r.length, 1);
   close(r[0].monto, 20000);
   assert.equal(r[0]._sinDetalle, false);
-  close(S.totalExcluido(st), 20000);
 });
 t("los excluidos viejos (solo folio) se siguen leyendo, marcados como sin detalle", () => {
   const st = { cortesIgnorados:["EGR-viejo", { folio:"EGR-nuevo", monto:500 }] };
@@ -1848,7 +1836,6 @@ t("los excluidos viejos (solo folio) se siguen leyendo, marcados como sin detall
   assert.equal(r.length, 2);
   assert.equal(r[0]._sinDetalle, true, "del viejo no se sabe el monto");
   assert.equal(r[0].monto, null);
-  close(S.totalExcluido(st), 500, 0.01);
 });
 // REGRESIÓN REAL: mergeEstados hacía [...new Set(...map(String))] sobre esta lista. Con los
 // renglones nuevos (objetos), String() da "[object Object]": el Set los colapsaba en UNO, se
@@ -1861,7 +1848,6 @@ t("fusionar excluidos NO los colapsa en [object Object]", () => {
   assert.equal(r.length, 2, "dos folios distintos siguen siendo dos");
   assert.deepEqual(r.map(S.folioDeIgnorado).sort(), ["EGR-a", "EGR-b"]);
   assert.ok(r.every(x => typeof x !== "string"), "conservan el detalle");
-  close(S.totalExcluido({ cortesIgnorados:r }), 20500);
 });
 t("el mismo folio en los dos dispositivos no se duplica", () => {
   const r = S._unirIgnorados([{ folio:"EGR-a", monto:100, ts:"2026-08-01T10:00:00Z" }],
@@ -1883,7 +1869,6 @@ t("mergeEstados conserva el detalle de los excluidos", () => {
   const local  = { weeks:[], cortesIgnorados:["EGR-b"] };
   const m = S.mergeEstados(remote, local);
   assert.equal(m.cortesIgnorados.length, 2);
-  close(S.totalExcluido(m), 20000, 0.01);
   assert.ok(m.cortesIgnorados.some(x => typeof x === "object" && x.monto === 20000),
             "el renglón con importe sobrevive al sync");
 });
@@ -1900,7 +1885,6 @@ t("folioDeIgnorado lee las dos formas", () => {
 });
 t("sin nada excluido, cero", () => {
   assert.deepEqual(S.egresosExcluidos({}), []);
-  close(S.totalExcluido({}), 0);
 });
 
 console.log("\n== conciliación SAT: el folio se compara contra la FACTURA, no contra el UUID ==");

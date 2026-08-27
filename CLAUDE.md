@@ -109,24 +109,26 @@ responses (strips markdown fences, then falls back to scanning for a balanced
 `{...}` block) before `json.loads`. Reuse this helper for any new
 document-reading endpoint rather than re-implementing JSON extraction.
 
-### Gmail integration — two near-duplicate files, only one is live
+### Gmail integration
 
-- `gmail_cicsa.py` (underscore) is the one actually imported by
-  `servidor_cicsa.py` (`from gmail_cicsa import fetch_invoice_attachments`).
-  It reads the OAuth token solely from the `GMAIL_TOKEN` env var (Railway has
-  a read-only filesystem, so it can't persist a refreshed token to disk).
-- `gmail-cicsa.py` (hyphen) is an **unused, not-imported** alternate version
-  with a different/older token-loading strategy (env var → Firebase → local
-  file, with a hardcoded Firebase key/project baked in). Python can't import a
-  module with a hyphen in its filename anyway, so this file is effectively
-  dead code — don't assume both are wired up, and don't be misled by its
-  similarity when only `gmail_cicsa.py` is on the request path. If Gmail
-  behavior needs to change, edit `gmail_cicsa.py`.
-- `sheets_cicsa.py` (Google Sheets sync for the `/sheets-*` routes) is
-  imported the same optional way (`try/except ImportError` → `SHEETS_AVAILABLE`)
-  but the file does not exist in this repo, so those routes currently 400 with
-  "No disponible". Treat any Sheets-related work as needing that module built
-  from scratch, not modified.
+- `gmail_cicsa.py` is imported by `servidor_cicsa.py`
+  (`from gmail_cicsa import fetch_invoice_attachments`) behind a
+  `try/except ImportError` → `GMAIL_AVAILABLE`. It reads the OAuth token solely
+  from the `GMAIL_TOKEN` env var (Railway has a read-only filesystem, so it
+  can't persist a refreshed token to disk). If Gmail behavior needs to change,
+  this is the file.
+- Older notes described a second `gmail-cicsa.py` (hyphen) sitting next to it.
+  That file is not in the repo — don't go looking for it.
+
+### There is no Google Sheets integration
+
+`sheets_cicsa.py` never existed in this repo. The `/sheets-*` routes that
+imported it were removed (they had answered `400 "No disponible"` since the
+day they were written), along with the frontend's `renderAprobaciones` /
+`aprobarGasto` / `syncSubir` / `syncBajar` — all four had empty bodies or wrote
+to DOM ids that no page contains. Sheets work means building the whole thing
+from scratch; the scaffolding is gone, and `git log` has it if you want to see
+what it looked like.
 
 ### Frontend structure (`index.html`)
 
