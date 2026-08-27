@@ -105,6 +105,7 @@ const FUNCS = [
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
   "cortesManualesSospechosos", "egresosExcluidos", "folioDeIgnorado", "_unirIgnorados",
+  "todosLosCortesNoContables",
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
@@ -1780,6 +1781,42 @@ t("un global tecleado sobre ese mismo estado se detecta, y explica los $384,542"
   // pero fuera del tramo, que es justo la distincion que hay que poder hacer.
   assert.equal(r.hallazgos.filter(h => h.dentroDelTramo).length, 4);
 });
+// El septimo global aparecio en el PDF de balance de julio: 03/jul $62,105. Con el, los cortes
+// tecleados a mano suman $446,647 y el ingreso correcto del periodo son los 133 importados.
+// Manejo de Cortes empezo a operar el 11 de julio, asi que los tres anteriores a esa fecha no
+// pueden ser ingreso de cortes; el codigo no puede saberlo, pero SI puede separarlos de los que
+// caen dentro del tramo, para no acusarlos de duplicados sin prueba.
+t("los siete globales se clasifican por su posicion respecto al tramo importado", () => {
+  S.state.weeks[0].cortes.push({ id:"glob6", fecha:"2026-07-03", monto:62105 });
+  const r = S.cortesManualesSospechosos(S.todosLosCortes(), "2026-07-01", "2026-08-02");
+  assert.equal(r.tramo.desde, "2026-07-11", "el primer corte importado es del 11 de julio");
+  assert.equal(r.tramo.hasta, "2026-08-02");
+  close(r.montoManual, 446647);
+  close(r.montoImportado, 430054);
+
+  const antes = r.hallazgos.filter(h => h.posicion === "antes");
+  assert.deepEqual(antes.map(h => h.fecha).sort(), ["2026-07-03","2026-07-07","2026-07-10"]);
+  close(antes.reduce((t, h) => t + h.monto, 0), 189847);
+
+  const dentro = r.hallazgos.filter(h => h.posicion === "dentro");
+  assert.deepEqual(dentro.map(h => h.fecha).sort(), ["2026-07-14","2026-07-18","2026-07-22","2026-07-24"]);
+  close(dentro.reduce((t, h) => t + h.monto, 0), 256800);
+
+  assert.equal(r.hallazgos.filter(h => h.posicion === "despues").length, 0);
+  // posicion y dentroDelTramo no pueden contradecirse: el panel usa las dos.
+  assert.ok(r.hallazgos.every(h => h.dentroDelTramo === (h.posicion === "dentro")));
+});
+// Marcar NO borra: el movimiento se conserva, deja de sumar, y el total baja exactamente por el
+// monto excluido. Sin esto, "excluir" seria indistinguible de perder un dato.
+t("excluir los siete deja el ingreso en los $430,054 de los cortes importados", () => {
+  const antes = S.todosLosCortes().reduce((t, c) => t + c.monto, 0);
+  close(antes, 876701, 0.01);                       // 430,054 importados + 446,647 tecleados
+  S.state.weeks[0].cortes.filter(c => !c._folioCorte)
+    .forEach(c => { c._noContable = { motivo:"prueba", por:"", ts:"2026-08-27T00:00:00Z" }; });
+  close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), 430054, 0.01);
+  close(S.todosLosCortesNoContables().reduce((t, c) => t + c.monto, 0), 446647, 0.01);
+  assert.equal(S.state.weeks[0].cortes.length, 140, "no se borro ni uno: 133 + 7");
+});
 
 console.log("\n== auditoría de caja: doble conteo de ingresos y egresos excluidos ==");
 // Caso real: el balance mostro $814,596 de ingreso cuando los 133 cortes del archivo suman
@@ -1805,6 +1842,21 @@ t("si no hay cortes importados no se acusa a nadie", () => {
   const r = S.cortesManualesSospechosos([{ id:"m1", fecha:"2026-07-18", monto:63175 }], "", "");
   assert.equal(r.hallazgos.length, 1, "se lista");
   assert.equal(r.hallazgos[0].dentroDelTramo, false, "pero NO como doble conteo: no hay tramo importado");
+});
+t("un global POSTERIOR al ultimo corte importado tambien queda fuera del tramo", () => {
+  const r = S.cortesManualesSospechosos([
+    { id:"i1", fecha:"2026-07-11", monto:10000, _folioCorte:"RCE-1" },
+    { id:"i2", fecha:"2026-07-20", monto:12000, _folioCorte:"RCE-2" },
+    { id:"m1", fecha:"2026-07-28", monto:50000 },
+  ], "2026-07-01", "2026-07-31");
+  assert.equal(r.hallazgos.length, 1);
+  assert.equal(r.hallazgos[0].posicion, "despues");
+  assert.equal(r.hallazgos[0].dentroDelTramo, false, "fuera del tramo no es doble conteo");
+});
+t("sin ningun corte importado, la posicion es sin_tramo: no hay contra que comparar", () => {
+  const r = S.cortesManualesSospechosos([{ id:"m1", fecha:"2026-07-18", monto:63175 }], "", "");
+  assert.equal(r.hallazgos[0].posicion, "sin_tramo");
+  assert.equal(r.hallazgos[0].dentroDelTramo, false);
 });
 t("solo con cortes importados no hay hallazgos", () => {
   const r = S.cortesManualesSospechosos([{ id:"i1", fecha:"2026-07-18", monto:10000, _folioCorte:"RCE-1" }], "", "");

@@ -1926,7 +1926,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-27-a";
+const APP_BUILD = "2026-08-27-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -10516,16 +10516,28 @@ function cortesManualesSospechosos(cortes, ini, fin){
   const lista = (cortes||[]).filter(c=>c && enRango(c.fecha));
   const importados = lista.filter(c=>c._folioCorte);
   const manuales   = lista.filter(c=>!c._folioCorte);
-  if(!manuales.length) return { manuales:[], montoManual:0, montoImportado:0, diasConAmbos:[], hallazgos:[] };
+  if(!manuales.length) return { manuales:[], montoManual:0, montoImportado:0, diasConAmbos:[], hallazgos:[], tramo:null };
   // Días que ya tienen cortes importados: un global tecleado que cae dentro del tramo cubierto
   // por la importación es el caso sospechoso.
   const diasImp = new Set(importados.map(c=>c.fecha));
   const fechasImp = [...diasImp].sort();
   const desde = fechasImp[0] || "", hasta = fechasImp[fechasImp.length-1] || "";
+  // Dónde cae cada global respecto al tramo que cubren los cortes importados. Los tres casos
+  // significan cosas distintas y no se pueden mezclar en una sola tabla:
+  //   dentro     → esos días YA tienen cortes individuales: sumar el global los cuenta dos veces.
+  //   antes/después → el global cae en días que la importación no cubre. O es ingreso legítimo
+  //                   que nunca se importó, o es un tecleo sobre días en que no hubo operación.
+  //                   Solo quien lleva la caja puede decir cuál, así que aquí se señala, no se juzga.
+  //   sin_tramo  → no hay ni un corte importado en el periodo: no hay contra qué comparar y no
+  //                se reporta nada, para no convertir toda captura manual en una alarma.
   const hallazgos = manuales.map(c=>{
     const m = parseFloat(c.monto)||0;
     const dentro = !!desde && c.fecha>=desde && c.fecha<=hasta;
-    return { id:c.id, fecha:c.fecha, monto:m, mismoDia:diasImp.has(c.fecha), dentroDelTramo:dentro };
+    const posicion = !desde ? "sin_tramo"
+                   : dentro ? "dentro"
+                   : (c.fecha < desde ? "antes" : "despues");
+    return { id:c.id, fecha:c.fecha, monto:m, mismoDia:diasImp.has(c.fecha),
+             dentroDelTramo:dentro, posicion };
   }).sort((a,b)=>b.monto-a.monto);
   return {
     manuales, hallazgos,
@@ -10939,8 +10951,32 @@ function _pintarAuditoriaCaja(){
           <td style="text-align:right">${esAdminCaja?`<button onclick="revertirCorteNoContable('${escAttrJs(c.id)}')" style="border:1px solid var(--vd);background:#fff;color:var(--vd);border-radius:6px;padding:2px 8px;font-size:10.5px;cursor:pointer;white-space:nowrap">Revertir</button>`:""}</td></tr>`).join("")}
       </tbody></table></div></div>`;
   }
-  if(diag.hallazgos.length){
-    const dentro = diag.hallazgos.filter(x=>x.dentroDelTramo);
+  // Un global fuera del tramo importado NO es doble conteo, así que va en su propio bloque:
+  // meterlo en la tabla roja diría que está duplicado sin que nadie lo haya comprobado. Antes no
+  // se pintaba en ningún lado, y como el botón Excluir vive en estas tablas, esos movimientos no
+  // se podían marcar desde la app aunque el administrador supiera que sobran.
+  const fueraTramo = diag.hallazgos.filter(x=>x.posicion==="antes" || x.posicion==="despues");
+  if(fueraTramo.length){
+    const monto = fueraTramo.reduce((t,x)=>t+x.monto,0);
+    h += `<div style="background:#FFF3E0;border:1.5px solid var(--naranja);border-radius:10px;padding:12px 14px;margin-top:16px">
+      <div style="font-weight:700;color:var(--naranja);font-size:13px">⚠ Ingreso capturado a mano fuera del tramo importado: ${fmt(monto)}</div>
+      <div style="font-size:12px;color:var(--txt2);margin:6px 0 8px">
+        ${fueraTramo.length===1?"Hay <strong>1</strong> corte tecleado":`Hay <strong>${fueraTramo.length}</strong> cortes tecleados`}
+        a mano en días que los cortes importados no cubren${diag.tramo?` (van del ${fmtDate(diag.tramo.desde)} al ${fmtDate(diag.tramo.hasta)})`:""}.
+        Caben dos explicaciones y solo tú puedes elegir: o es efectivo real que nunca se importó de
+        Manejo de Cortes, o es un global tecleado sobre días en los que no hubo esa operación.
+        Si es lo segundo, el ingreso del periodo está inflado por esa cantidad.
+      </div>
+      <div class="tbl-wrap"><table style="width:100%;font-size:12px"><thead><tr>
+        <th>Fecha</th><th style="text-align:right">Monto</th><th></th><th></th></tr></thead><tbody>
+        ${fueraTramo.map(x=>`<tr><td style="white-space:nowrap">${esc(fmtDate(x.fecha))}</td>
+          <td class="amount-cell">${fmt(x.monto)}</td>
+          <td style="font-size:11px;color:var(--txt2)">${x.posicion==="antes"?"antes del primer corte importado":"después del último corte importado"}</td>
+          <td style="text-align:right">${esAdminCaja?`<button onclick="marcarCorteNoContable('${escAttrJs(x.id)}','Capturado a mano en días que los cortes importados no cubren')" style="border:1px solid var(--naranja);background:#fff;color:var(--naranja);border-radius:6px;padding:2px 8px;font-size:10.5px;cursor:pointer;white-space:nowrap">Excluir</button>`:""}</td></tr>`).join("")}
+      </tbody></table></div></div>`;
+  }
+  const dentro = diag.hallazgos.filter(x=>x.dentroDelTramo);
+  if(dentro.length){
     const monto = dentro.reduce((t,x)=>t+x.monto,0);
     h += `<div style="background:#FFEBEE;border:1.5px solid var(--red);border-radius:10px;padding:12px 14px;margin-top:16px">
       <div style="font-weight:700;color:var(--red);font-size:13px">⚠ Ingreso posiblemente contado dos veces: ${fmt(monto)}</div>
@@ -10951,8 +10987,8 @@ function _pintarAuditoriaCaja(){
         y el cierre ya está dentro de los cortes del día. <strong>Revísalos antes de borrar nada.</strong>
       </div>
       <div class="tbl-wrap"><table style="width:100%;font-size:12px"><thead><tr>
-        <th>Fecha</th><th style="text-align:right">Monto</th><th></th></tr></thead><tbody>
-        ${dentro.map(x=>`<tr><td>${esc(fmtDate(x.fecha))}</td>
+        <th>Fecha</th><th style="text-align:right">Monto</th><th></th><th></th></tr></thead><tbody>
+        ${dentro.map(x=>`<tr><td style="white-space:nowrap">${esc(fmtDate(x.fecha))}</td>
           <td class="amount-cell">${fmt(x.monto)}</td>
           <td style="font-size:11px;color:var(--txt2)">${x.mismoDia?"ese día ya tiene cortes importados":"dentro del tramo importado"}</td>
           <td style="text-align:right">${esAdminCaja?`<button onclick="marcarCorteNoContable('${escAttrJs(x.id)}','Cierre acumulado: sus cortes individuales ya están capturados')" style="border:1px solid var(--red);background:#fff;color:var(--red);border-radius:6px;padding:2px 8px;font-size:10.5px;cursor:pointer;white-space:nowrap">Excluir</button>`:""}</td></tr>`).join("")}
