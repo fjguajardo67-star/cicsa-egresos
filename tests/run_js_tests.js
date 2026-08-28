@@ -113,6 +113,7 @@ const FUNCS = [
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
+  "clasificarDiferenciaSAT",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
   "_cfdiTipoDesdeTexto", "filtrarCfdisConciliables", "autodetectarRfcPropio",
@@ -1700,6 +1701,131 @@ t("vincular un folio que estaba excluido tambien lo saca de la lista", () => {
 // nueve dias por $150,164.00, y el reporte no dijo nada — cuadraba consigo mismo porque nunca
 // supo que ese tramo debia existir. La deduplicacion es por folio: un folio que jamas llego no se
 // puede detectar por su ausencia.
+console.log("\n== 'diferencia de monto' que en realidad es la misma factura dos veces ==");
+// Siete renglones en pantalla con el Monto CICSA EXACTAMENTE al doble del Total SAT. No es que
+// el proveedor haya facturado otra cosa: es una factura dividida cuyo padre y cuyas categorias
+// sueltas siguen guardados los dos. Como la tabla no ensenaba el folio, se leia como un problema
+// del comprobante —que esta bien— en vez de uno de la captura.
+const _dif = (total, gastos) => ({
+  cfdi:{ total, fecha:"2026-07-06", proveedor:"ONUS COMERCIAL" },
+  gastos, capturado: Math.round(gastos.reduce((s,g)=>s+g.importe,0)*100)/100,
+});
+
+t("EL caso: padre Dividida + sus categorias sueltas dan el doble exacto", () => {
+  const d = _dif(34034.36, [
+    { id:"p", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:34034.36, categoria:"Dividida",
+      _partidas:[{categoria:"Carnicos",importe:20000},{categoria:"Abarrotes",importe:14034.36}] },
+    { id:"h1", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:20000, categoria:"Carnicos" },
+    { id:"h2", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:14034.36, categoria:"Abarrotes" },
+  ]);
+  const c = S.clasificarDiferenciaSAT(d);
+  assert.equal(c.tipo, "duplicado", "no es una diferencia contra el SAT");
+  assert.ok(/dividida/i.test(c.motivo), "y se dice por que");
+  close(c.excedente, 34034.36, 0.01, "lo contado de mas es exactamente un comprobante");
+  assert.equal(c.uniforme, true, "proveedor y folio identicos: se puede consolidar de un boton");
+});
+
+t("la misma factura capturada dos veces, sin division, tambien", () => {
+  const d = _dif(2504, [
+    { id:"a", proveedor:"NUEVA WAL MART DE MEXICO", factura:"WM-88", fecha:"2026-07-07", importe:2504, categoria:"Abarrotes" },
+    { id:"b", proveedor:"NUEVA WAL MART DE MEXICO", factura:"WM-88", fecha:"2026-07-07", importe:2504, categoria:"Abarrotes" },
+  ]);
+  const c = S.clasificarDiferenciaSAT(d);
+  assert.equal(c.tipo, "duplicado");
+  assert.equal(c.exacto, true);
+  assert.ok(/2 veces/.test(c.motivo));
+});
+
+t("si el FOLIO no coincide, sigue siendo una diferencia de verdad", () => {
+  // Dos facturas distintas del mismo proveedor y dia existen. Sin folio igual no se puede
+  // afirmar que sean la misma, y afirmarlo escondería una diferencia real.
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"F-2", fecha:"2026-07-06", importe:1000 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+t("si la FECHA no coincide, tampoco se declara duplicado", () => {
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"F-1", fecha:"2026-07-09", importe:1000 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+t("si el PROVEEDOR no se parece, tampoco", () => {
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"ONUS COMERCIAL", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"OFFICE DEPOT", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+t("un renglon sin folio nunca se agrupa como duplicado", () => {
+  // Sin folio no hay con que afirmar que sean la misma factura.
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"", fecha:"2026-07-06", importe:1000 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+
+t("un SOLO gasto con importe distinto es una diferencia real, no un duplicado", () => {
+  // Es un dedo en el monto: hay que ir al comprobante.
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1500 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+
+t("capturado POR DEBAJO del comprobante NO es contado de mas: falta un pedazo", () => {
+  // Ahi el reporte esta corto, no inflado, y esconderlo dejaria dinero sin capturar.
+  const c = S.clasificarDiferenciaSAT(_dif(10000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:4000, categoria:"Carnicos" },
+    { id:"b", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:3000, categoria:"Abarrotes" },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+
+t("folio equivalente pero tecleado distinto: es duplicado, pero NO consolidable de un boton", () => {
+  // consolidarFacturaDividida() fusiona por proveedor y folio EXACTOS; con folios equivalentes
+  // no encontraria el grupo y diria "ya no hay duplicados". Ofrecer el boton seria mentir.
+  const c = S.clasificarDiferenciaSAT(_dif(5000, [
+    { id:"a", proveedor:"X", factura:"PBAL31598", fecha:"2026-07-06", importe:5000 },
+    { id:"b", proveedor:"X", factura:"31598", fecha:"2026-07-06", importe:5000 },
+  ]));
+  assert.equal(c.tipo, "duplicado");
+  assert.equal(c.uniforme, false);
+});
+
+t("conciliarSAT los saca de diferencias y los pone en duplicados", () => {
+  // La prueba de integracion: la tabla de "Diferencias de monto" deja de acusar al comprobante.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"p",  proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:34034.36, categoria:"Dividida",
+      _partidas:[{categoria:"Carnicos",importe:34034.36}] },
+    { id:"h1", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:34034.36, categoria:"Carnicos" },
+  ]}]};
+  const r = S.conciliarSAT([
+    { uuid:"U-1", folio:"U-1", serie:"A-", folioComp:"1201", rfc:"AAA010101AAA",
+      proveedor:"ONUS COMERCIAL", fecha:"2026-07-06", total:34034.36, receptorRfc:"XAXX010101000" }
+  ], "2026-07-01", "2026-07-31", "XAXX010101000");
+  assert.equal(r.diferencias.length, 0, "ya no acusa al comprobante");
+  assert.equal(r.duplicados.length, 1, "lo reporta como lo que es: contado de mas");
+  close(r.duplicados[0].clase.excedente, 34034.36, 0.01);
+});
+
+t("una diferencia de monto de verdad SIGUE saliendo en diferencias", () => {
+  // El riesgo de esta reclasificacion es tragarse las diferencias reales. No se traga ninguna.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"g1", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:20000, categoria:"Carnicos" },
+  ]}]};
+  const r = S.conciliarSAT([
+    { uuid:"U-1", folio:"U-1", serie:"A-", folioComp:"1201", rfc:"AAA010101AAA",
+      proveedor:"ONUS COMERCIAL", fecha:"2026-07-06", total:34034.36, receptorRfc:"XAXX010101000" }
+  ], "2026-07-01", "2026-07-31", "XAXX010101000");
+  assert.equal(r.duplicados.length, 0);
+  assert.equal(r.diferencias.length, 1);
+  close(r.diferencias[0].diferencia, 14034.36, 0.01);
+});
+
 console.log("\n== cobertura de periodos: el hueco que nadie avisaba ==");
 
 const _M = (ini, fin, extra) => ({ ini, fin, emitido:(extra&&extra.emitido)||"", ...(extra||{}) });
