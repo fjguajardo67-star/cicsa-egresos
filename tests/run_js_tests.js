@@ -103,7 +103,7 @@ const FUNCS = [
   "variantesLlaveMenu", "llavesMenuDeFila",
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "_cfdiNomina", "corridasDeNomina", "corridaNominaRegistrada", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
-  "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
+  "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista", "resolverPeriodoSP",
   "cortesManualesSospechosos", "egresosExcluidos", "folioDeIgnorado", "_unirIgnorados",
   "puedeEntrar", "_bytesUtf8", "medirEstado", "contarMovimientos", "hayQueSubir",
   "datosDeCaptura",
@@ -1016,8 +1016,37 @@ t("un reloj adelantado no produce 'hace -3 min'", () => {
   assert.equal(S.textoSync(ahora + 180_000, ahora), "⟳ al día");
 });
 
+console.log("\n== el periodo compartido, resuelto a fechas de verdad ==");
+// getPeriodoSP() en modo semana devuelve weekId y etiqueta, SIN ini/fin. Todo lo que compare
+// fechas contra el periodo tiene que pasar por resolverPeriodoSP() o se queda ciego.
+const WKS = [
+  { id: "w1", ini: "2026-08-17", fin: "2026-08-23", label: "17 al 23 ago 2026" },
+  { id: "w2", ini: "2026-08-24", fin: "2026-08-30", label: "24 al 30 ago 2026" },
+];
+t("modo semana: saca las fechas de la semana seleccionada", () => {
+  const r = S.resolverPeriodoSP({ modo: "semana", weekId: "w2", label: "24 al 30 ago 2026" }, WKS);
+  assert.equal(r.ini, "2026-08-24");
+  assert.equal(r.fin, "2026-08-30");
+  assert.equal(r.modo, "semana");
+});
+t("modo rango: respeta las fechas que eligió el usuario", () => {
+  const r = S.resolverPeriodoSP({ modo: "rango", ini: "2026-07-04", fin: "2026-08-02", label: "04 jul 2026 al 02 ago 2026" }, WKS);
+  assert.equal(r.ini, "2026-07-04");
+  assert.equal(r.fin, "2026-08-02");
+  assert.equal(r.modo, "rango");
+});
+t("una semana vieja sin rango no inventa fechas", () => {
+  const r = S.resolverPeriodoSP({ modo: "semana", weekId: "vieja" }, [{ id: "vieja", label: "Semana 3" }]);
+  assert.equal(r.ini, "");
+  assert.equal(r.fin, "");
+});
+t("sin periodo y sin semanas no truena", () => {
+  const r = S.resolverPeriodoSP(null, null);
+  assert.deepEqual(r, { modo: "semana", ini: "", fin: "", label: "" });
+});
+
 console.log("\n== un gasto guardado que no se ve: hay que decirlo ==");
-const PER = { ini: "2026-08-03", fin: "2026-08-09", label: "03 al 09 ago 2026" };
+const PER = { modo: "semana", ini: "2026-08-03", fin: "2026-08-09", label: "03 al 09 ago 2026" };
 t("un gasto dentro del periodo no genera aviso", () => {
   assert.equal(S.avisoGastoFueraDeVista("2026-08-05", PER, ""), "");
   assert.equal(S.avisoGastoFueraDeVista("2026-08-03", PER, ""), "", "el primer día cuenta");
@@ -1026,13 +1055,16 @@ t("un gasto dentro del periodo no genera aviso", () => {
 t("una factura de Gmail con fecha de otro periodo avisa que no se va a ver", () => {
   // El caso reportado: se captura desde Gmail, se guarda bien, y no aparece en Gastos,
   // Auditoría ni Presupuesto porque esas vistas filtran por FECHA, no por semana.
-  const conSemana = [{ ini: "2026-07-13", fin: "2026-07-19" }];
+  const conSemana = [{ ini: "2026-07-13", fin: "2026-07-19", label: "13 al 19 jul 2026" }];
   const m = S.avisoGastoFueraDeVista("2026-07-15", PER, "", conSemana);
   assert.ok(/FUERA del periodo/.test(m));
   assert.ok(/03 al 09 ago 2026/.test(m), "dice a qué periodo estás mirando");
-  assert.ok(/Se guardó/.test(m), "deja claro que SÍ se guardó");
+  assert.ok(/Se guardó bien/.test(m), "deja claro que SÍ se guardó");
 });
-const SEMANAS = [{ ini: "2026-08-03", fin: "2026-08-09" }, { ini: "2026-08-17", fin: "2026-08-23" }];
+const SEMANAS = [
+  { ini: "2026-08-03", fin: "2026-08-09", label: "03 al 09 ago 2026" },
+  { ini: "2026-08-17", fin: "2026-08-23", label: "17 al 23 ago 2026" },
+];
 t("una fecha posterior al periodo también avisa", () => {
   assert.ok(/FUERA del periodo/.test(S.avisoGastoFueraDeVista("2026-08-19", PER, "", SEMANAS)));
 });
@@ -1040,19 +1072,63 @@ t("si NO existe la semana que cubre la fecha, se dice que hay que crearla", () =
   // Caso real: facturas del 10 al 16 de agosto sin esa semana creada. Como las vistas filtran
   // por fecha y no por bolsa, no había NINGÚN periodo donde pudieran verse.
   const m = S.avisoGastoFueraDeVista("2026-08-12", PER, "", SEMANAS);
-  assert.ok(/NO cae en ninguna semana creada/.test(m));
+  assert.ok(/NINGUNA semana creada/.test(m));
   assert.ok(/no hay que recapturarlo/.test(m), "hay que decir que el dato no se perdió");
   assert.ok(!/cámbiate/i.test(m), "no mandar a un periodo que no existe");
 });
-t("si la semana sí existe, se manda a cambiarse a ella", () => {
+t("si la semana sí existe, se manda a cambiarse a ella POR SU NOMBRE", () => {
+  // Antes decía "cámbiate a la semana que le toca" sin decir a cuál. Nombrarla es la diferencia
+  // entre un aviso accionable y uno que sólo preocupa.
   const m = S.avisoGastoFueraDeVista("2026-08-19", PER, "", SEMANAS);
-  assert.ok(/te cambies a la semana que le toca/.test(m));
+  assert.ok(/Cámbiate a la semana «17 al 23 ago 2026»/.test(m));
   assert.ok(!/crea la semana/i.test(m));
 });
+t("una semana sin etiqueta se nombra por sus fechas", () => {
+  const m = S.avisoGastoFueraDeVista("2026-08-19", PER, "", [{ ini: "2026-08-17", fin: "2026-08-23" }]);
+  assert.ok(/2026-08-17 al 2026-08-23/.test(m), "sin fmtDate en el sandbox van las fechas crudas");
+});
 t("los bordes de una semana existente cuentan como cubiertos", () => {
-  assert.ok(/te cambies/.test(S.avisoGastoFueraDeVista("2026-08-17", PER, "", SEMANAS)), "primer día");
-  assert.ok(/te cambies/.test(S.avisoGastoFueraDeVista("2026-08-23", PER, "", SEMANAS)), "último día");
-  assert.ok(/ninguna semana creada/.test(S.avisoGastoFueraDeVista("2026-08-24", PER, "", SEMANAS)));
+  assert.ok(/Cámbiate a la semana/.test(S.avisoGastoFueraDeVista("2026-08-17", PER, "", SEMANAS)), "primer día");
+  assert.ok(/Cámbiate a la semana/.test(S.avisoGastoFueraDeVista("2026-08-23", PER, "", SEMANAS)), "último día");
+  assert.ok(/NINGUNA semana creada/.test(S.avisoGastoFueraDeVista("2026-08-24", PER, "", SEMANAS)));
+});
+t("el aviso dice que el periodo NO es la semana de captura de esa pantalla", () => {
+  // El reporte que lo destapó: la barra lateral decía "24 al 30 ago 2026", el gasto era del 26,
+  // aparecía en Gastos, y el aviso hablaba de "04 jul al 02 ago". Eran dos periodos distintos y
+  // el mensaje llamaba al invisible "el periodo que estás viendo".
+  const m = S.avisoGastoFueraDeVista("2026-08-19", PER, "", SEMANAS);
+  assert.ok(/NO es la semana de captura de esta pantalla/.test(m));
+  assert.ok(/Gastos, Presupuesto o Seguimiento/.test(m), "hay que decir dónde se cambia");
+});
+t("en modo rango no se manda a ninguna semana: se manda a cambiar el rango", () => {
+  // Exactamente el caso del reporte: un rango olvidado de la importación de cortes.
+  const RANGO = { modo: "rango", ini: "2026-07-04", fin: "2026-08-02", label: "04 jul 2026 al 02 ago 2026" };
+  const m = S.avisoGastoFueraDeVista("2026-08-26", RANGO, "", WKS);
+  assert.ok(/04 jul 2026 al 02 ago 2026/.test(m), "nombra el rango culpable");
+  assert.ok(/Rango de fechas/.test(m), "dice en qué modo está");
+  assert.ok(/Semana guardada/.test(m), "y cómo salirse de él");
+  assert.ok(!/Cámbiate a la semana/.test(m), "en modo rango no hay semana a la que cambiarse");
+  assert.ok(!/NINGUNA semana creada/.test(m), "tampoco se pide crear semanas");
+});
+t("el aviso en modo semana no se queda mudo por falta de fechas", () => {
+  // La regresión de fondo: guardarGasto le pasaba getPeriodoSP() crudo, que en modo semana
+  // llega sin ini/fin, así que el aviso devolvía "" SIEMPRE en el modo por default. Encadenar
+  // resolverPeriodoSP() es lo que lo despierta.
+  const crudo = { modo: "semana", weekId: "w2", label: "24 al 30 ago 2026" };
+  assert.equal(S.avisoGastoFueraDeVista("2026-07-15", crudo, "", WKS), "", "sin fechas no puede comparar");
+  const resuelto = S.resolverPeriodoSP(crudo, WKS);
+  assert.ok(/FUERA del periodo/.test(S.avisoGastoFueraDeVista("2026-07-15", resuelto, "", WKS)));
+});
+t("guardarGasto le pasa el periodo YA resuelto a fechas, no el crudo", () => {
+  // Guardia sobre el código fuente. La prueba de arriba demuestra que con getPeriodoSP() crudo
+  // el aviso se queda mudo; ésta impide que alguien vuelva a cablearlo así. No hay DOM ni
+  // localStorage en el sandbox, así que el cableado sólo se puede vigilar de forma textual.
+  const m = script.match(/_fueraDeVista = avisoGastoFueraDeVista\([\s\S]{0,400}?\);/);
+  assert.ok(m, "no encontré la llamada en guardarGasto");
+  assert.ok(m[0].includes("periodoSPRango"),
+            "el aviso necesita ini/fin: sin periodoSPRango() no compara nada en modo semana");
+  assert.ok(!/getPeriodoSP\s*\(/.test(m[0]),
+            "getPeriodoSP() crudo no trae fechas en modo semana — el aviso vuelve a quedarse mudo");
 });
 t("la fecha de corte gana: ese gasto no se ve en NINGUNA consulta", () => {
   const m = S.avisoGastoFueraDeVista("2026-06-01", PER, "2026-07-01");

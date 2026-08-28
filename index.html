@@ -1942,7 +1942,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-e";
+const APP_BUILD = "2026-08-28-f";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3090,6 +3090,19 @@ function getPeriodoSP(){
   const wk = state.weeks.find(w=>w.id===raw.weekId) || getActiveWeek();
   return { modo:"semana", weekId: wk?.id||null, label: wk?.label||"Sin semana" };
 }
+// El periodo compartido resuelto a FECHAS CONCRETAS. En modo "rango" son las dos que eligió el
+// usuario; en modo "semana" son las de la semana guardada que está seleccionada. getPeriodoSP()
+// NO trae ini/fin en modo semana —sólo weekId y etiqueta—, así que quien necesite comparar una
+// fecha contra el periodo tiene que pasar por aquí.
+// No hacerlo fue exactamente el error del aviso "queda FUERA del periodo": recibía el periodo
+// crudo, en modo semana llegaba sin ini/fin y por eso NUNCA avisaba, y en modo rango sí avisaba
+// pero mandando a "la semana que le toca" cuando no había ninguna semana de por medio.
+function resolverPeriodoSP(p, semanas){
+  const per = p || {};
+  if(per.modo === "rango") return { modo:"rango", ini:per.ini||"", fin:per.fin||"", label:per.label||"" };
+  const wk = (semanas||[]).find(w => w && w.id === per.weekId);
+  return { modo:"semana", ini:(wk&&wk.ini)||"", fin:(wk&&wk.fin)||"", label:per.label||"" };
+}
 function setPeriodoSP(patch){
   try{ localStorage.setItem(PERIODO_SP_KEY, JSON.stringify({...getPeriodoSPRaw(), ...patch})); }catch(e){}
 }
@@ -3935,21 +3948,32 @@ function avisoGastoFueraDeVista(fecha, periodo, fechaCorte, semanas){
            `así que NO va a aparecer en Gastos, Auditoría ni Presupuesto. Quita o mueve el corte para verlo.`;
   }
   const ini = periodo && periodo.ini, fin = periodo && periodo.fin;
-  if(ini && fin && (f < ini || f > fin)){
-    const etq = (periodo && periodo.label) ? periodo.label : `${d(ini)} al ${d(fin)}`;
-    // Decir "cámbiate al periodo que le toca" no sirve de nada si ese periodo NO EXISTE: como las
-    // vistas filtran por fecha y no por semana, un gasto cuya fecha no cae en ninguna semana
-    // creada no se puede ver en modo semana por ningún lado. Crear la semana lo destapa solo.
-    const hay = (semanas||[]).some(w => w && w.ini && w.fin && f >= w.ini && f <= w.fin);
-    if(!hay){
-      return `Se guardó, pero su fecha (${d(f)}) NO cae en ninguna semana creada, así que no se ve `+
-             `en Gastos, Auditoría ni Presupuesto. Crea la semana que cubra esa fecha (en Semanas) `+
-             `y aparece solo — no hay que recapturarlo.`;
-    }
-    return `Se guardó, pero su fecha (${d(f)}) queda FUERA del periodo que estás viendo (${etq}), `+
-           `así que no lo vas a ver en Gastos, Auditoría ni Presupuesto hasta que te cambies a la semana que le toca.`;
+  if(!(ini && fin) || (f >= ini && f <= fin)) return "";
+  const etq = (periodo && periodo.label) ? periodo.label : `${d(ini)} al ${d(fin)}`;
+  // El aviso decía "el periodo que estás viendo" y eso confundía más de lo que ayudaba: en la
+  // pantalla de Captura el único periodo a la vista es la SEMANA DE CAPTURA de la barra lateral,
+  // y no es ése el que se compara. El que se compara es el periodo de consulta, que se elige en
+  // Gastos/Presupuesto/Seguimiento, se guarda solo y puede haber quedado en un rango viejo. El
+  // reporte fue justamente ese choque: la semana decía "24 al 30 ago" y el aviso "04 jul al 02
+  // ago", que era un rango olvidado en la otra pantalla. Por eso ahora se nombra de dónde sale.
+  const base = `Se guardó bien, pero su fecha (${d(f)}) queda FUERA del periodo con el que estás `+
+               `consultando (${etq}), así que todavía no lo vas a ver en Gastos, Auditoría ni Presupuesto.`;
+  const donde = `Ojo: ese periodo NO es la semana de captura de esta pantalla — se elige en Gastos, `+
+                `Presupuesto o Seguimiento, y se queda guardado.`;
+  if((periodo && periodo.modo) === "rango"){
+    return `${base} ${donde} Ahí lo tienes en modo «Rango de fechas»: cámbialo a «Semana guardada» `+
+           `o mueve el rango para que incluya esa fecha.`;
   }
-  return "";
+  // Mandar a "la semana que le toca" no sirve de nada si esa semana NO EXISTE: como las vistas
+  // filtran por fecha y no por bolsa, un gasto cuya fecha no cae en ninguna semana creada no se
+  // puede ver en modo semana por ningún lado. Crear la semana lo destapa solo.
+  const suya = (semanas||[]).find(w => w && w.ini && w.fin && f >= w.ini && f <= w.fin);
+  if(!suya){
+    return `${base} Y su fecha no cae en NINGUNA semana creada: crea la semana que la cubra (en `+
+           `Semanas) y aparece sola — no hay que recapturarlo.`;
+  }
+  const etqSuya = suya.label || `${d(suya.ini)} al ${d(suya.fin)}`;
+  return `${base} ${donde} Cámbiate a la semana «${etqSuya}», que es la que cubre esa fecha.`;
 }
 
 function guardarGasto(){
@@ -4039,8 +4063,10 @@ function guardarGasto(){
   _fechaAsumida = false;
   let _fueraDeVista = "";
   try{
+    // periodoSPRango() y no getPeriodoSP(): el segundo no trae fechas en modo semana, y sin
+    // fechas este aviso no puede comparar nada. Así estuvo mudo en el modo por default.
     _fueraDeVista = avisoGastoFueraDeVista(gasto.fecha,
-      (typeof getPeriodoSP==="function" ? getPeriodoSP() : null),
+      (typeof periodoSPRango==="function" ? periodoSPRango() : null),
       (typeof fechaCorteDatos==="function" ? fechaCorteDatos() : ""),
       (state && state.weeks) || []);
   }catch(_){}
@@ -4813,12 +4839,7 @@ function ingresosDetalle(cfdis, ini, fin, rfcEmpresa){
 }
 
 // Rango del periodo elegido, en fechas concretas (la semana guardada trae ini/fin propios).
-function _rangoBalance(){
-  const p=getPeriodoSP();
-  if(p.modo==="rango") return { ini:p.ini||"", fin:p.fin||"", label:p.label };
-  const wk=state.weeks.find(w=>w.id===p.weekId);
-  return { ini:wk?.ini||"", fin:wk?.fin||"", label:p.label };
-}
+function _rangoBalance(){ return periodoSPRango(); }
 // Mismo desglose que muestra Auditoría, para que el reporte y esa pantalla cuadren.
 function _egresosPorProveedor(){
   const t={};
@@ -8734,13 +8755,7 @@ function cambiarCategoriaGasto(id, cat){
   if(document.getElementById("reporteContent")) renderReporteActual();
 }
 // Rango de fechas del periodo compartido (para drill-down desde Presupuesto a Auditoría).
-function periodoSPRango(){
-  const p=getPeriodoSP();
-  if(p.modo==="rango") return { ini:p.ini, fin:p.fin };
-  const wk=state.weeks.find(w=>w.id===p.weekId);
-  if(wk && wk.ini && wk.fin) return { ini:wk.ini, fin:wk.fin };
-  return { ini:"", fin:"" };
-}
+function periodoSPRango(){ return resolverPeriodoSP(getPeriodoSP(), state.weeks); }
 // Salta a Auditoría filtrado por esta categoría y el periodo actual, donde cada factura se puede
 // reclasificar o borrar. Hace "editable" el gastado de una categoría del Presupuesto.
 function editarGastosCategoria(cat){
