@@ -1942,7 +1942,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-f";
+const APP_BUILD = "2026-08-28-g";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4156,7 +4156,7 @@ function renderGastos(){
   const filtrados=filtroValFinal?gastos.filter(g=>g.categoria===filtroValFinal||(g._partidas||[]).some(p=>p.categoria===filtroValFinal)):gastos;
   const total=filtrados.reduce((s,g)=>s+g.importe,0);
   document.getElementById("totalSemana").textContent=fmt(total);
-  document.getElementById("totalEfectivoSemana").textContent=fmt(filtrados.filter(esGastoEfectivo).reduce((s,g)=>s+g.importe,0));
+  document.getElementById("totalEfectivoSemana").textContent=fmt(filtrados.reduce((s,g)=>s+montoEfectivoGasto(g),0));
   const tbody=document.getElementById("gastosBody");
   tbody.innerHTML="";
   document.getElementById("gastosEmpty").style.display=filtrados.length===0?"block":"none";
@@ -9212,7 +9212,7 @@ function renderPagos(){
   const vencidas=pendientes.filter(g=>{const d=diasRestantes(g.vencimiento);return d!==null&&d<0;}),proximas=pendientes.filter(g=>{const d=diasRestantes(g.vencimiento);return d!==null&&d>=0&&d<=7;});
   // Efectivo de la SEMANA ACTIVA (no todas las semanas) para poder cuadrar 1:1 contra
   // "Total efectivo" de Gastos y "Pagado de caja" de Caja — las tres deben coincidir.
-  const efectivoSemana=gastosSemana().filter(esGastoEfectivo).reduce((s,g)=>s+g.importe,0);
+  const efectivoSemana=gastosSemana().reduce((s,g)=>s+montoEfectivoGasto(g),0);
   document.getElementById("pagosSummary").innerHTML=`
     <div class="scard ${vencidas.length>0?'alert':''}"><div class="scard-label">Vencidas</div><div class="scard-val">${vencidas.length}</div><div class="scard-sub">${fmt(vencidas.reduce((s,g)=>s+g.importe,0))}</div></div>
     <div class="scard ${proximas.length>0?'alert':''}"><div class="scard-label">Vencen esta semana</div><div class="scard-val">${proximas.length}</div><div class="scard-sub">${fmt(proximas.reduce((s,g)=>s+g.importe,0))}</div></div>
@@ -10268,7 +10268,7 @@ function calcularSaldoCajaPeriodo(ini, fin){
   const gastos  = allGastosAllWeeks().filter(esGastoEfectivo).filter(g=>g.fecha>=ini && g.fecha<=fin);
   const retiros = todosLosRetiros().filter(r=>r.fecha>=ini && r.fecha<=fin);
   const totalCortes  = cortes .reduce((s,c)=>s+(parseFloat(c.monto  )||0),0);
-  const totalGastos  = gastos .reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+  const totalGastos  = gastos .reduce((s,g)=>s+montoEfectivoGasto(g),0);
   const totalRetiros = retiros.reduce((s,r)=>s+(parseFloat(r.monto  )||0),0);
   const baseInicial  = saldoInicialManual!=null ? saldoInicialManual : 0;
   return { ini, fin, saldoInicialManual, baseInicial, totalCortes, totalGastos, totalRetiros,
@@ -10432,7 +10432,7 @@ function calcularSaldoAntesDe(fecha){
   const gastosEf = allGastosAllWeeks().filter(esGastoEfectivo).filter(g=>g.fecha<fecha);
   const retiros = todosLosRetiros().filter(r=>r.fecha<fecha);
   const saldo = cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0)
-    - gastosEf.reduce((s,g)=>s+(parseFloat(g.importe)||0),0)
+    - gastosEf.reduce((s,g)=>s+montoEfectivoGasto(g),0)
     - retiros.reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
   const fechas=[...cortes,...gastosEf,...retiros].map(m=>m.fecha).filter(Boolean).sort();
   return { saldo, fechaMin:fechas[0]||null, fechaMax:fechas[fechas.length-1]||null, n:fechas.length };
@@ -10473,6 +10473,30 @@ function obtenerDatosCaja(){
 function esGastoEfectivo(g) {
   return g.formaPago === "efectivo" || g.formaPago === "caja_cortes"
     || g.formaPagoFinal === "efectivo" || g.formaPagoFinal === "caja_cortes";
+}
+
+// Cuánto EFECTIVO salió de la caja por este gasto. No siempre es el importe de la factura.
+// Cuando un egreso del concentrado se vincula a una factura que ya estaba capturada, los dos
+// números pueden no coincidir: el ticket de Sam's del 6 de agosto salió de la caja por $5,124.00
+// y la factura está por $5,073.99. Las dos cifras son correctas y sirven para cosas distintas —
+// `importe` es lo que dice el comprobante y es lo que se declara; `montoCaja` es lo que se sacó
+// del concentrado y es lo que tiene que cuadrar contra el conteo físico.
+// Sobrescribir el importe fiscal para que la caja cuadre sería falsear el comprobante ante el
+// SAT. Por eso se guardan separados y cada pantalla usa el que le toca: Contabilidad, importe;
+// Caja, montoCaja. Sin montoCaja —que es el caso de todo lo capturado hasta hoy— son el mismo.
+function montoEfectivoGasto(g){
+  if(!esGastoEfectivo(g)) return 0;
+  const mc = parseFloat(g && g.montoCaja);
+  if(isFinite(mc) && mc >= 0) return mc;
+  return parseFloat(g && g.importe) || 0;
+}
+// ¿Este gasto salió de la caja por un importe distinto al de su factura? Solo entonces hay algo
+// que explicar en pantalla y en el PDF; si son iguales, mostrar dos cifras iguales estorba.
+function difImporteCaja(g){
+  const mc = parseFloat(g && g.montoCaja);
+  if(!isFinite(mc)) return 0;
+  const d = mc - (parseFloat(g && g.importe) || 0);
+  return Math.abs(d) < 0.005 ? 0 : d;
 }
 
 function formaPagoLabel(g){
@@ -10840,11 +10864,35 @@ function gastoMismoImporte(monto, fecha, diasTol){
   return null;
 }
 
+// Un gasto ya vinculado a OTRO folio del concentrado no se puede volver a vincular: sería decir
+// que la misma factura se pagó dos veces desde la caja. Se detecta aquí para poder avisarlo en la
+// revisión, y se vuelve a comprobar al construir la importación, que es donde sí se puede abortar.
+function _yaVinculadoAOtroFolio(gasto, folio){
+  const f = String((gasto && gasto._folioEgreso) || "").trim();
+  return !!f && f !== String(folio || "").trim();
+}
+
 function clasificacionInicialEgreso(egreso){
-  // 1) Coincidencia fuerte (mismo proveedor+folio, o proveedor+importe+fecha): ya está capturado.
+  // 1) Coincidencia fuerte (mismo proveedor+folio, o proveedor+importe+fecha): la factura YA está
+  //    capturada. Antes esto arrancaba en «ignorar», y ahí se perdía el dinero: «ignorar» no crea
+  //    gasto ni retiro y tampoco toca la factura existente, así que si esa factura estaba como
+  //    crédito o transferencia, la salida de efectivo del concentrado NO llegaba nunca a Caja —
+  //    Caja solo suma lo que pasa esGastoEfectivo(). El saldo quedaba inflado por esa cantidad y
+  //    nada en pantalla lo explicaba. Lo correcto no es duplicar la factura ni descartar el
+  //    movimiento: es VINCULARLOS, que es lo que de verdad pasó.
   const dup = (typeof findDuplicate === "function")
     ? findDuplicate(egreso.concepto, egreso.monto, egreso.fecha, egreso.comprobante) : null;
-  if(dup) return { clase:"ignorar", dup, aviso:null };
+  if(dup){
+    if(_yaVinculadoAOtroFolio(dup.gasto, egreso.folio)){
+      return { clase:"ignorar", dup,
+        aviso:`Esa factura ya está vinculada al folio ${dup.gasto._folioEgreso}. No se puede vincular dos veces: revisa cuál de los dos movimientos es el bueno.` };
+    }
+    const yaEnCaja = (typeof esGastoEfectivo === "function") && esGastoEfectivo(dup.gasto);
+    return { clase:"vincular_efectivo", dup,
+      aviso: yaEnCaja
+        ? "La factura ya está registrada como pago de efectivo. Se le pega el folio del concentrado sin duplicar el importe."
+        : "La factura existe, pero NO está registrada como pago de caja. Al vincularla, esta salida de efectivo por fin cuenta en Caja." };
+  }
   // 2) Mismo importe en fecha cercana AUNQUE el nombre no coincida: es el caso del SAMS, la factura
   //    ya entró con su nombre fiscal. Se preselecciona «ignorar» pero se muestra para confirmar —
   //    dos gastos reales del mismo monto el mismo día existen, y ahí el usuario decide.
@@ -10960,13 +11008,27 @@ function renderRevisionCortes(){
     const btn = (val,lbl)=>`<button type="button" onclick="_setClaseEgreso(${i},'${val}')" style="padding:3px 8px;font-size:11px;border-radius:6px;cursor:pointer;border:1.5px solid ${e._clase===val?'var(--vd)':'var(--border)'};background:${e._clase===val?'var(--vd)':'#fff'};color:${e._clase===val?'#fff':'var(--txt2)'};font-weight:${e._clase===val?'700':'400'}">${lbl}</button>`;
     const catSel = e._clase==="gasto" ? `<select onchange="_setCatEgreso(${i},this.value)" style="margin-left:6px;padding:3px 6px;font-size:11px;border:1px solid var(--border);border-radius:6px;max-width:150px">${catOpts(e._cat)}</select>` : "";
     const dupNota = e._dup ? `<div style="font-size:10px;color:var(--naranja);margin-top:3px">⚠ Ya existe: ${esc(e._dup.gasto.proveedor)} · ${fmt(e._dup.gasto.importe)} — ${esc(e._dup.reason)}</div>` : "";
+    // Al vincular hay que poder ver, sin abrir nada más, qué se le va a hacer a la factura que ya
+    // está capturada: cuánto dice el comprobante, cuánto salió de la caja, y de qué forma de pago
+    // a cuál se mueve. Sin eso, «Vincular» es un botón que modifica un dato contable a ciegas.
+    const vincNota = (e._clase==="vincular_efectivo" && e._dup && e._dup.gasto) ? (()=>{
+      const g = e._dup.gasto, imp = parseFloat(g.importe)||0, mc = parseFloat(e.monto)||0;
+      const dif = mc - imp;
+      const antes = (typeof formaPagoLabel==="function") ? formaPagoLabel(g) : (g.formaPagoFinal||g.formaPago||"—");
+      return `<div style="font-size:10.5px;color:var(--vd);margin-top:4px;background:#F1F8E9;border-left:3px solid var(--vd);padding:4px 8px;border-radius:4px">
+        🔗 Se vincula a esa factura — no se crea un gasto nuevo.<br>
+        Factura <strong>${fmt(imp)}</strong> · sale de caja <strong>${fmt(mc)}</strong>
+        ${Math.abs(dif)>0.02?` · <span style="color:var(--red);font-weight:700">diferencia ${dif>0?"+":""}${fmt(dif)}</span> (se conservan las dos)`:""}<br>
+        Forma de pago: ${esc(antes)} → <strong>💵 Efectivo Caja</strong>
+      </div>`;
+    })() : "";
     const avisoNota = e._aviso ? `<div style="font-size:10px;color:var(--do);margin-top:3px">🧾 ${esc(e._aviso)}</div>` : "";
     const impNota = e._yaImportado ? `<div style="font-size:10px;color:var(--txt2);margin-top:3px">Ya se importó este folio antes.</div>`
       : (e._yaIgnorado ? `<div style="font-size:10px;color:var(--txt2);margin-top:3px">Ya lo marcaste como «ignorar» antes.</div>` : "");
     return `<tr><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(e.folio)}</td>`+
-      `<td>${esc(e.concepto)}${e.comprobante?` <span style="font-size:10px;color:var(--txt2)">#${esc(e.comprobante)}</span>`:""}${dupNota}${avisoNota}${impNota}</td>`+
+      `<td>${esc(e.concepto)}${e.comprobante?` <span style="font-size:10px;color:var(--txt2)">#${esc(e.comprobante)}</span>`:""}${dupNota}${avisoNota}${vincNota}${impNota}</td>`+
       `<td class="amount-cell">${fmt(e.monto)}</td>`+
-      `<td style="white-space:nowrap">${btn("gasto","Gasto")} ${btn("retiro","Retiro")} ${btn("ignorar","Ignorar")}${catSel}</td></tr>`;
+      `<td style="white-space:nowrap">${e._dup?btn("vincular_efectivo","🔗 Vincular")+" ":""}${btn("gasto","Gasto")} ${btn("retiro","Retiro")} ${btn("ignorar","Ignorar")}${catSel}</td></tr>`;
   }).join("");
   h += `</tbody></table></div>`;
 
@@ -10974,8 +11036,12 @@ function renderRevisionCortes(){
   const nG = d.egresos.filter(e=>e._clase==="gasto").length;
   const nR = d.egresos.filter(e=>e._clase==="retiro").length;
   const nI = d.egresos.filter(e=>e._clase==="ignorar").length;
+  const nV = d.egresos.filter(e=>e._clase==="vincular_efectivo").length;
+  // Lo excluido se dice en el resumen y con su monto: «ignorar» es dinero que sale del reporte, y
+  // enterarse de cuánto fue al revisar el saldo tres semanas después es demasiado tarde.
+  const montoI = d.egresos.filter(e=>e._clase==="ignorar").reduce((s,e)=>s+(parseFloat(e.monto)||0),0);
   h += `<div style="margin-top:18px;display:flex;gap:20px;flex-wrap:wrap;align-items:center">`+
-    `<div style="font-size:13px;color:var(--txt2)">Entrarán: <strong>${d.cortesNuevos.length}</strong> cortes · <strong>${nG}</strong> gastos · <strong>${nR}</strong> retiros · <strong>${nI}</strong> ignorados</div>`+
+    `<div style="font-size:13px;color:var(--txt2)">Entrarán: <strong>${d.cortesNuevos.length}</strong> cortes · <strong>${nG}</strong> gastos · <strong>${nV}</strong> vínculos · <strong>${nR}</strong> retiros · <strong>${nI}</strong> ignorados${nI?` (${fmt(montoI)} fuera del reporte)`:""}</div>`+
     `<button class="btn btn-primary" onclick="confirmarImportarCortes()" style="margin-left:auto">✅ Importar al periodo</button>`+
     `<button class="btn btn-light" onclick="cancelarImportarCortes()">Cancelar</button></div>`;
   cont.innerHTML = h;
@@ -11000,10 +11066,15 @@ function cancelarImportarCortes(){
 function construirImportacionCortes(d, previos, autor, base){
   const p0 = previos || {};
   const cortes   = [...(p0.cortes||[])];
-  const gastos   = [...(p0.gastos||[])];
+  // Cada gasto se CLONA, no solo el arreglo. [...gastos] crea una lista nueva pero con los mismos
+  // objetos que week.gastos: en el momento en que esta función modifica uno (y vincular modifica
+  // el gasto existente) estaría escribiendo en el estado real antes de que nadie confirme nada, y
+  // un error a media vuelta dejaría media importación aplicada. La promesa de "se arma todo
+  // aparte y el estado se toca al final" solo se sostiene con la copia.
+  const gastos   = (p0.gastos||[]).map(g=>({...g}));
   const retiros  = [...(p0.retiros||[])];
-  const ignorados= [...(p0.ignorados||[])];
-  let nC=0, nG=0, nR=0, nI=0;
+  let ignorados  = [...(p0.ignorados||[])];
+  let nC=0, nG=0, nR=0, nI=0, nV=0;
   let seq = 0;
   const semilla = base || Date.now();
   const nuevoId = ()=>String(semilla + (seq++));
@@ -11020,9 +11091,46 @@ function construirImportacionCortes(d, previos, autor, base){
 
   // Egresos: según la clasificación del usuario.
   const yaIgn = new Set(ignorados.map(folioDeIgnorado));
+  // Un folio que se excluyó en una importación anterior y ahora se reclasifica tiene que SALIR de
+  // la lista de excluidos. Si no, el mismo movimiento sale contado como gasto real y además
+  // listado como "egreso excluido": el reporte se contradice a sí mismo y nadie sabe cuál creer.
+  const quitarDeIgnorados = (folio)=>{
+    if(!yaIgn.has(folio)) return;
+    ignorados = ignorados.filter(x=>folioDeIgnorado(x) !== folio);
+    yaIgn.delete(folio);
+  };
+  // Los vínculos NO se aplican aquí: se devuelven como parches {id, cambios}. La factura a la que
+  // se vincula un egreso casi nunca vive en la semana que se está importando —entró por Gmail o
+  // por el SAT semanas antes, y las semanas de esta app son bolsas de captura, no rangos de fecha—
+  // así que aplicarla aquí exigiría pasarle el estado entero y dejaría de ser pura. Lo que sí se
+  // hace aquí es VALIDAR: si un vínculo no se puede hacer, esto truena y no se importa nada.
+  const universo = (p0.gastosTodos && p0.gastosTodos.length) ? p0.gastosTodos : gastos;
+  const vinculos = [];
+  const yaParchado = new Set();
   (d.egresos||[]).forEach(e=>{
     const folio = String(e.folio||"").trim();
     if(!folio) return;
+    if(e._clase === "vincular_efectivo"){
+      const gid = String((e._dup && e._dup.gasto && e._dup.gasto.id) || "");
+      const ex  = gid ? universo.find(g=>String(g.id) === gid) : null;
+      if(!ex) throw new Error(`No encontré la factura a vincular con ${folio}. Vuelve a leer el archivo.`);
+      if(yaParchado.has(gid)) throw new Error(`Dos egresos del archivo quieren vincularse a la misma factura (${ex.proveedor||gid}). Solo uno puede ser.`);
+      if(_yaVinculadoAOtroFolio(ex, folio)) throw new Error(`La factura de ${ex.proveedor||gid} ya está vinculada al folio ${ex._folioEgreso}; no puede vincularse también con ${folio}.`);
+      const monto = parseFloat(e.monto)||0;
+      vinculos.push({ id: gid, cambios: {
+        // Se conserva la forma de pago anterior: es la evidencia de qué se cambió y desde qué.
+        formaPagoAnterior: ex.formaPagoFinal || ex.formaPago || "",
+        formaPagoFinal: "caja_cortes", estadoPago: "pagado", fechaPago: e.fecha || "",
+        // importe NO se toca: sigue siendo el del comprobante. montoCaja es lo que salió de caja.
+        montoCaja: monto, _folioEgreso: folio,
+        _vinculoCaja: { folio, fecha:e.fecha||"", monto, concepto:e.concepto||"",
+                        comprobante:e.comprobante||"", por:autor||"", ts:ahora },
+      }});
+      yaParchado.add(gid);
+      quitarDeIgnorados(folio);
+      nV++;
+      return;
+    }
     if(e._clase === "ignorar"){
       // Se recuerda para que la próxima reimportación no lo vuelva a ofrecer como nuevo. Se guarda
       // el renglón ENTERO, no solo el folio: excluir dinero sin dejar cuánto ni por qué hace que
@@ -11037,12 +11145,14 @@ function construirImportacionCortes(d, previos, autor, base){
       }
       return;
     }
+    quitarDeIgnorados(folio);
     if(e._clase === "retiro"){
       retiros.push({ id:nuevoId(), fecha:e.fecha, monto:parseFloat(e.monto)||0, motivo:e.concepto||"", _folioEgreso:folio });
       nR++;
     } else {   // gasto en efectivo
+      const monto = parseFloat(e.monto)||0;
       gastos.push({ id:nuevoId(), proveedor:canonizarProveedor(e.concepto||""), fecha:e.fecha,
-        factura:String(e.comprobante||"").trim(), importe:parseFloat(e.monto)||0,
+        factura:String(e.comprobante||"").trim(), importe:monto, montoCaja:monto,
         categoria:canonizarCategoria(e._cat||"Otro"), notas:e.autoriza?("Autoriza: "+e.autoriza):"", esOtro:false,
         respaldo:null, formaPago:"caja_cortes", vencimiento:"", estadoPago:"pagado",
         comprobantePago:null, fechaPago:null, referenciaPago:null, _folioEgreso:folio });
@@ -11059,7 +11169,7 @@ function construirImportacionCortes(d, previos, autor, base){
     saldo = { fecha:p.ini, entrada:{ valor:d.obj.saldoInicial, conteo:{}, fecha:todayStr(),
               porEmail:"Manejo de Cortes", ts:ahora, _origenCorte:true } };
   }
-  return { cortes, gastos, retiros, ignorados, saldo, nC, nG, nR, nI };
+  return { cortes, gastos, retiros, ignorados, vinculos, saldo, nC, nG, nR, nI, nV };
 }
 
 function confirmarImportarCortes(){
@@ -11070,10 +11180,29 @@ function confirmarImportarCortes(){
 
   // Se arma primero, se escribe después. Si truena aquí, el estado queda EXACTAMENTE como estaba:
   // más vale no importar nada que dejar media importación que nadie sabe dónde se cortó.
+  // Vincular con una diferencia de importe es legítimo (el ticket y la factura del SAMS no siempre
+  // coinciden), pero no puede pasar de noche: es la puerta por la que se cuela un dedo en el monto.
+  // Se piden a la vista, con nombre y cifras, antes de escribir nada. Dos centavos de tolerancia,
+  // que es el redondeo de un IVA, no una diferencia real.
+  const conDif = (d.egresos||[])
+    .filter(e=>e._clase==="vincular_efectivo" && e._dup && e._dup.gasto)
+    .map(e=>({ e, dif:(parseFloat(e.monto)||0) - (parseFloat(e._dup.gasto.importe)||0) }))
+    .filter(x=>Math.abs(x.dif) > 0.02);
+  if(conDif.length){
+    const detalle = conDif.map(x=>`  · ${x.e.concepto||x.e.folio}: factura ${fmt(x.e._dup.gasto.importe)} · salió de caja ${fmt(x.e.monto)} (${x.dif>0?"+":""}${fmt(x.dif)})`).join("\n");
+    if(!confirm(`${conDif.length} vínculo(s) con importes distintos:\n\n${detalle}\n\n`+
+                `Se conservan LOS DOS: la factura mantiene su importe fiscal y la caja registra lo que realmente salió. `+
+                `Nada se sobrescribe.\n\n¿Continuar?`)) return;
+  }
+
   let plan;
   try{
     plan = construirImportacionCortes(d, {
       cortes: week.cortes, gastos: week.gastos, retiros: week.retiros,
+      // gastosTodos es solo para BUSCAR la factura a vincular: vive en cualquier semana, no en la
+      // activa. Se pasa aparte de `gastos` (que es la lista que se va a reescribir) para que quede
+      // claro que de aquí no sale nada que se escriba.
+      gastosTodos: (typeof allGastosAllWeeks==="function") ? allGastosAllWeeks() : [],
       ignorados: Array.isArray(state.cortesIgnorados) ? state.cortesIgnorados : [],
     }, (typeof currentNombre!=="undefined" && currentNombre) || (currentUser&&currentUser.email) || "");
   }catch(err){
@@ -11089,6 +11218,21 @@ function confirmarImportarCortes(){
   week.gastos  = plan.gastos;
   week.retiros = plan.retiros;
   state.cortesIgnorados = plan.ignorados;
+  // Los vínculos se aplican DESPUÉS de reasignar las listas, y sobre todas las semanas: la factura
+  // vinculada casi siempre está en otra. Van después porque week.gastos acaba de cambiar de arreglo
+  // y hay que parchar el vigente, no el que se reemplazó. Son asignaciones sueltas, sin await de
+  // por medio, así que tampoco esto puede quedar a medias. Que el gasto exista ya se validó al
+  // construir el plan; si aun así no aparece, se cuenta y se dice, no se calla.
+  let nVAplicados = 0, vPerdidos = [];
+  (plan.vinculos||[]).forEach(v=>{
+    let encontrado = false;
+    (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{
+      if(String(g.id) !== String(v.id) || encontrado) return;
+      Object.assign(g, v.cambios);
+      encontrado = true;
+    }));
+    if(encontrado) nVAplicados++; else vPerdidos.push(v.cambios._folioEgreso || v.id);
+  });
   let saldoFijado = null;
   if(plan.saldo){
     if(!state.cajaSaldoInicial) state.cajaSaldoInicial = {};
@@ -11115,7 +11259,9 @@ function confirmarImportarCortes(){
   // Lo excluido se nombra en el mismo mensaje: es dinero que se dejó fuera a propósito, y
   // enterarse tres semanas después de por qué el reporte no cuadra es demasiado tarde.
   const exclMsg = plan.nI ? ` ${plan.nI} egreso(s) quedaron EXCLUIDOS (ver el detalle abajo).` : "";
-  setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s).${exclMsg}${saldoMsg} La conciliación de abajo ya quedó en el periodo ${fmtDate(p.ini)}–${fmtDate(p.fin)}.`, "ok");
+  const vincMsg = nVAplicados ? ` ${nVAplicados} factura(s) ya capturada(s) quedaron vinculadas como pago de caja.` : "";
+  const perdMsg = vPerdidos.length ? ` ⚠ ${vPerdidos.length} vínculo(s) NO se pudieron aplicar (${vPerdidos.join(", ")}): esas salidas de efectivo siguen sin contar en Caja.` : "";
+  setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s).${vincMsg}${exclMsg}${perdMsg}${saldoMsg} La conciliación de abajo ya quedó en el periodo ${fmtDate(p.ini)}–${fmtDate(p.fin)}.`, perdMsg?"warn":"ok");
   renderCaja();
 }
 
@@ -11263,7 +11409,7 @@ function renderCaja() {
 
   const usaManual = saldoInicialManual !== null && saldoInicialManual !== undefined;
   const totalCortes = cortes.reduce((s, c) => s + (parseFloat(c.monto) || 0), 0);
-  const totalGastos = gastosCaja.reduce((s, g) => s + (parseFloat(g.importe) || 0), 0);
+  const totalGastos = gastosCaja.reduce((s, g) => s + montoEfectivoGasto(g), 0);
   const totalRetiros = retiros.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
   // Solo un saldo inicial fijado (conteo real, como en Cortes) entra al cálculo; sin fijar,
   // el periodo parte de $0 y el arrastre histórico se muestra aparte, colapsado.
@@ -11322,7 +11468,7 @@ function renderCaja() {
   const filasGastos = gastosCaja.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map(g => `
       <div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
         <span style="font-size:14px;color:var(--txt2)"><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#9DB89D">${fmtDate(g.fecha)}</span> (−) ${esc(g.proveedor||"")} <span style="font-size:12px;color:#9DB89D">${esc(g.categoria||"")}</span>${g.factura?` <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:#B0B0A8">#${esc(g.factura)}</span>`:""}</span>
-        <span style="font-size:14px;color:var(--red);font-weight:600;flex-shrink:0">−${fmt(g.importe)}</span>
+        <span style="font-size:14px;color:var(--red);font-weight:600;flex-shrink:0;text-align:right">−${fmt(montoEfectivoGasto(g))}${difImporteCaja(g)?`<div style="font-size:10px;color:var(--txt2);font-weight:400;white-space:nowrap">factura ${fmt(g.importe)}</div>`:""}</span>
       </div>`).join("");
   const filasRetiros = retiros.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map(r => `
       <div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
@@ -11365,7 +11511,7 @@ function exportarCajaPDF(){
   const { cortes, gastosCaja, retiros, saldoInicial, periodoLabel } = datos;
   const usaManual = datos.saldoInicialManual !== null && datos.saldoInicialManual !== undefined;
   const totalCortes=cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
-  const totalGastos=gastosCaja.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+  const totalGastos=gastosCaja.reduce((s,g)=>s+montoEfectivoGasto(g),0);
   const totalRetiros=retiros.reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
   // Consistente con renderCaja: solo un saldo inicial capturado entra al cálculo; sin capturar
   // (rango o semana) parte de 0 y el saldo anterior se muestra aparte, no incluido.
@@ -11417,7 +11563,11 @@ function exportarCajaPDF(){
     doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6,"F");
     doc.setTextColor(60,60,60); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
     doc.text(fmtDate(g.fecha),MAR+3,Y+4.2); doc.text((g.proveedor||"").slice(0,45),MAR+40,Y+4.2);
-    doc.setFont("helvetica","bold"); doc.setTextColor(...RED); doc.text(fmt(g.importe),PW-MAR-3,Y+4.2,{align:"right"});
+    // Cuando la salida de caja no es igual al importe de la factura hay que imprimir las dos:
+    // un renglón con una sola cifra obliga a adivinar cuál de las dos es, y ésa es justo la
+    // ambigüedad que hace que alguien "cuadre" el reporte pisando el importe fiscal.
+    if(difImporteCaja(g)) doc.text(`Factura: ${fmt(g.importe)}`,MAR+120,Y+4.2);
+    doc.setFont("helvetica","bold"); doc.setTextColor(...RED); doc.text(fmt(montoEfectivoGasto(g)),PW-MAR-3,Y+4.2,{align:"right"});
     Y+=6;
   });
   Y+=8;

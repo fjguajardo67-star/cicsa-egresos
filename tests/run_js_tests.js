@@ -94,6 +94,7 @@ const CONSTS_OBJ = ["ORIGEN_ETIQUETA"];
 
 const FUNCS = [
   "normalizarParaComparar", "posibleMismoIngrediente", "esGastoEfectivo",
+  "montoEfectivoGasto", "difImporteCaja", "_yaVinculadoAOtroFolio",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros",
@@ -1580,6 +1581,164 @@ t("si truena a media vuelta, NO deja una importacion parcial", () => {
     assert.equal(previos.cortes.length, 0);
     assert.equal(previos.ignorados.length, 0);
   } finally { S.canonizarCategoria = real; }
+});
+
+// ── Vincular una factura existente como pago de caja ────────────────────────
+// El agujero: "ignorar" no crea gasto ni retiro Y no toca la factura que ya estaba. Si esa
+// factura estaba como credito o transferencia, la salida de efectivo del concentrado no llegaba
+// nunca a Caja —que solo suma esGastoEfectivo()— y el saldo quedaba inflado por esa cantidad, sin
+// que nada en pantalla lo explicara. Vincular registra el hecho real: la factura no se duplica, y
+// el efectivo que salio si cuenta.
+const _egVinc = (folio, gastoDup, monto, fecha) => ({
+  folio, fecha: fecha || "2026-08-20", concepto:"COMPRA SAMS", comprobante:"ICAJ-1",
+  monto, _clase:"vincular_efectivo", _dup:{ gasto: gastoDup, reason:"Mismo No. de factura" },
+});
+
+t("vincular NO crea un gasto nuevo: devuelve un parche para el que ya existe", () => {
+  const existente = { id:"g1", proveedor:"COMPRA SAMS", importe:3184, fecha:"2026-08-20", formaPago:"credito" };
+  const r = S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-2026-00024", existente, 3184)]),
+    { cortes:[], gastos:[existente], retiros:[], ignorados:[] }, "Diana", 1000);
+  assert.equal(r.nG, 0, "no se crea un gasto: seria contar la factura dos veces");
+  assert.equal(r.nV, 1);
+  assert.equal(r.gastos.length, 1, "sigue habiendo una sola factura");
+  assert.equal(r.vinculos.length, 1);
+  const c = r.vinculos[0].cambios;
+  assert.equal(r.vinculos[0].id, "g1");
+  assert.equal(c.formaPagoFinal, "caja_cortes", "por fin cuenta como salida de efectivo");
+  assert.equal(c.formaPagoAnterior, "credito", "queda de que forma de pago venia");
+  assert.equal(c._folioEgreso, "EGR-2026-00024");
+  close(c.montoCaja, 3184, 0.01);
+});
+
+t("vincular NO sobrescribe el importe fiscal de la factura", () => {
+  // El ticket del SAMS del 6 de agosto salio de caja por 5,124.00 y la factura dice 5,073.99.
+  // Las dos cifras son correctas. Pisar el importe para cuadrar la caja seria falsear el
+  // comprobante ante el SAT; por eso el parche toca montoCaja y NO toca importe.
+  const existente = { id:"g1", proveedor:"COMPRA SAMS", importe:5073.99, fecha:"2026-08-06" };
+  const r = S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-9", existente, 5124, "2026-08-06")]),
+    { cortes:[], gastos:[existente], retiros:[], ignorados:[] }, "Diana", 1000);
+  const c = r.vinculos[0].cambios;
+  assert.ok(!("importe" in c), "el importe fiscal no se toca NUNCA");
+  close(c.montoCaja, 5124, 0.01);
+  close(existente.importe, 5073.99, 0.01, "ni siquiera de rebote sobre el objeto original");
+});
+
+t("la factura a vincular puede estar en OTRA semana", () => {
+  // Es el caso normal, no el raro: la factura entro por Gmail o por el SAT semanas antes, y las
+  // semanas de esta app son bolsas de captura, no rangos de fecha. Buscarla solo en la semana que
+  // se esta importando haria tronar casi todos los vinculos.
+  const enOtraSemana = { id:"gX", proveedor:"COMPRA SAMS", importe:4801, fecha:"2026-08-25" };
+  const r = S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-2026-00030", enOtraSemana, 4801, "2026-08-25")]),
+    { cortes:[], gastos:[], retiros:[], ignorados:[], gastosTodos:[enOtraSemana] }, "Diana", 1000);
+  assert.equal(r.nV, 1);
+  assert.equal(r.vinculos[0].id, "gX");
+  assert.equal(r.gastos.length, 0, "no se agrega nada a la semana activa");
+});
+
+t("si la factura a vincular no aparece, NO se importa nada", () => {
+  assert.throws(() => S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-1", { id:"fantasma", importe:100 }, 100)]),
+    _previosVacios(), "Diana", 1000), /No encontr./);
+});
+
+t("una factura no se puede vincular a dos folios distintos", () => {
+  // Seria decir que la misma factura se pago dos veces desde la caja.
+  const ya = { id:"g1", proveedor:"X", importe:100, fecha:"2026-08-20", _folioEgreso:"EGR-VIEJO" };
+  assert.throws(() => S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-NUEVO", ya, 100)]),
+    { cortes:[], gastos:[ya], retiros:[], ignorados:[] }, "Diana", 1000), /EGR-VIEJO/);
+});
+
+t("dos egresos del mismo archivo no pueden vincularse a la misma factura", () => {
+  const g = { id:"g1", proveedor:"X", importe:100, fecha:"2026-08-20" };
+  assert.throws(() => S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-1", g, 100), _egVinc("EGR-2", g, 100)]),
+    { cortes:[], gastos:[g], retiros:[], ignorados:[] }, "Diana", 1000), /misma factura/);
+});
+
+t("los gastos se CLONAN: vincular no escribe en el estado antes de confirmar", () => {
+  // [...gastos] copia el arreglo pero comparte los objetos. En el momento en que la funcion
+  // modifica uno estaria escribiendo en week.gastos sin que nadie haya confirmado nada, y un
+  // error a media vuelta dejaria media importacion aplicada.
+  const original = { id:"g1", proveedor:"X", importe:100, fecha:"2026-08-20", formaPago:"credito" };
+  const r = S.construirImportacionCortes(
+    _impBase([{ folio:"EGR-a", fecha:"2026-08-20", concepto:"NUEVO", monto:5, _clase:"gasto", _cat:"Otro" }]),
+    { cortes:[], gastos:[original], retiros:[], ignorados:[] }, "Diana", 1000);
+  assert.notStrictEqual(r.gastos[0], original, "el objeto devuelto NO puede ser el mismo de la semana");
+  r.gastos[0].formaPago = "efectivo";
+  assert.equal(original.formaPago, "credito", "tocar la copia no puede alterar el estado real");
+});
+
+t("reclasificar un folio excluido lo SACA de la lista de excluidos", () => {
+  // Si no, el mismo movimiento sale contado como gasto real Y listado como egreso excluido: el
+  // reporte se contradice a si mismo y nadie sabe cual de los dos creer.
+  const previos = { cortes:[], gastos:[], retiros:[],
+    ignorados:[{ folio:"EGR-c", monto:300, concepto:"X", ts:"2026-08-01" }] };
+  const r = S.construirImportacionCortes(
+    _impBase([{ folio:"EGR-c", fecha:"2026-08-20", concepto:"X", monto:300, _clase:"gasto", _cat:"Otro" }]),
+    previos, "Diana", 1000);
+  assert.equal(r.nG, 1);
+  assert.equal(r.ignorados.length, 0, "ya no es un excluido: ahora es un gasto de verdad");
+});
+
+t("vincular un folio que estaba excluido tambien lo saca de la lista", () => {
+  const g = { id:"g1", proveedor:"X", importe:100, fecha:"2026-08-20" };
+  const previos = { cortes:[], gastos:[g], retiros:[], ignorados:["EGR-1"] };
+  const r = S.construirImportacionCortes(_impBase([_egVinc("EGR-1", g, 100)]), previos, "Diana", 1000);
+  assert.equal(r.nV, 1);
+  assert.equal(r.ignorados.length, 0);
+});
+
+t("un gasto nuevo de caja nace con montoCaja igual al importe", () => {
+  const r = S.construirImportacionCortes(
+    _impBase([{ folio:"EGR-a", fecha:"2026-08-20", concepto:"COMPRA", monto:250.5, _clase:"gasto", _cat:"Otro" }]),
+    _previosVacios(), "Diana", 1000);
+  close(r.gastos[0].importe, 250.5, 0.01);
+  close(r.gastos[0].montoCaja, 250.5, 0.01, "para el flujo de caja no hay que adivinar");
+});
+
+console.log("\n== importe fiscal vs. efectivo que salio de la caja ==");
+t("sin montoCaja, el efectivo es el importe (todo lo capturado hasta hoy)", () => {
+  close(S.montoEfectivoGasto({ formaPago:"efectivo", importe:1234.5 }), 1234.5, 0.01);
+});
+t("con montoCaja, manda montoCaja", () => {
+  close(S.montoEfectivoGasto({ formaPago:"caja_cortes", importe:5073.99, montoCaja:5124 }), 5124, 0.01);
+});
+t("un gasto que no salio de la caja aporta cero", () => {
+  close(S.montoEfectivoGasto({ formaPago:"transferencia", importe:9999, montoCaja:9999 }), 0, 0.01);
+});
+t("montoCaja en cero es un dato, no un hueco", () => {
+  // 0 es falsy: un `montoCaja || importe` habria cobrado el importe completo de un movimiento
+  // que de la caja no saco nada.
+  close(S.montoEfectivoGasto({ formaPago:"efectivo", importe:500, montoCaja:0 }), 0, 0.01);
+});
+t("un montoCaja invalido no tumba la suma: se cae al importe", () => {
+  close(S.montoEfectivoGasto({ formaPago:"efectivo", importe:500, montoCaja:"" }), 500, 0.01);
+  close(S.montoEfectivoGasto({ formaPago:"efectivo", importe:500, montoCaja:-3 }), 500, 0.01);
+});
+t("difImporteCaja solo marca diferencias de verdad", () => {
+  assert.equal(S.difImporteCaja({ importe:500 }), 0, "sin montoCaja no hay nada que explicar");
+  assert.equal(S.difImporteCaja({ importe:500, montoCaja:500 }), 0);
+  close(S.difImporteCaja({ importe:5073.99, montoCaja:5124 }), 50.01, 0.001);
+  // Un centavo SI se muestra: la caja suma montoCaja, asi que ese centavo esta de verdad en el
+  // total y un renglon que no lo explique deja al total sin cuadrar contra sus propias filas.
+  // Lo que un centavo NO hace es pedir confirmacion al importar — ese umbral (0.02) vive en
+  // confirmarImportarCortes, que es donde se modifica un dato contable.
+  close(S.difImporteCaja({ importe:3914.01, montoCaja:3914.00 }), -0.01, 0.001);
+});
+t("el saldo de caja usa montoCaja, no el importe fiscal", () => {
+  // La prueba de integracion: si esto usara g.importe, la caja cuadraria contra el comprobante
+  // y no contra el dinero, que es justo al reves de para lo que sirve.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[{ id:"c1", fecha:"2026-08-06", monto:10000 }],
+    retiros:[], gastos:[
+      { id:"g1", proveedor:"SAMS", fecha:"2026-08-06", importe:5073.99, montoCaja:5124, formaPago:"caja_cortes" }
+    ]}], cajaSaldoInicial:{ "2026-08-01": { valor:0 } } };
+  const r = S.calcularSaldoCajaPeriodo("2026-08-01", "2026-08-31");
+  close(r.totalGastos, 5124, 0.01, "sale de la caja lo que salio, no lo que dice la factura");
+  close(r.saldo, 10000 - 5124, 0.01);
 });
 
 t("el fixture real entra completo por esta via", () => {
@@ -3511,14 +3670,53 @@ t("el SAMS se SEÑALA por importe, pero entra como gasto — no se preselecciona
   assert.ok(c.dup, "pero se muestra el gasto parecido");
   assert.ok(c.aviso && /importe/i.test(c.aviso), "y se dice que la coincidencia es solo por importe");
 });
-// Una coincidencia FUERTE (mismo proveedor y misma factura) si puede preseleccionar ignorar:
-// ahi no hay ambiguedad, es literalmente el mismo documento.
-t("una coincidencia por proveedor+factura si preselecciona ignorar", () => {
+// Una coincidencia FUERTE (mismo proveedor y misma factura) es literalmente el mismo documento.
+// Antes eso arrancaba en "ignorar", y ahi se perdia el dinero: "ignorar" no crea gasto ni retiro
+// y tampoco toca la factura que ya estaba. Si esa factura estaba como credito o transferencia, la
+// salida de efectivo del concentrado no llegaba NUNCA a Caja, que solo suma esGastoEfectivo(). Lo
+// correcto no es duplicar la factura ni descartar el movimiento: es vincularlos.
+t("una coincidencia por proveedor+factura arranca en VINCULAR, no en ignorar", () => {
   S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
     { id:"ya", proveedor:"COMPRA SAMS", factura:"ICAJG470108", importe:5124, fecha:"2026-08-06" }
   ]}]};
-  const c = S.clasificacionInicialEgreso({ concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06", clase:"gasto" });
+  const c = S.clasificacionInicialEgreso({ folio:"EGR-1", concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06", clase:"gasto" });
+  assert.equal(c.clase, "vincular_efectivo");
+  assert.ok(c.dup && c.dup.gasto.id === "ya");
+});
+t("si la factura existente NO estaba en efectivo, el aviso lo dice", () => {
+  // Es el caso que hacia desaparecer el dinero: la factura existe como credito, asi que la salida
+  // de caja no contaba en ningun lado. Vincular es lo que la hace contar.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"ya", proveedor:"COMPRA SAMS", factura:"ICAJG470108", importe:5124, fecha:"2026-08-06", formaPago:"credito" }
+  ]}]};
+  const c = S.clasificacionInicialEgreso({ folio:"EGR-1", concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06" });
+  assert.equal(c.clase, "vincular_efectivo");
+  assert.ok(/NO esta registrada como pago de caja/.test(c.aviso.normalize("NFD").replace(/[\u0300-\u036f]/g, "")));
+});
+t("si la factura YA estaba en efectivo, se vincula sin duplicar el importe", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"ya", proveedor:"COMPRA SAMS", factura:"ICAJG470108", importe:5124, fecha:"2026-08-06", formaPago:"efectivo" }
+  ]}]};
+  const c = S.clasificacionInicialEgreso({ folio:"EGR-1", concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06" });
+  assert.equal(c.clase, "vincular_efectivo");
+  assert.ok(/sin duplicar/.test(c.aviso));
+});
+t("una factura ya vinculada a otro folio NO se ofrece para vincular de nuevo", () => {
+  // Vincularla dos veces seria decir que la misma factura se pago dos veces desde la caja.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"ya", proveedor:"COMPRA SAMS", factura:"ICAJG470108", importe:5124, fecha:"2026-08-06", _folioEgreso:"EGR-OTRO" }
+  ]}]};
+  const c = S.clasificacionInicialEgreso({ folio:"EGR-1", concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06" });
   assert.equal(c.clase, "ignorar");
+  assert.ok(/EGR-OTRO/.test(c.aviso), "hay que decir con cual esta vinculada");
+});
+t("el aviso de comprobante-que-parece-factura NO se perdio al agregar vincular", () => {
+  // Sobrevive de la version anterior: sin duplicado, un comprobante con letras puede ser una
+  // factura que todavia no llega por Gmail/SAT, y hay que quedar pendiente de ella.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[] }] };
+  const c = S.clasificacionInicialEgreso({ folio:"EGR-1", concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06" });
+  assert.equal(c.clase, "gasto");
+  assert.ok(/folio de factura/.test(c.aviso));
 });
 t("un egreso con comprobante de factura pero sin duplicado se avisa, no se ignora", () => {
   S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[] }] };
@@ -3538,14 +3736,15 @@ t("clasificación inicial respeta la clase capturada", () => {
   assert.equal(S.clasificacionInicialEgreso(a.egresos[0]).clase, "gasto");     // clase:gasto
   assert.equal(S.clasificacionInicialEgreso(a.egresos[2]).clase, "retiro");    // clase:deposito
 });
-t("clasificación inicial sugiere 'ignorar' si ya existe un gasto igual", () => {
-  // El SAMS ya está capturado (misma factura + proveedor): la factura entró por otro lado.
+t("clasificación inicial sugiere VINCULAR si ya existe un gasto igual", () => {
+  // El SAMS ya está capturado (misma factura + proveedor): la factura entró por otro lado, pero el
+  // efectivo sí salió del concentrado. Son el mismo hecho visto desde dos sistemas.
   S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
     { id:"g1", proveedor:"COMPRAS SAMS", factura:"ICAJG469779", importe:29487, fecha:"2026-08-03" }
   ]}]};
   const a = archivoBase();
   const c = S.clasificacionInicialEgreso(a.egresos[1]);
-  assert.equal(c.clase, "ignorar");
+  assert.equal(c.clase, "vincular_efectivo");
   assert.ok(c.dup, "trae el gasto que ya existía");
 });
 t("sin clase y sin duplicado, arranca como gasto", () => {
