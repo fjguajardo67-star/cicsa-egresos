@@ -70,7 +70,7 @@ service cloud.firestore {
 
     // ── datos/precios — lo lee CICSA Menú SIN sesión ───────────────────────
     // Lectura pública a propósito (el Menú consulta precios sin login);
-    // escribir sigue requiriendo sesión.
+    // escribir exige estar dado de alta.
     match /datos/{doc} {
       allow read: if true;
       allow write: if esUsuario();
@@ -89,10 +89,9 @@ service cloud.firestore {
     // ── usuarios — roles y nombres ─────────────────────────────────────────
     // Cada quien lee su propio registro (para saber su rol al entrar); el
     // admin lee todos (panel de Administración).
-    // Crear: el admin da de alta usuarios. Además cada usuario puede recrear
-    // SU PROPIO registro (auto-revinculación al volver a entrar) pero SOLO con
-    // rol "operativo" — así nadie puede auto-asignarse admin por API directa.
-    // Modificar rol/nombre y eliminar: solo admin.
+    // Crear, modificar rol/nombre y eliminar: solo el admin. Este documento es la
+    // llave de todo lo demás —esUsuario() se apoya en que exista—, así que quien
+    // pudiera crearlo se daría acceso a sí mismo.
     match /usuarios/{uid} {
       allow read:   if esAdmin() || (conSesion() && request.auth.uid == uid);
       // Antes cada quien podía crear SU PROPIO registro como "operativo", para
@@ -124,8 +123,8 @@ service cloud.firestore {
     }
 
     // ── cfdis — CFDIs guardados para la conciliación SAT ───────────────────
-    // Cualquiera con sesión puede subir XML y consultarlos; BORRAR es solo del
-    // admin (igual que en la interfaz, pero ahora sí aplicado de verdad).
+    // Cualquier usuario dado de alta puede subir XML y consultarlos; BORRAR es solo
+    // del admin (igual que en la interfaz, pero ahora sí aplicado de verdad).
     match /cfdis/{uuid} {
       allow read, create, update: if esUsuario();
       allow delete: if esAdmin();
@@ -142,8 +141,10 @@ service cloud.firestore {
     }
 
     // ── respaldos — copias de seguridad del estado ─────────────────────────
-    // Cualquiera con sesión genera respaldos al capturar; PODAR los viejos es
-    // solo del admin, que es justo lo que ya asume podarRespaldos().
+    // Cualquier usuario dado de alta genera respaldos al capturar; PODAR los viejos
+    // es solo del admin, que es justo lo que ya asume podarRespaldos().
+    // Ojo: un respaldo es una copia COMPLETA de estado/cicsa, así que leer aquí vale
+    // tanto como leer el estado. Por eso también pasa por esUsuario().
     match /respaldos/{doc} {
       allow read, create, update: if esUsuario();
       allow delete: if esAdmin();
