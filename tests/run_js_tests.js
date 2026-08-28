@@ -113,7 +113,7 @@ const FUNCS = [
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
-  "clasificarDiferenciaSAT",
+  "clasificarDiferenciaSAT", "folioCapturableCfdi",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
   "_cfdiTipoDesdeTexto", "filtrarCfdisConciliables", "autodetectarRfcPropio",
@@ -1706,8 +1706,9 @@ console.log("\n== 'diferencia de monto' que en realidad es la misma factura dos 
 // el proveedor haya facturado otra cosa: es una factura dividida cuyo padre y cuyas categorias
 // sueltas siguen guardados los dos. Como la tabla no ensenaba el folio, se leia como un problema
 // del comprobante —que esta bien— en vez de uno de la captura.
-const _dif = (total, gastos) => ({
-  cfdi:{ total, fecha:"2026-07-06", proveedor:"ONUS COMERCIAL" },
+const _dif = (total, gastos, cfdiExtra) => ({
+  cfdi:{ total, fecha:"2026-07-06", proveedor:"ONUS COMERCIAL",
+         uuid:"UUID-1", folio:"UUID-1", serie:"", folioComp:"F-1", ...(cfdiExtra||{}) },
   gastos, capturado: Math.round(gastos.reduce((s,g)=>s+g.importe,0)*100)/100,
 });
 
@@ -1717,7 +1718,7 @@ t("EL caso: padre Dividida + sus categorias sueltas dan el doble exacto", () => 
       _partidas:[{categoria:"Carnicos",importe:20000},{categoria:"Abarrotes",importe:14034.36}] },
     { id:"h1", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:20000, categoria:"Carnicos" },
     { id:"h2", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:14034.36, categoria:"Abarrotes" },
-  ]);
+  ], { folioComp:"A-1201" });
   const c = S.clasificarDiferenciaSAT(d);
   assert.equal(c.tipo, "duplicado", "no es una diferencia contra el SAT");
   assert.ok(/dividida/i.test(c.motivo), "y se dice por que");
@@ -1729,7 +1730,7 @@ t("la misma factura capturada dos veces, sin division, tambien", () => {
   const d = _dif(2504, [
     { id:"a", proveedor:"NUEVA WAL MART DE MEXICO", factura:"WM-88", fecha:"2026-07-07", importe:2504, categoria:"Abarrotes" },
     { id:"b", proveedor:"NUEVA WAL MART DE MEXICO", factura:"WM-88", fecha:"2026-07-07", importe:2504, categoria:"Abarrotes" },
-  ]);
+  ], { folioComp:"WM-88" });
   const c = S.clasificarDiferenciaSAT(d);
   assert.equal(c.tipo, "duplicado");
   assert.equal(c.exacto, true);
@@ -1745,12 +1746,17 @@ t("si el FOLIO no coincide, sigue siendo una diferencia de verdad", () => {
   ]));
   assert.equal(c.tipo, "diferencia");
 });
-t("si la FECHA no coincide, tampoco se declara duplicado", () => {
+t("dos fechas distintas NO impiden reconocerlo: el folio ya identifica el documento", () => {
+  // Al exigir tambien la fecha se escapaban justo los casos reales — la misma factura capturada
+  // dos veces suele traer dos fechas (una tecleada mal, o la del ticket contra la del timbrado).
+  // Con proveedor y folio no hacen falta mas senias: no existen dos facturas del mismo proveedor
+  // con el mismo folio.
   const c = S.clasificarDiferenciaSAT(_dif(1000, [
     { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
-    { id:"b", proveedor:"X", factura:"F-1", fecha:"2026-07-09", importe:1000 },
+    { id:"b", proveedor:"X", factura:"F-1", fecha:"2026-07-09", importe:1020 },
   ]));
-  assert.equal(c.tipo, "diferencia");
+  assert.equal(c.tipo, "duplicado");
+  close(c.excedente, 1020, 0.01, "importes distintos entre las dos capturas, y aun asi es la misma");
 });
 t("si el PROVEEDOR no se parece, tampoco", () => {
   const c = S.clasificarDiferenciaSAT(_dif(1000, [
@@ -1791,9 +1797,74 @@ t("folio equivalente pero tecleado distinto: es duplicado, pero NO consolidable 
   const c = S.clasificarDiferenciaSAT(_dif(5000, [
     { id:"a", proveedor:"X", factura:"PBAL31598", fecha:"2026-07-06", importe:5000 },
     { id:"b", proveedor:"X", factura:"31598", fecha:"2026-07-06", importe:5000 },
-  ]));
+  ], { folioComp:"PBAL31598" }));
   assert.equal(c.tipo, "duplicado");
   assert.equal(c.uniforme, false);
+});
+
+t("un registro con el UUID en el campo Factura sigue siendo la misma factura", () => {
+  // Es el caso de cuatro de los siete renglones reportados: capturar desde la conciliacion metia
+  // el UUID en "Factura", asi que el registro del folio y el del UUID no se parecian en nada
+  // aunque fueran el mismo comprobante, y el grupo se leia como diferencia de monto.
+  const c = S.clasificarDiferenciaSAT(_dif(2504, [
+    { id:"a", proveedor:"NUEVA WAL MART", factura:"IBAGY272188", fecha:"2026-07-07", importe:2504 },
+    { id:"b", proveedor:"NUEVA WAL MART", factura:"859B4C9E-3598-4ABC-A0C5-84E40EF675DA", fecha:"2026-07-07", importe:2504 },
+  ], { uuid:"859B4C9E-3598-4ABC-A0C5-84E40EF675DA", folio:"859B4C9E-3598-4ABC-A0C5-84E40EF675DA", folioComp:"IBAGY272188" }));
+  assert.equal(c.tipo, "duplicado");
+  assert.equal(c.uniforme, false, "los folios se tecleron distinto: consolidar de un boton no funcionaria");
+});
+
+t("un registro ligado por cfdiUuid cuenta aunque no tenga folio", () => {
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"", cfdiUuid:"UUID-1", fecha:"2026-07-06", importe:1000 },
+  ]));
+  assert.equal(c.tipo, "duplicado");
+});
+
+t("un grupo pegado solo por el MONTO no se declara duplicado", () => {
+  // conciliarSAT tambien empareja por importe y fecha cercana. Dos compras distintas del mismo
+  // dia por el mismo monto existen; llamarlas "la misma factura" seria inventar.
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"OTRA-999", fecha:"2026-07-06", importe:1000 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+
+t("si el CFDI no trae folio legible, no se puede afirmar nada", () => {
+  // Solo con UUID y sin cfdiUuid en los gastos no hay con que ligarlos.
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+  ], { folioComp:"", folio:"8148F7B7-2BAF-4EF9-960C-83A293EEA460", uuid:"8148F7B7-2BAF-4EF9-960C-83A293EEA460" }));
+  assert.equal(c.tipo, "diferencia");
+});
+
+console.log("\n== capturar desde la conciliacion: el folio de la FACTURA, no el UUID ==");
+t("folioCapturableCfdi devuelve serie+folio, no el UUID", () => {
+  assert.equal(S.folioCapturableCfdi({ serie:"A", folioComp:"1201", uuid:"U", folio:"U" }), "A1201");
+  assert.equal(S.folioCapturableCfdi({ serie:"", folioComp:"ICAJG468220" }), "ICAJG468220");
+});
+t("si SOLO hay UUID, el campo queda vacio", () => {
+  // Mejor en blanco que con un identificador que nadie lee en el papel y que ademas rompe el
+  // cruce con los demas registros del mismo comprobante.
+  assert.equal(S.folioCapturableCfdi({ folio:"8148F7B7-2BAF-4EF9-960C-83A293EEA460" }), "");
+  assert.equal(S.folioCapturableCfdi({}), "");
+  assert.equal(S.folioCapturableCfdi(null), "");
+});
+t("un folio no-UUID en el campo folio si se usa", () => {
+  assert.equal(S.folioCapturableCfdi({ folio:"POSM13847213" }), "POSM13847213");
+});
+t("el boton Capturar de la conciliacion ya no manda el UUID", () => {
+  // Guardia sobre el codigo fuente: el bug no estaba en una funcion, estaba en el cableado.
+  // El onclick lleva comillas dobles adentro (dentro de las plantillas), asi que no se puede
+  // recortar con [^"]*: se toma un tramo fijo desde la llamada.
+  const i = script.indexOf("onclick=\"preLlenarCaptura(");
+  assert.ok(i > -1, "no encontre el boton Capturar");
+  const m = script.slice(i, i + 260);
+  assert.ok(m.includes("folioCapturableCfdi"), "tiene que pasar el folio de la factura");
+  assert.ok(!m.includes("escAttrJs(c.folio||\"\")"), "c.folio es el UUID: no puede ir al campo Factura");
 });
 
 t("conciliarSAT los saca de diferencias y los pone en duplicados", () => {
