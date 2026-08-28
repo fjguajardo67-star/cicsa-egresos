@@ -5,12 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CICSA — Control de Egresos</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+<!-- integrity: el navegador comprueba el hash antes de ejecutar. Sin esto corría lo que
+     devolviera el CDN, con la sesión de Firebase del usuario y acceso a todo el estado.
+     Los hashes son de estas versiones EXACTAS: al subir de versión hay que recalcularlos
+     o el archivo deja de cargar. OJO: pdf.worker.min.js se pide en tiempo de ejecución
+     (GlobalWorkerOptions.workerSrc) y NO queda cubierto por esto. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
+        integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"
+        integrity="sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+        integrity="sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"
+        integrity="sha384-ViccRjS0k/lvYsrtaKXk+ES61/4PAZlFI/mPHmLC1YWzK0AIbXbI5ZXDzcm3F8gH" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"
+        integrity="sha384-+/4lqMnmLqwbdHXshvGDmBTeWlNoPRdjXi4ZsiBj10EhQXaTBe3RF5JZktdSjug6" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"
+        integrity="sha384-7TetnPNdXXu6qURzIEXWCwpXedGGBJSXIR5Cv0gOWTB34UD5TxPHx33PhjA6wFQ3" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
 /* Paleta tomada del logo oficial CICSA (SVG vectorizado):
    verde bosque #275B26 · verde claro #92BF5B · amarillo #F9CD1D
@@ -646,6 +657,11 @@ body.snav-min .side-theme span { display:none; }
     <h4 style="margin:0 0 6px;color:var(--vd)">👁 Actividad de usuarios operativos</h4>
     <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Quién está operando ahora y cuánto tiempo llevan trabajando hoy. Solo lo ves tú.</div>
     <button class="btn btn-light" onclick="abrirActividadModal()">👁 Ver actividad</button>
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
+    <h4 style="margin:0 0 6px;color:var(--vd)">📦 Espacio del archivo</h4>
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Toda la información vive en un solo archivo en la nube, y ese archivo tiene un tope. Aquí ves cuánto llevas.</div>
+    <div id="medidorEstado"></div>
 
     <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
     <h4 style="margin:0 0 6px;color:var(--vd)">🛟 Respaldos</h4>
@@ -1926,7 +1942,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-b";
+const APP_BUILD = "2026-08-28-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2755,6 +2771,13 @@ function marcarBorrado(id){
 
 // Firma de lo que se MUESTRA en pantalla. Sirve para saber si la fusión con la nube trajo algo
 // nuevo y hay que repintar, sin repintar cada minuto porque sí. Pura y probada.
+// ¿Hay algo que subir? Sólo si la nube no tiene ya exactamente esto. Sin remoto (primera vez,
+// o el fbGet falló) SIEMPRE se sube: ante la duda, escribir — perder una captura es peor que
+// una escritura de más.
+function hayQueSubir(remotoJson, localJson){
+  if(remotoJson == null) return true;
+  return remotoJson !== localJson;
+}
 function _firmaEstado(st){
   try{ return JSON.stringify([st && st.weeks, st && st.budget, st && st.cajaSaldoInicial]); }
   catch(_){ return ""; }
@@ -2800,10 +2823,20 @@ async function ejecutarSync(){
     let remote=null;
     try{ remote = await fbGet('estado/cicsa'); }catch(_){}
     const _antes = _firmaEstado(state);
+    const _remotoJson = remote ? JSON.stringify(remote) : null;
     if(remote && Array.isArray(remote.weeks)) state = mergeEstados(remote, state);
     const _trajoAlgo = _firmaEstado(state) !== _antes;
-    await fbSet('estado/cicsa', state);
-    localStorage.setItem("cicsa_egresos", JSON.stringify(state));
+    const _localJson = JSON.stringify(state);
+    // Un temporizador llama a save() cada minuto haya cambios o no, así que la mayoría de las
+    // vueltas suben exactamente lo mismo que ya está en la nube. Escribir de más no cuesta
+    // dinero a este volumen, pero cada escritura es otra oportunidad de que dos dispositivos
+    // choquen: se lee, se fusiona y se escribe SIN comprobar que nadie escribió en medio, así
+    // que el segundo en llegar puede borrar lo que el primero acababa de agregar. Menos
+    // escrituras, ventana más estrecha.
+    // Se compara el estado serializado completo, no la firma de pantalla: esa sólo mira
+    // weeks/budget/cajaSaldoInicial y dejaría fuera cosas como los excluidos o los borrados.
+    if(hayQueSubir(_remotoJson, _localJson)) await fbSet('estado/cicsa', state);
+    localStorage.setItem("cicsa_egresos", _localJson);
     _syncUltimo = Date.now();
     // Solo se repinta si la nube trajo algo que no teníamos.
     if(_trajoAlgo) refrescarVistaActual();
@@ -2815,6 +2848,51 @@ async function ejecutarSync(){
     _syncing=false;
     if(_syncPending) ejecutarSync();
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TAMAÑO DEL ESTADO — el techo que no se ve venir
+// ═══════════════════════════════════════════════════════════════════
+// Todo el estado financiero vive en UN documento de Firestore, y Firestore corta en 1 MiB por
+// documento. Nada se archiva: cada gasto, corte y retiro de la historia viaja en cada guardado.
+// El día que se cruce el tope, la app deja de poder guardar — no se degrada, se detiene.
+// Antes eso habría fallado en silencio (fbSet ni miraba la respuesta); ahora sale la franja
+// roja, pero enterarse cuando ya no puedes guardar es tarde. Esto lo hace visible con meses de
+// anticipación.
+// El peso por movimiento se calcula de los datos REALES, no de una estimación: así el cálculo
+// de "cuánto te queda" se ajusta solo a cómo captura esta empresa.
+const FIRESTORE_TOPE_DOC = 1048576;   // 1 MiB — límite duro de Firestore por documento
+// Bytes UTF-8, no caracteres: los acentos y las eñes ocupan dos, y esta app está en español.
+// Se cuenta a mano en vez de usar TextEncoder para no tener dos caminos —uno correcto y otro
+// de respaldo que cuenta caracteres— de los que solo se probaría uno. Un medidor de espacio
+// que subestima no sirve para nada, que es exactamente lo que hacía el respaldo.
+function _bytesUtf8(txt){
+  let n = 0;
+  for(let i = 0; i < txt.length; i++){
+    const c = txt.charCodeAt(i);
+    if(c < 0x80) n += 1;
+    else if(c < 0x800) n += 2;
+    else if(c >= 0xD800 && c <= 0xDBFF){ n += 4; i++; }   // par suplente (emoji): 4 bytes, 2 unidades
+    else n += 3;
+  }
+  return n;
+}
+function medirEstado(json, nMovimientos){
+  const txt = String(json == null ? "" : json);
+  const bytes = _bytesUtf8(txt);
+  const pct = Math.round((bytes / FIRESTORE_TOPE_DOC) * 1000) / 10;
+  const nivel = pct >= 80 ? "critico" : (pct >= 60 ? "aviso" : "ok");
+  const n = parseInt(nMovimientos, 10) || 0;
+  const porMovimiento = n > 0 ? Math.round(bytes / n) : 0;
+  const libres = Math.max(0, FIRESTORE_TOPE_DOC - bytes);
+  return {
+    bytes, pct, nivel, porMovimiento,
+    movimientosQueCaben: porMovimiento > 0 ? Math.floor(libres / porMovimiento) : null,
+  };
+}
+function contarMovimientos(st){
+  return (((st||{}).weeks)||[]).reduce((t,w)=>t
+    + ((w.gastos||[]).length) + ((w.cortes||[]).length) + ((w.retiros||[]).length), 0);
 }
 
 function save() {
@@ -9736,6 +9814,39 @@ async function abrirAdminModal() {
   document.getElementById("adminModal").classList.add("open");
   cargarUsuarios();
   renderRespaldos();
+  pintarMedidorEstado();
+}
+
+// Traduce la medición a algo accionable: no "812 KB" sino "te caben ~900 gastos más".
+function pintarMedidorEstado(){
+  const el = document.getElementById("medidorEstado");
+  if(!el) return;
+  const m = medirEstado(JSON.stringify(state), contarMovimientos(state));
+  const kb = (m.bytes/1024).toFixed(0);
+  const tope = (FIRESTORE_TOPE_DOC/1024).toFixed(0);
+  const color = m.nivel==="critico" ? "var(--red)" : (m.nivel==="aviso" ? "var(--do)" : "var(--vm)");
+  const caben = m.movimientosQueCaben;
+  const restante = caben == null
+    ? "Todavía no hay movimientos suficientes para estimar cuánto falta."
+    : (caben > 20000
+        ? `Al ritmo actual caben decenas de miles de movimientos más: no es una preocupación cercana.`
+        : `Al peso promedio de tus movimientos (${m.porMovimiento} bytes cada uno) caben unos <strong>${caben.toLocaleString("es-MX")}</strong> más.`);
+  const alerta = m.nivel==="ok" ? "" :
+    `<div style="margin-top:10px;padding:10px 12px;background:${m.nivel==="critico"?"var(--red-bg)":"#FFF8E1"};border-left:3px solid ${color};font-size:12.5px;line-height:1.5">
+       <strong style="color:${color}">${m.nivel==="critico"?"Hay que actuar":"Conviene planearlo"}</strong> —
+       cuando el archivo llegue al tope, la app deja de poder guardar. No se degrada: se detiene.
+       Avísame para separar los movimientos en archivos aparte antes de llegar ahí.
+     </div>`;
+  el.innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:600;color:${color}">${m.pct}%</span>
+      <span style="font-size:12.5px;color:var(--txt2)">${kb} KB de ${tope} KB · ${contarMovimientos(state).toLocaleString("es-MX")} movimientos</span>
+    </div>
+    <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+      <div style="height:100%;width:${Math.min(100,m.pct)}%;background:${color}"></div>
+    </div>
+    <div style="font-size:12px;color:var(--txt2);margin-top:6px">${restante}</div>
+    ${alerta}`;
 }
 
 function _fechaRespaldo(id){ return String(id||"").replace(RESPALDO_PREFIJO,""); }

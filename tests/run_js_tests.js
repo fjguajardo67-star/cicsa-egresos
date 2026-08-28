@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID"];
+const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA"];
 
 
@@ -105,7 +105,7 @@ const FUNCS = [
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
   "cortesManualesSospechosos", "egresosExcluidos", "folioDeIgnorado", "_unirIgnorados",
-  "puedeEntrar",
+  "puedeEntrar", "_bytesUtf8", "medirEstado", "contarMovimientos", "hayQueSubir",
   "todosLosCortesNoContables",
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
@@ -1817,6 +1817,84 @@ t("excluir los siete deja el ingreso en los $430,054 de los cortes importados", 
   close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), 430054, 0.01);
   close(S.todosLosCortesNoContables().reduce((t, c) => t + c.monto, 0), 446647, 0.01);
   assert.equal(S.state.weeks[0].cortes.length, 140, "no se borro ni uno: 133 + 7");
+});
+
+console.log("\n== sincronizacion: no escribir lo que ya esta ==");
+t("si la nube ya tiene exactamente esto, no se sube", () => {
+  assert.equal(S.hayQueSubir('{"a":1}', '{"a":1}'), false);
+});
+t("si cambio algo, se sube", () => {
+  assert.equal(S.hayQueSubir('{"a":1}', '{"a":2}'), true);
+});
+t("sin remoto SIEMPRE se sube: ante la duda, escribir", () => {
+  // Primera vez, o el fbGet fallo. Perder una captura es peor que una escritura de mas.
+  assert.equal(S.hayQueSubir(null, '{"a":1}'), true);
+  assert.equal(S.hayQueSubir(undefined, '{"a":1}'), true);
+});
+
+console.log("\n== tamano del estado: el techo de 1 MiB ==");
+// Todo el estado vive en UN documento y Firestore corta en 1 MiB. Nada se archiva, asi que
+// crece siempre. El dia que se cruce, la app deja de poder guardar. Esto lo hace visible antes.
+const TOPE = vm.runInContext("FIRESTORE_TOPE_DOC", sandbox);
+t("el tope es el limite real de Firestore, no un numero inventado", () => {
+  assert.equal(TOPE, 1048576, "1 MiB por documento");
+});
+t("mide BYTES utf-8, no caracteres: esta app escribe en espanol", () => {
+  // "ñ" y los acentos ocupan dos bytes. Contar caracteres subestimaria el tamano real, que es
+  // justo el error que hace que un medidor de espacio no sirva para nada.
+  assert.equal(S.medirEstado("abc", 0).bytes, 3);
+  assert.equal(S.medirEstado("ñ", 0).bytes, 2);
+  assert.equal(S.medirEstado("Cárnicos", 0).bytes, 9, "8 caracteres, 9 bytes");
+  assert.equal(S.medirEstado("€", 0).bytes, 3);
+  assert.equal(S.medirEstado("🍽", 0).bytes, 4, "un emoji son 4 bytes, aunque JS lo vea como 2");
+  // Contra la referencia del entorno, cuando existe.
+  if (typeof TextEncoder !== "undefined") {
+    for (const txt of ["Cárnicos", "ñ", "🍽 Comedores", "ACME S.A. de C.V.", ""]) {
+      assert.equal(S.medirEstado(txt, 0).bytes, new TextEncoder().encode(txt).length, txt);
+    }
+  }
+});
+t("los tres niveles cambian donde deben", () => {
+  const en = p => S.medirEstado("x".repeat(Math.round(TOPE * p / 100)), 0).nivel;
+  assert.equal(en(10), "ok");
+  assert.equal(en(59), "ok");
+  assert.equal(en(60), "aviso",  "al 60% empieza a avisar");
+  assert.equal(en(79), "aviso");
+  assert.equal(en(80), "critico", "al 80% ya es urgente");
+  assert.equal(en(95), "critico");
+});
+t("cuenta gastos, cortes y retiros de todas las semanas", () => {
+  assert.equal(S.contarMovimientos({ weeks: [
+    { gastos:[1,2,3], cortes:[1], retiros:[] },
+    { gastos:[1],     cortes:[],  retiros:[1,2] },
+  ]}), 7);
+  assert.equal(S.contarMovimientos({}), 0, "estado vacio no truena");
+  assert.equal(S.contarMovimientos(null), 0);
+});
+t("el peso por movimiento sale de los datos reales, no de una estimacion", () => {
+  const m = S.medirEstado("x".repeat(1000), 10);
+  assert.equal(m.porMovimiento, 100);
+  assert.equal(m.movimientosQueCaben, Math.floor((TOPE - 1000) / 100));
+});
+t("sin movimientos no se inventa una proyeccion", () => {
+  const m = S.medirEstado("x".repeat(1000), 0);
+  assert.equal(m.porMovimiento, 0);
+  assert.equal(m.movimientosQueCaben, null, "mejor no decir nada que decir un numero falso");
+});
+
+console.log("\n== librerias externas: nada se ejecuta sin verificar ==");
+// Sin integrity el navegador ejecuta lo que devuelva el CDN, con la sesion de Firebase del
+// usuario y acceso a todo el estado. Los hashes son de versiones EXACTAS: si alguien sube una
+// version y no recalcula, el archivo deja de cargar — ruidoso, que es justo lo que se quiere.
+t("todo <script src> externo lleva integrity y crossorigin", () => {
+  const html = require("fs").readFileSync(require("path").join(__dirname, "..", "index.html"), "utf8");
+  const sinSri = [];
+  for (const m of html.matchAll(/<script\b[^>]*\bsrc="(https?:[^"]+)"[^>]*>/g)) {
+    if (!/\bintegrity="sha(256|384|512)-/.test(m[0]) || !/\bcrossorigin=/.test(m[0])) {
+      sinSri.push(m[1]);
+    }
+  }
+  assert.deepEqual(sinSri, [], "estos scripts entran sin verificar");
 });
 
 console.log("\n== mensajes de estado: texto, no HTML ==");
