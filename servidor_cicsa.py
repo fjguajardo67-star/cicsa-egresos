@@ -763,6 +763,12 @@ def load_api_key():
                 return True
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
+# Bajo un servidor WSGI (Gunicorn en Railway) el bloque __main__ NO se ejecuta, así que la
+# clave hay que cargarla al importar. En Railway viene por variable de entorno y esto es un
+# no-op; en local lee CICSA_APIKEY.txt igual que siempre. get_client() la consulta en cada
+# petición, no al arrancar, así que con esto queda cubierto cualquier forma de arranque.
+load_api_key()
+
 if __name__ == "__main__":
     print("="*55)
     print("  CICSA — Control de Egresos / Nómina  v3.0")

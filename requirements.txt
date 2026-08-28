@@ -1,10 +1,71 @@
-anthropic
-flask
-flask-cors
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-google-api-python-client
-gspread
-pdfplumber
-requests
+# Versiones FIJAS. Antes las diez dependencias flotaban sin versión, así que cada
+# despliegue instalaba lo que hubiera ese día: el build del 28-ago-2026 trajo
+# anthropic 1.2.0 —un cambio de versión mayor— sin que nadie lo decidiera. Si un día
+# la lectura de facturas con IA dejara de funcionar sola, ése sería el motivo.
+#
+# Estas son EXACTAMENTE las versiones del build 2026-08-28T04:47 de Railway, que es
+# el que está funcionando. Fijarlas no actualiza nada: congela lo que ya corre.
+#
+# Se listan también las dependencias indirectas. Sin ellas la reproducibilidad es a
+# medias: flask puede quedar fijo y werkzeug cambiar debajo.
+#
+# Para actualizar (a propósito, no por accidente): quita los ==, instala en un
+# entorno limpio, prueba, y vuelve a fijar con `pip freeze`.
+
+# ── Directas ────────────────────────────────────────────────────────────────
+anthropic==1.2.0
+flask==3.1.3
+flask-cors==6.0.5
+google-auth==2.57.0
+google-auth-oauthlib==1.4.1
+google-auth-httplib2==0.4.2
+google-api-python-client==2.199.0
+pdfplumber==0.11.10
+requests==2.34.2
+
+# Servidor WSGI de producción. El Procfile arrancaba `python servidor_cicsa.py`, que
+# levanta el servidor de desarrollo de Flask: sin timeouts, sin control de concurrencia
+# y con un aviso explícito de la propia Flask de que no es para producción.
+gunicorn==26.2.0
+
+# ── Indirectas, fijadas para que el build sea reproducible de verdad ─────────
+annotated-types==0.8.0
+anyio==4.14.2
+blinker==1.9.0
+certifi==2026.7.22
+cffi==2.1.1
+charset_normalizer==3.5.1
+click==8.5.0
+cryptography==50.0.1
+docstring-parser==0.18.0
+google-api-core==2.34.0
+googleapis-common-protos==1.75.2
+h11==0.16.0
+httpcore2==2.12.0
+httplib2==0.32.0
+httpx2==2.12.0
+idna==3.19
+itsdangerous==2.2.0
+jinja2==3.1.6
+jiter==0.16.0
+markupsafe==3.0.3
+oauthlib==3.3.1
+pdfminer.six==20260107
+Pillow==12.3.0
+proto-plus==1.28.4
+protobuf==7.36.0
+pyasn1==0.6.4
+pyasn1-modules==0.4.2
+pycparser==3.0
+pydantic==2.13.4
+pydantic-core==2.46.4
+pyparsing==3.3.2
+pypdfium2==5.13.0
+requests-oauthlib==2.0.0
+sniffio==1.3.1
+truststore==0.10.4
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+uritemplate==4.2.0
+urllib3==2.7.0
+werkzeug==3.1.8
