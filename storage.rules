@@ -1,0 +1,97 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// CICSA Egresos — Reglas de seguridad de Firebase STORAGE
+// ═══════════════════════════════════════════════════════════════════════════
+// ARCHIVO DE REFERENCIA. Firebase NO lo lee del repo: hay que pegarlo en
+// Firebase Console → Storage → Reglas → Publicar. Se versiona aquí para poder
+// revisarlo como código, igual que firestore.rules.
+//
+// OJO — SON DOS COSAS DISTINTAS:
+//   firestore.rules  → Firestore Database. Protege los DATOS: estado/cicsa,
+//                      usuarios, cfdis, respaldos, catálogo…
+//   storage.rules    → Cloud Storage. Protege los ARCHIVOS: las fotos y PDFs
+//                      de las facturas, y los .json de cortes.
+// Publicar uno no publica el otro, y viven en secciones distintas de la consola.
+//
+// Hasta ahora este archivo no existía: nadie había revisado qué reglas tenía el
+// bucket, y los valores por defecto de Firebase varían según cuándo se creó
+// (unos exigen sesión, otros quedan abiertos y luego se cierran solos). Es decir:
+// las imágenes de las facturas de la empresa podían llevar tiempo siendo
+// descargables por cualquiera que tuviera la URL, sin que nadie lo supiera.
+//
+// ── Lo que la app hace de verdad contra Storage (verificado en index.html) ──
+//   subirRespaldoAStorage()      POST  facturas/{ts}_{factura}.{pdf|jpg|png}
+//   subirArchivoCortesAStorage() POST  cortes/{ini}_{fin}.json
+//   verFactura() / migración     GET   ...?alt=media
+//   BORRAR: nadie. No hay una sola llamada DELETE en el frontend.
+// Por eso sólo se permite lo que se usa: leer, crear, y en cortes reescribir.
+//
+// El mismo criterio que en Firestore: no basta con tener sesión. El alta por
+// correo de Firebase es un endpoint público de Google y la llave del proyecto va
+// en index.html, así que cualquiera puede crearse una cuenta sin invitación.
+// Lo que autoriza es estar dado de alta, y eso vive en usuarios/{uid} de
+// Firestore — de ahí las consultas firestore.exists()/firestore.get() de abajo.
+//
+// SI LA CONSOLA RECHAZA firestore.exists() o si tras publicar fallan las subidas,
+// sustituye esUsuario() y esAdmin() por `return request.auth != null;`. Se pierde
+// el filtro de "dado de alta" pero se conserva el de "con sesión", que ya es
+// muchísimo mejor que un bucket abierto. Avisa si acabas ahí, para buscarle.
+
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+    function conSesion() {
+      return request.auth != null;
+    }
+    // Mismo criterio que esUsuario() en firestore.rules: registro en
+    // usuarios/{uid}. El dueño se exceptúa por UID porque es quien tiene que
+    // poder entrar siempre, incluso para recrear registros.
+    function esUsuario() {
+      return conSesion() && (
+        request.auth.uid == 'NVapfgY8pshXwYbMq7Wz28ry3pC3' ||
+        firestore.exists(/databases/(default)/documents/usuarios/$(request.auth.uid))
+      );
+    }
+    function esAdmin() {
+      return conSesion() && (
+        request.auth.uid == 'NVapfgY8pshXwYbMq7Wz28ry3pC3' ||
+        (firestore.exists(/databases/(default)/documents/usuarios/$(request.auth.uid)) &&
+         firestore.get(/databases/(default)/documents/usuarios/$(request.auth.uid)).data.rol == 'admin')
+      );
+    }
+
+    // ── facturas/ — la foto o el PDF de cada comprobante ───────────────────
+    // Es el respaldo documental de cada gasto: si esto se pierde o se sustituye,
+    // el gasto queda sin cómo comprobarse ante el SAT.
+    // update va en `false` a propósito: una factura ya subida NO se reemplaza.
+    // El nombre lleva Date.now(), así que dos subidas distintas nunca chocan;
+    // si alguna vez chocaran, es mejor que falle a que se pise el original.
+    // delete queda sólo para el admin aunque hoy nadie borre desde la app: si
+    // algún día se agrega el botón, la regla ya está puesta.
+    match /facturas/{archivo} {
+      allow read:   if esUsuario();
+      allow create: if esUsuario()
+                    && request.resource.size < 15 * 1024 * 1024
+                    && (request.resource.contentType.matches('image/.*') ||
+                        request.resource.contentType == 'application/pdf');
+      allow update: if false;
+      allow delete: if esAdmin();
+    }
+
+    // ── cortes/ — el .json original de cada periodo, como archivo histórico ─
+    // Aquí update SÍ se permite: el nombre es {ini}_{fin}.json, o sea
+    // determinista, y reimportar el mismo periodo tiene que poder reescribirlo.
+    match /cortes/{archivo} {
+      allow read:          if esUsuario();
+      allow create, update: if esUsuario()
+                    && request.resource.size < 5 * 1024 * 1024
+                    && request.resource.contentType == 'application/json';
+      allow delete:        if esAdmin();
+    }
+
+    // Cualquier otra ruta queda denegada por omisión: si mañana el código sube a
+    // una carpeta nueva y nadie la agrega aquí, va a fallar de forma ruidosa en
+    // vez de quedar abierta. Es a propósito.
+  }
+}

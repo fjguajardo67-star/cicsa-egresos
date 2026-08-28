@@ -88,29 +88,32 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC"];
+const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA"];
 
 
 const FUNCS = [
   "normalizarParaComparar", "posibleMismoIngrediente", "esGastoEfectivo",
+  "montoEfectivoGasto", "difImporteCaja", "_yaVinculadoAOtroFolio",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
-  "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros",
+  "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
   "findDuplicate", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "separarNombresMenu", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
   "variantesLlaveMenu", "llavesMenuDeFila",
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "_cfdiNomina", "corridasDeNomina", "corridaNominaRegistrada", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
-  "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
+  "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista", "resolverPeriodoSP",
   "cortesManualesSospechosos", "egresosExcluidos", "folioDeIgnorado", "_unirIgnorados",
   "puedeEntrar", "_bytesUtf8", "medirEstado", "contarMovimientos", "hayQueSubir",
+  "datosDeCaptura",
   "todosLosCortesNoContables",
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
   "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
+  "clasificarDiferenciaSAT",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
   "_cfdiTipoDesdeTexto", "filtrarCfdisConciliables", "autodetectarRfcPropio",
@@ -128,7 +131,10 @@ const FUNCS = [
   "resumenEstado", "_estadoValido", "podarRespaldos",
   "esc", "escAttrJs",
   "_esFechaISO", "_esNum", "validarArchivoCortes", "avisosControlCortes",
-  "foliosCorteImportados", "foliosEgresoImportados", "foliosCorteIgnorados", "clasificacionInicialEgreso",
+  "foliosCorteImportados", "foliosEgresoImportados", "foliosCorteIgnorados", "foliosAportacionImportadas", "clasificacionInicialEgreso",
+  "_sumarDiaISO", "manifiestoDeImportacion", "_claveManifiesto", "agregarManifiesto", "_unirManifiestos",
+  "coberturaDePeriodos", "validarCadenaPeriodos", "rupturasDeCadena",
+  "totalesDeclarados", "estadoConciliacionCaja",
   "_pareceFolioFactura", "gastoMismoImporte",
   "findDuplicate",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
@@ -1015,8 +1021,37 @@ t("un reloj adelantado no produce 'hace -3 min'", () => {
   assert.equal(S.textoSync(ahora + 180_000, ahora), "⟳ al día");
 });
 
+console.log("\n== el periodo compartido, resuelto a fechas de verdad ==");
+// getPeriodoSP() en modo semana devuelve weekId y etiqueta, SIN ini/fin. Todo lo que compare
+// fechas contra el periodo tiene que pasar por resolverPeriodoSP() o se queda ciego.
+const WKS = [
+  { id: "w1", ini: "2026-08-17", fin: "2026-08-23", label: "17 al 23 ago 2026" },
+  { id: "w2", ini: "2026-08-24", fin: "2026-08-30", label: "24 al 30 ago 2026" },
+];
+t("modo semana: saca las fechas de la semana seleccionada", () => {
+  const r = S.resolverPeriodoSP({ modo: "semana", weekId: "w2", label: "24 al 30 ago 2026" }, WKS);
+  assert.equal(r.ini, "2026-08-24");
+  assert.equal(r.fin, "2026-08-30");
+  assert.equal(r.modo, "semana");
+});
+t("modo rango: respeta las fechas que eligió el usuario", () => {
+  const r = S.resolverPeriodoSP({ modo: "rango", ini: "2026-07-04", fin: "2026-08-02", label: "04 jul 2026 al 02 ago 2026" }, WKS);
+  assert.equal(r.ini, "2026-07-04");
+  assert.equal(r.fin, "2026-08-02");
+  assert.equal(r.modo, "rango");
+});
+t("una semana vieja sin rango no inventa fechas", () => {
+  const r = S.resolverPeriodoSP({ modo: "semana", weekId: "vieja" }, [{ id: "vieja", label: "Semana 3" }]);
+  assert.equal(r.ini, "");
+  assert.equal(r.fin, "");
+});
+t("sin periodo y sin semanas no truena", () => {
+  const r = S.resolverPeriodoSP(null, null);
+  assert.deepEqual(r, { modo: "semana", ini: "", fin: "", label: "" });
+});
+
 console.log("\n== un gasto guardado que no se ve: hay que decirlo ==");
-const PER = { ini: "2026-08-03", fin: "2026-08-09", label: "03 al 09 ago 2026" };
+const PER = { modo: "semana", ini: "2026-08-03", fin: "2026-08-09", label: "03 al 09 ago 2026" };
 t("un gasto dentro del periodo no genera aviso", () => {
   assert.equal(S.avisoGastoFueraDeVista("2026-08-05", PER, ""), "");
   assert.equal(S.avisoGastoFueraDeVista("2026-08-03", PER, ""), "", "el primer día cuenta");
@@ -1025,13 +1060,16 @@ t("un gasto dentro del periodo no genera aviso", () => {
 t("una factura de Gmail con fecha de otro periodo avisa que no se va a ver", () => {
   // El caso reportado: se captura desde Gmail, se guarda bien, y no aparece en Gastos,
   // Auditoría ni Presupuesto porque esas vistas filtran por FECHA, no por semana.
-  const conSemana = [{ ini: "2026-07-13", fin: "2026-07-19" }];
+  const conSemana = [{ ini: "2026-07-13", fin: "2026-07-19", label: "13 al 19 jul 2026" }];
   const m = S.avisoGastoFueraDeVista("2026-07-15", PER, "", conSemana);
   assert.ok(/FUERA del periodo/.test(m));
   assert.ok(/03 al 09 ago 2026/.test(m), "dice a qué periodo estás mirando");
-  assert.ok(/Se guardó/.test(m), "deja claro que SÍ se guardó");
+  assert.ok(/Se guardó bien/.test(m), "deja claro que SÍ se guardó");
 });
-const SEMANAS = [{ ini: "2026-08-03", fin: "2026-08-09" }, { ini: "2026-08-17", fin: "2026-08-23" }];
+const SEMANAS = [
+  { ini: "2026-08-03", fin: "2026-08-09", label: "03 al 09 ago 2026" },
+  { ini: "2026-08-17", fin: "2026-08-23", label: "17 al 23 ago 2026" },
+];
 t("una fecha posterior al periodo también avisa", () => {
   assert.ok(/FUERA del periodo/.test(S.avisoGastoFueraDeVista("2026-08-19", PER, "", SEMANAS)));
 });
@@ -1039,19 +1077,63 @@ t("si NO existe la semana que cubre la fecha, se dice que hay que crearla", () =
   // Caso real: facturas del 10 al 16 de agosto sin esa semana creada. Como las vistas filtran
   // por fecha y no por bolsa, no había NINGÚN periodo donde pudieran verse.
   const m = S.avisoGastoFueraDeVista("2026-08-12", PER, "", SEMANAS);
-  assert.ok(/NO cae en ninguna semana creada/.test(m));
+  assert.ok(/NINGUNA semana creada/.test(m));
   assert.ok(/no hay que recapturarlo/.test(m), "hay que decir que el dato no se perdió");
   assert.ok(!/cámbiate/i.test(m), "no mandar a un periodo que no existe");
 });
-t("si la semana sí existe, se manda a cambiarse a ella", () => {
+t("si la semana sí existe, se manda a cambiarse a ella POR SU NOMBRE", () => {
+  // Antes decía "cámbiate a la semana que le toca" sin decir a cuál. Nombrarla es la diferencia
+  // entre un aviso accionable y uno que sólo preocupa.
   const m = S.avisoGastoFueraDeVista("2026-08-19", PER, "", SEMANAS);
-  assert.ok(/te cambies a la semana que le toca/.test(m));
+  assert.ok(/Cámbiate a la semana «17 al 23 ago 2026»/.test(m));
   assert.ok(!/crea la semana/i.test(m));
 });
+t("una semana sin etiqueta se nombra por sus fechas", () => {
+  const m = S.avisoGastoFueraDeVista("2026-08-19", PER, "", [{ ini: "2026-08-17", fin: "2026-08-23" }]);
+  assert.ok(/2026-08-17 al 2026-08-23/.test(m), "sin fmtDate en el sandbox van las fechas crudas");
+});
 t("los bordes de una semana existente cuentan como cubiertos", () => {
-  assert.ok(/te cambies/.test(S.avisoGastoFueraDeVista("2026-08-17", PER, "", SEMANAS)), "primer día");
-  assert.ok(/te cambies/.test(S.avisoGastoFueraDeVista("2026-08-23", PER, "", SEMANAS)), "último día");
-  assert.ok(/ninguna semana creada/.test(S.avisoGastoFueraDeVista("2026-08-24", PER, "", SEMANAS)));
+  assert.ok(/Cámbiate a la semana/.test(S.avisoGastoFueraDeVista("2026-08-17", PER, "", SEMANAS)), "primer día");
+  assert.ok(/Cámbiate a la semana/.test(S.avisoGastoFueraDeVista("2026-08-23", PER, "", SEMANAS)), "último día");
+  assert.ok(/NINGUNA semana creada/.test(S.avisoGastoFueraDeVista("2026-08-24", PER, "", SEMANAS)));
+});
+t("el aviso dice que el periodo NO es la semana de captura de esa pantalla", () => {
+  // El reporte que lo destapó: la barra lateral decía "24 al 30 ago 2026", el gasto era del 26,
+  // aparecía en Gastos, y el aviso hablaba de "04 jul al 02 ago". Eran dos periodos distintos y
+  // el mensaje llamaba al invisible "el periodo que estás viendo".
+  const m = S.avisoGastoFueraDeVista("2026-08-19", PER, "", SEMANAS);
+  assert.ok(/NO es la semana de captura de esta pantalla/.test(m));
+  assert.ok(/Gastos, Presupuesto o Seguimiento/.test(m), "hay que decir dónde se cambia");
+});
+t("en modo rango no se manda a ninguna semana: se manda a cambiar el rango", () => {
+  // Exactamente el caso del reporte: un rango olvidado de la importación de cortes.
+  const RANGO = { modo: "rango", ini: "2026-07-04", fin: "2026-08-02", label: "04 jul 2026 al 02 ago 2026" };
+  const m = S.avisoGastoFueraDeVista("2026-08-26", RANGO, "", WKS);
+  assert.ok(/04 jul 2026 al 02 ago 2026/.test(m), "nombra el rango culpable");
+  assert.ok(/Rango de fechas/.test(m), "dice en qué modo está");
+  assert.ok(/Semana guardada/.test(m), "y cómo salirse de él");
+  assert.ok(!/Cámbiate a la semana/.test(m), "en modo rango no hay semana a la que cambiarse");
+  assert.ok(!/NINGUNA semana creada/.test(m), "tampoco se pide crear semanas");
+});
+t("el aviso en modo semana no se queda mudo por falta de fechas", () => {
+  // La regresión de fondo: guardarGasto le pasaba getPeriodoSP() crudo, que en modo semana
+  // llega sin ini/fin, así que el aviso devolvía "" SIEMPRE en el modo por default. Encadenar
+  // resolverPeriodoSP() es lo que lo despierta.
+  const crudo = { modo: "semana", weekId: "w2", label: "24 al 30 ago 2026" };
+  assert.equal(S.avisoGastoFueraDeVista("2026-07-15", crudo, "", WKS), "", "sin fechas no puede comparar");
+  const resuelto = S.resolverPeriodoSP(crudo, WKS);
+  assert.ok(/FUERA del periodo/.test(S.avisoGastoFueraDeVista("2026-07-15", resuelto, "", WKS)));
+});
+t("guardarGasto le pasa el periodo YA resuelto a fechas, no el crudo", () => {
+  // Guardia sobre el código fuente. La prueba de arriba demuestra que con getPeriodoSP() crudo
+  // el aviso se queda mudo; ésta impide que alguien vuelva a cablearlo así. No hay DOM ni
+  // localStorage en el sandbox, así que el cableado sólo se puede vigilar de forma textual.
+  const m = script.match(/_fueraDeVista = avisoGastoFueraDeVista\([\s\S]{0,400}?\);/);
+  assert.ok(m, "no encontré la llamada en guardarGasto");
+  assert.ok(m[0].includes("periodoSPRango"),
+            "el aviso necesita ini/fin: sin periodoSPRango() no compara nada en modo semana");
+  assert.ok(!/getPeriodoSP\s*\(/.test(m[0]),
+            "getPeriodoSP() crudo no trae fechas en modo semana — el aviso vuelve a quedarse mudo");
 });
 t("la fecha de corte gana: ese gasto no se ve en NINGUNA consulta", () => {
   const m = S.avisoGastoFueraDeVista("2026-06-01", PER, "2026-07-01");
@@ -1505,6 +1587,621 @@ t("si truena a media vuelta, NO deja una importacion parcial", () => {
   } finally { S.canonizarCategoria = real; }
 });
 
+// ── Vincular una factura existente como pago de caja ────────────────────────
+// El agujero: "ignorar" no crea gasto ni retiro Y no toca la factura que ya estaba. Si esa
+// factura estaba como credito o transferencia, la salida de efectivo del concentrado no llegaba
+// nunca a Caja —que solo suma esGastoEfectivo()— y el saldo quedaba inflado por esa cantidad, sin
+// que nada en pantalla lo explicara. Vincular registra el hecho real: la factura no se duplica, y
+// el efectivo que salio si cuenta.
+const _egVinc = (folio, gastoDup, monto, fecha) => ({
+  folio, fecha: fecha || "2026-08-20", concepto:"COMPRA SAMS", comprobante:"ICAJ-1",
+  monto, _clase:"vincular_efectivo", _dup:{ gasto: gastoDup, reason:"Mismo No. de factura" },
+});
+
+t("vincular NO crea un gasto nuevo: devuelve un parche para el que ya existe", () => {
+  const existente = { id:"g1", proveedor:"COMPRA SAMS", importe:3184, fecha:"2026-08-20", formaPago:"credito" };
+  const r = S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-2026-00024", existente, 3184)]),
+    { cortes:[], gastos:[existente], retiros:[], ignorados:[] }, "Diana", 1000);
+  assert.equal(r.nG, 0, "no se crea un gasto: seria contar la factura dos veces");
+  assert.equal(r.nV, 1);
+  assert.equal(r.gastos.length, 1, "sigue habiendo una sola factura");
+  assert.equal(r.vinculos.length, 1);
+  const c = r.vinculos[0].cambios;
+  assert.equal(r.vinculos[0].id, "g1");
+  assert.equal(c.formaPagoFinal, "caja_cortes", "por fin cuenta como salida de efectivo");
+  assert.equal(c.formaPagoAnterior, "credito", "queda de que forma de pago venia");
+  assert.equal(c._folioEgreso, "EGR-2026-00024");
+  close(c.montoCaja, 3184, 0.01);
+});
+
+t("vincular NO sobrescribe el importe fiscal de la factura", () => {
+  // El ticket del SAMS del 6 de agosto salio de caja por 5,124.00 y la factura dice 5,073.99.
+  // Las dos cifras son correctas. Pisar el importe para cuadrar la caja seria falsear el
+  // comprobante ante el SAT; por eso el parche toca montoCaja y NO toca importe.
+  const existente = { id:"g1", proveedor:"COMPRA SAMS", importe:5073.99, fecha:"2026-08-06" };
+  const r = S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-9", existente, 5124, "2026-08-06")]),
+    { cortes:[], gastos:[existente], retiros:[], ignorados:[] }, "Diana", 1000);
+  const c = r.vinculos[0].cambios;
+  assert.ok(!("importe" in c), "el importe fiscal no se toca NUNCA");
+  close(c.montoCaja, 5124, 0.01);
+  close(existente.importe, 5073.99, 0.01, "ni siquiera de rebote sobre el objeto original");
+});
+
+t("la factura a vincular puede estar en OTRA semana", () => {
+  // Es el caso normal, no el raro: la factura entro por Gmail o por el SAT semanas antes, y las
+  // semanas de esta app son bolsas de captura, no rangos de fecha. Buscarla solo en la semana que
+  // se esta importando haria tronar casi todos los vinculos.
+  const enOtraSemana = { id:"gX", proveedor:"COMPRA SAMS", importe:4801, fecha:"2026-08-25" };
+  const r = S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-2026-00030", enOtraSemana, 4801, "2026-08-25")]),
+    { cortes:[], gastos:[], retiros:[], ignorados:[], gastosTodos:[enOtraSemana] }, "Diana", 1000);
+  assert.equal(r.nV, 1);
+  assert.equal(r.vinculos[0].id, "gX");
+  assert.equal(r.gastos.length, 0, "no se agrega nada a la semana activa");
+});
+
+t("si la factura a vincular no aparece, NO se importa nada", () => {
+  assert.throws(() => S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-1", { id:"fantasma", importe:100 }, 100)]),
+    _previosVacios(), "Diana", 1000), /No encontr./);
+});
+
+t("una factura no se puede vincular a dos folios distintos", () => {
+  // Seria decir que la misma factura se pago dos veces desde la caja.
+  const ya = { id:"g1", proveedor:"X", importe:100, fecha:"2026-08-20", _folioEgreso:"EGR-VIEJO" };
+  assert.throws(() => S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-NUEVO", ya, 100)]),
+    { cortes:[], gastos:[ya], retiros:[], ignorados:[] }, "Diana", 1000), /EGR-VIEJO/);
+});
+
+t("dos egresos del mismo archivo no pueden vincularse a la misma factura", () => {
+  const g = { id:"g1", proveedor:"X", importe:100, fecha:"2026-08-20" };
+  assert.throws(() => S.construirImportacionCortes(
+    _impBase([_egVinc("EGR-1", g, 100), _egVinc("EGR-2", g, 100)]),
+    { cortes:[], gastos:[g], retiros:[], ignorados:[] }, "Diana", 1000), /misma factura/);
+});
+
+t("los gastos se CLONAN: vincular no escribe en el estado antes de confirmar", () => {
+  // [...gastos] copia el arreglo pero comparte los objetos. En el momento en que la funcion
+  // modifica uno estaria escribiendo en week.gastos sin que nadie haya confirmado nada, y un
+  // error a media vuelta dejaria media importacion aplicada.
+  const original = { id:"g1", proveedor:"X", importe:100, fecha:"2026-08-20", formaPago:"credito" };
+  const r = S.construirImportacionCortes(
+    _impBase([{ folio:"EGR-a", fecha:"2026-08-20", concepto:"NUEVO", monto:5, _clase:"gasto", _cat:"Otro" }]),
+    { cortes:[], gastos:[original], retiros:[], ignorados:[] }, "Diana", 1000);
+  assert.notStrictEqual(r.gastos[0], original, "el objeto devuelto NO puede ser el mismo de la semana");
+  r.gastos[0].formaPago = "efectivo";
+  assert.equal(original.formaPago, "credito", "tocar la copia no puede alterar el estado real");
+});
+
+t("reclasificar un folio excluido lo SACA de la lista de excluidos", () => {
+  // Si no, el mismo movimiento sale contado como gasto real Y listado como egreso excluido: el
+  // reporte se contradice a si mismo y nadie sabe cual de los dos creer.
+  const previos = { cortes:[], gastos:[], retiros:[],
+    ignorados:[{ folio:"EGR-c", monto:300, concepto:"X", ts:"2026-08-01" }] };
+  const r = S.construirImportacionCortes(
+    _impBase([{ folio:"EGR-c", fecha:"2026-08-20", concepto:"X", monto:300, _clase:"gasto", _cat:"Otro" }]),
+    previos, "Diana", 1000);
+  assert.equal(r.nG, 1);
+  assert.equal(r.ignorados.length, 0, "ya no es un excluido: ahora es un gasto de verdad");
+});
+
+t("vincular un folio que estaba excluido tambien lo saca de la lista", () => {
+  const g = { id:"g1", proveedor:"X", importe:100, fecha:"2026-08-20" };
+  const previos = { cortes:[], gastos:[g], retiros:[], ignorados:["EGR-1"] };
+  const r = S.construirImportacionCortes(_impBase([_egVinc("EGR-1", g, 100)]), previos, "Diana", 1000);
+  assert.equal(r.nV, 1);
+  assert.equal(r.ignorados.length, 0);
+});
+
+// ── Cobertura: saber que FALTA un periodo, no solo que no cuadra ────────────
+// El caso que lo motiva: agosto 2026. Estaban los cortes del 3 al 9 y los del 19 al 25, faltaban
+// nueve dias por $150,164.00, y el reporte no dijo nada — cuadraba consigo mismo porque nunca
+// supo que ese tramo debia existir. La deduplicacion es por folio: un folio que jamas llego no se
+// puede detectar por su ausencia.
+console.log("\n== 'diferencia de monto' que en realidad es la misma factura dos veces ==");
+// Siete renglones en pantalla con el Monto CICSA EXACTAMENTE al doble del Total SAT. No es que
+// el proveedor haya facturado otra cosa: es una factura dividida cuyo padre y cuyas categorias
+// sueltas siguen guardados los dos. Como la tabla no ensenaba el folio, se leia como un problema
+// del comprobante —que esta bien— en vez de uno de la captura.
+const _dif = (total, gastos) => ({
+  cfdi:{ total, fecha:"2026-07-06", proveedor:"ONUS COMERCIAL" },
+  gastos, capturado: Math.round(gastos.reduce((s,g)=>s+g.importe,0)*100)/100,
+});
+
+t("EL caso: padre Dividida + sus categorias sueltas dan el doble exacto", () => {
+  const d = _dif(34034.36, [
+    { id:"p", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:34034.36, categoria:"Dividida",
+      _partidas:[{categoria:"Carnicos",importe:20000},{categoria:"Abarrotes",importe:14034.36}] },
+    { id:"h1", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:20000, categoria:"Carnicos" },
+    { id:"h2", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:14034.36, categoria:"Abarrotes" },
+  ]);
+  const c = S.clasificarDiferenciaSAT(d);
+  assert.equal(c.tipo, "duplicado", "no es una diferencia contra el SAT");
+  assert.ok(/dividida/i.test(c.motivo), "y se dice por que");
+  close(c.excedente, 34034.36, 0.01, "lo contado de mas es exactamente un comprobante");
+  assert.equal(c.uniforme, true, "proveedor y folio identicos: se puede consolidar de un boton");
+});
+
+t("la misma factura capturada dos veces, sin division, tambien", () => {
+  const d = _dif(2504, [
+    { id:"a", proveedor:"NUEVA WAL MART DE MEXICO", factura:"WM-88", fecha:"2026-07-07", importe:2504, categoria:"Abarrotes" },
+    { id:"b", proveedor:"NUEVA WAL MART DE MEXICO", factura:"WM-88", fecha:"2026-07-07", importe:2504, categoria:"Abarrotes" },
+  ]);
+  const c = S.clasificarDiferenciaSAT(d);
+  assert.equal(c.tipo, "duplicado");
+  assert.equal(c.exacto, true);
+  assert.ok(/2 veces/.test(c.motivo));
+});
+
+t("si el FOLIO no coincide, sigue siendo una diferencia de verdad", () => {
+  // Dos facturas distintas del mismo proveedor y dia existen. Sin folio igual no se puede
+  // afirmar que sean la misma, y afirmarlo escondería una diferencia real.
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"F-2", fecha:"2026-07-06", importe:1000 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+t("si la FECHA no coincide, tampoco se declara duplicado", () => {
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"F-1", fecha:"2026-07-09", importe:1000 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+t("si el PROVEEDOR no se parece, tampoco", () => {
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"ONUS COMERCIAL", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"OFFICE DEPOT", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+t("un renglon sin folio nunca se agrupa como duplicado", () => {
+  // Sin folio no hay con que afirmar que sean la misma factura.
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"", fecha:"2026-07-06", importe:1000 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+
+t("un SOLO gasto con importe distinto es una diferencia real, no un duplicado", () => {
+  // Es un dedo en el monto: hay que ir al comprobante.
+  const c = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1500 },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+
+t("capturado POR DEBAJO del comprobante NO es contado de mas: falta un pedazo", () => {
+  // Ahi el reporte esta corto, no inflado, y esconderlo dejaria dinero sin capturar.
+  const c = S.clasificarDiferenciaSAT(_dif(10000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:4000, categoria:"Carnicos" },
+    { id:"b", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:3000, categoria:"Abarrotes" },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+});
+
+t("folio equivalente pero tecleado distinto: es duplicado, pero NO consolidable de un boton", () => {
+  // consolidarFacturaDividida() fusiona por proveedor y folio EXACTOS; con folios equivalentes
+  // no encontraria el grupo y diria "ya no hay duplicados". Ofrecer el boton seria mentir.
+  const c = S.clasificarDiferenciaSAT(_dif(5000, [
+    { id:"a", proveedor:"X", factura:"PBAL31598", fecha:"2026-07-06", importe:5000 },
+    { id:"b", proveedor:"X", factura:"31598", fecha:"2026-07-06", importe:5000 },
+  ]));
+  assert.equal(c.tipo, "duplicado");
+  assert.equal(c.uniforme, false);
+});
+
+t("conciliarSAT los saca de diferencias y los pone en duplicados", () => {
+  // La prueba de integracion: la tabla de "Diferencias de monto" deja de acusar al comprobante.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"p",  proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:34034.36, categoria:"Dividida",
+      _partidas:[{categoria:"Carnicos",importe:34034.36}] },
+    { id:"h1", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:34034.36, categoria:"Carnicos" },
+  ]}]};
+  const r = S.conciliarSAT([
+    { uuid:"U-1", folio:"U-1", serie:"A-", folioComp:"1201", rfc:"AAA010101AAA",
+      proveedor:"ONUS COMERCIAL", fecha:"2026-07-06", total:34034.36, receptorRfc:"XAXX010101000" }
+  ], "2026-07-01", "2026-07-31", "XAXX010101000");
+  assert.equal(r.diferencias.length, 0, "ya no acusa al comprobante");
+  assert.equal(r.duplicados.length, 1, "lo reporta como lo que es: contado de mas");
+  close(r.duplicados[0].clase.excedente, 34034.36, 0.01);
+});
+
+t("una diferencia de monto de verdad SIGUE saliendo en diferencias", () => {
+  // El riesgo de esta reclasificacion es tragarse las diferencias reales. No se traga ninguna.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"g1", proveedor:"ONUS COMERCIAL", factura:"A-1201", fecha:"2026-07-06", importe:20000, categoria:"Carnicos" },
+  ]}]};
+  const r = S.conciliarSAT([
+    { uuid:"U-1", folio:"U-1", serie:"A-", folioComp:"1201", rfc:"AAA010101AAA",
+      proveedor:"ONUS COMERCIAL", fecha:"2026-07-06", total:34034.36, receptorRfc:"XAXX010101000" }
+  ], "2026-07-01", "2026-07-31", "XAXX010101000");
+  assert.equal(r.duplicados.length, 0);
+  assert.equal(r.diferencias.length, 1);
+  close(r.diferencias[0].diferencia, 14034.36, 0.01);
+});
+
+console.log("\n== cobertura de periodos: el hueco que nadie avisaba ==");
+
+const _M = (ini, fin, extra) => ({ ini, fin, emitido:(extra&&extra.emitido)||"", ...(extra||{}) });
+
+t("_sumarDiaISO cruza fin de mes, fin de anio y bisiesto sin pasar por UTC", () => {
+  assert.equal(S._sumarDiaISO("2026-08-31", 1), "2026-09-01");
+  assert.equal(S._sumarDiaISO("2026-12-31", 1), "2027-01-01");
+  assert.equal(S._sumarDiaISO("2028-02-28", 1), "2028-02-29", "2028 es bisiesto");
+  assert.equal(S._sumarDiaISO("2026-08-01", -1), "2026-07-31");
+  assert.equal(S._sumarDiaISO("no es fecha", 1), "");
+});
+t("_sumarDiaISO no usa toISOString: guardia sobre el codigo fuente", () => {
+  // toISOString() convierte a UTC. Con la fecha anclada al mediodia local funciona en Mexico
+  // (UTC-6), asi que una prueba de comportamiento aqui NO caza el error: solo se rompe en zonas
+  // horarias adelantadas, donde devuelve el dia de al lado y la cobertura corre un dia. Un dia
+  // corrido acusa un hueco falso, o peor, tapa uno real. Se vigila de forma textual.
+  const m = script.match(/function _sumarDiaISO\(fecha, dias\)\{[\s\S]*?\n\}/);
+  assert.ok(m, "no encontre _sumarDiaISO");
+  assert.ok(!m[0].includes("toISOString"), "volvio a UTC: la cobertura se corre un dia");
+  assert.ok(/getFullYear|fechaLocalStr/.test(m[0]), "tiene que armar la fecha con los getters locales");
+});
+
+t("EL caso: importar 3-9 y 19-25 delata el hueco del 10 al 18", () => {
+  const c = S.coberturaDePeriodos("2026-08-03", "2026-08-25",
+    [_M("2026-08-03","2026-08-09"), _M("2026-08-19","2026-08-25")]);
+  assert.equal(c.cubierto, false);
+  assert.equal(c.dias.length, 9, "nueve dias sin importar");
+  assert.equal(c.tramos.length, 1, "consecutivos: un solo tramo, no nueve renglones");
+  assert.equal(c.tramos[0].ini, "2026-08-10");
+  assert.equal(c.tramos[0].fin, "2026-08-18");
+});
+
+t("al importar el tramo que faltaba, la cobertura queda completa", () => {
+  const c = S.coberturaDePeriodos("2026-08-03", "2026-08-25",
+    [_M("2026-08-03","2026-08-09"), _M("2026-08-10","2026-08-18"), _M("2026-08-19","2026-08-25")]);
+  assert.equal(c.cubierto, true);
+  assert.equal(c.dias.length, 0);
+});
+
+t("huecos separados salen como tramos separados", () => {
+  const c = S.coberturaDePeriodos("2026-08-01", "2026-08-10",
+    [_M("2026-08-03","2026-08-05"), _M("2026-08-08","2026-08-09")]);
+  assert.deepEqual(c.tramos.map(t=>[t.ini,t.fin,t.dias]),
+    [["2026-08-01","2026-08-02",2], ["2026-08-06","2026-08-07",2], ["2026-08-10","2026-08-10",1]]);
+});
+
+t("periodos traslapados no inventan huecos", () => {
+  const c = S.coberturaDePeriodos("2026-08-01", "2026-08-20",
+    [_M("2026-08-01","2026-08-12"), _M("2026-08-10","2026-08-20")]);
+  assert.equal(c.cubierto, true);
+});
+
+t("un periodo mas amplio que lo consultado cubre de sobra", () => {
+  const c = S.coberturaDePeriodos("2026-08-05", "2026-08-06", [_M("2026-07-01","2026-09-30")]);
+  assert.equal(c.cubierto, true);
+});
+
+t("sin NINGUNA constancia no se acusa de un hueco: se dice que no hay con que comprobar", () => {
+  // Quien ya venia usando la app importo sin dejar constancia. Reportar "faltan 30 dias" seria
+  // mentir con la misma seguridad con la que antes se callaba.
+  const c = S.coberturaDePeriodos("2026-08-03", "2026-08-25", []);
+  assert.equal(c.sinRegistro, true);
+  assert.equal(c.cubierto, false, "tampoco se declara cubierto: no se sabe");
+  assert.equal(c.dias.length, 0, "y no se listan dias que nadie puede confirmar");
+});
+
+t("un rango absurdo no cuelga la pestania", () => {
+  const c = S.coberturaDePeriodos("1990-01-01", "2090-01-01", [_M("2026-08-01","2026-08-02")]);
+  // El const se declara DENTRO del contexto del vm, asi que es un binding lexico y no una
+  // propiedad del sandbox: S._COBERTURA_MAX_DIAS seria undefined, y `n <= undefined` es false.
+  const tope = vm.runInContext("_COBERTURA_MAX_DIAS", sandbox);
+  assert.ok(tope > 0, "el tope tiene que existir de verdad, no llegar como undefined");
+  assert.ok(c.dias.length <= tope);
+});
+
+t("los manifiestos con fechas invalidas se ignoran, no tumban el calculo", () => {
+  const c = S.coberturaDePeriodos("2026-08-01", "2026-08-02", [null, {}, _M("","2026-08-02"), _M("2026-08-01","2026-08-02")]);
+  assert.equal(c.cubierto, true);
+  assert.equal(c.nManifiestos, 1);
+});
+
+console.log("\n== bitacora de importaciones: idempotente y compartida ==");
+t("el manifiesto guarda los totales que DECLARA el archivo", () => {
+  const m = S.manifiestoDeImportacion({ periodo:{ini:"2026-08-19",fin:"2026-08-25"}, emitido:"2026-08-26",
+    version:3, saldoInicial:-24.37, cortes:[1,2], egresos:[1], totales:{ efectivo:119425.5, efectivoAEntregar:12284.22 } }, "Diana", "T1");
+  assert.equal(m.ini, "2026-08-19"); assert.equal(m.cortes, 2); assert.equal(m.egresos, 1);
+  close(m.saldoInicial, -24.37, 0.01);
+  close(m.totales.efectivoAEntregar, 12284.22, 0.01, "es el dato del archivo, para poder compararlo despues");
+  assert.equal(m.importadoPor, "Diana");
+});
+t("reimportar EL MISMO archivo no agrega otro renglon", () => {
+  const m = _M("2026-08-19","2026-08-25",{emitido:"2026-08-26"});
+  const l1 = S.agregarManifiesto([], m);
+  const l2 = S.agregarManifiesto(l1, { ...m });
+  assert.equal(l1.length, 1); assert.equal(l2.length, 1);
+});
+t("volver a exportar el mismo periodo SI deja constancia aparte", () => {
+  // Es otro archivo. La trazabilidad pide saber cual de los dos se uso.
+  const l = S.agregarManifiesto(
+    S.agregarManifiesto([], _M("2026-08-19","2026-08-25",{emitido:"2026-08-26"})),
+    _M("2026-08-19","2026-08-25",{emitido:"2026-08-28"}));
+  assert.equal(l.length, 2);
+});
+t("un manifiesto sin periodo no entra a la bitacora", () => {
+  assert.equal(S.agregarManifiesto([], { ini:"", fin:"" }).length, 0);
+});
+t("los manifiestos se UNEN entre dispositivos y salen ordenados", () => {
+  // Si una companiera importo un periodo desde su equipo y aqui no esta su constancia, la app
+  // reportaria un hueco que no existe.
+  const u = S._unirManifiestos([_M("2026-08-19","2026-08-25")], [_M("2026-08-03","2026-08-09"), _M("2026-08-19","2026-08-25")]);
+  assert.equal(u.length, 2, "el repetido no se duplica");
+  assert.equal(u[0].ini, "2026-08-03", "y quedan en orden de fecha");
+});
+t("mergeEstados conserva las constancias de los dos dispositivos", () => {
+  const r = S.mergeEstados(
+    { weeks:[], cortesImportaciones:[_M("2026-08-03","2026-08-09")] },
+    { weeks:[], cortesImportaciones:[_M("2026-08-19","2026-08-25")] });
+  assert.equal(r.cortesImportaciones.length, 2);
+});
+
+console.log("\n== lo que declaran los archivos vs. lo que tiene Egresos ==");
+// Hasta aqui Egresos solo podia cuadrar consigo mismo, y cuadrar consigo mismo es lo que hace un
+// sistema aunque le falte medio mes. Esta es la otra mitad de la conciliacion.
+const _MT = (ini, fin, tot, extra) => ({ ini, fin, emitido:"", totales:tot||{}, ...(extra||{}) });
+
+t("un solo archivo que cubre el periodo exacto SI es comparable", () => {
+  const d = S.totalesDeclarados("2026-08-19", "2026-08-25",
+    [_MT("2026-08-19","2026-08-25",{ efectivo:119425.5, egresos:107116.91, aportaciones:0 }, { saldoInicial:-24.37 })]);
+  assert.equal(d.comparable, true);
+  close(d.efectivo, 119425.5, 0.01);
+  close(d.saldoInicial, -24.37, 0.01);
+});
+
+t("dos archivos pegados suman, y el saldo inicial es el del PRIMERO", () => {
+  // Los saldos iniciales de en medio son arrastre interno: sumarlos contaria el mismo dinero dos
+  // veces. Solo cuenta con cuanto abrio el tramo completo.
+  const d = S.totalesDeclarados("2026-08-19", "2026-08-25", [
+    _MT("2026-08-22","2026-08-25",{ efectivo:60000, egresos:50000 }, { saldoInicial:-696.28 }),
+    _MT("2026-08-19","2026-08-21",{ efectivo:59425.5, egresos:57116.91 }, { saldoInicial:-24.37 }),
+  ]);
+  assert.equal(d.comparable, true);
+  assert.equal(d.nArchivos, 2);
+  close(d.efectivo, 119425.5, 0.01);
+  close(d.saldoInicial, -24.37, 0.01, "el del 19, no el del 22");
+});
+
+t("con un hueco en medio NO es comparable", () => {
+  // Comparar contra una suma parcial daria una diferencia que parece un descuadre y es un
+  // artefacto del recorte. Una diferencia falsa erosiona la confianza en las verdaderas.
+  const d = S.totalesDeclarados("2026-08-03", "2026-08-25", [
+    _MT("2026-08-03","2026-08-09",{ efectivo:100 }),
+    _MT("2026-08-19","2026-08-25",{ efectivo:200 }),
+  ]);
+  assert.equal(d.comparable, false);
+});
+
+t("si los archivos no empiezan o no terminan donde el periodo, tampoco", () => {
+  assert.equal(S.totalesDeclarados("2026-08-01","2026-08-25",[_MT("2026-08-03","2026-08-25",{})]).comparable, false);
+  assert.equal(S.totalesDeclarados("2026-08-03","2026-08-31",[_MT("2026-08-03","2026-08-25",{})]).comparable, false);
+});
+
+t("un archivo que se sale del periodo consultado ni se considera", () => {
+  const d = S.totalesDeclarados("2026-08-03", "2026-08-09", [_MT("2026-07-01","2026-09-30",{ efectivo:999999 })]);
+  assert.equal(d.comparable, false);
+  assert.equal(d.nArchivos, 0);
+});
+
+t("sin archivos no se inventa una comparacion", () => {
+  assert.equal(S.totalesDeclarados("2026-08-03","2026-08-09",[]).comparable, false);
+  assert.equal(S.totalesDeclarados("", "", [_MT("2026-08-03","2026-08-09",{})]).comparable, false);
+});
+
+console.log("\n== el veredicto: CONCILIADO no se dice a la ligera ==");
+// La pantalla y el PDF salen de esta misma funcion. Que pudieran decir cosas distintas del mismo
+// periodo era el problema de fondo: se firma lo que dice el PDF y se decide con la pantalla.
+const _CUB = { cubierto:true, sinRegistro:false, dias:[], tramos:[], nManifiestos:1 };
+
+t("todo en orden: CONCILIADO", () => {
+  const v = S.estadoConciliacionCaja({ cobertura:_CUB, rupturas:[], excluidos:[], diferencia:0 });
+  assert.equal(v.estado, "CONCILIADO");
+  assert.equal(v.conciliado, true);
+  assert.equal(v.motivos.length, 0);
+});
+
+t("faltan dias: INCOMPLETO, y se dice cuales", () => {
+  const v = S.estadoConciliacionCaja({
+    cobertura:{ cubierto:false, sinRegistro:false, dias:["2026-08-10"], tramos:[{ini:"2026-08-10",fin:"2026-08-18",dias:9}] },
+    rupturas:[], excluidos:[], diferencia:0 });
+  assert.equal(v.estado, "INCOMPLETO");
+  assert.ok(/2026-08-10 a 2026-08-18/.test(v.motivos[0].texto));
+});
+
+t("sin constancia de importaciones tampoco se declara conciliado", () => {
+  const v = S.estadoConciliacionCaja({ cobertura:{ sinRegistro:true }, rupturas:[], excluidos:[], diferencia:0 });
+  assert.equal(v.estado, "INCOMPLETO");
+});
+
+t("una exclusion sin resolver impide el verde", () => {
+  // "Ignorar" no puede significar que el dinero desaparece. Mientras haya un egreso excluido sin
+  // vincular ni corregir en el origen, el periodo no esta conciliado.
+  const v = S.estadoConciliacionCaja({ cobertura:_CUB, rupturas:[],
+    excluidos:[{ folio:"EGR-1", monto:3184 }], diferencia:0 });
+  assert.equal(v.estado, "CON DIFERENCIAS");
+  assert.ok(/3184/.test(v.motivos[0].texto), "con su monto, no solo el conteo");
+});
+
+t("un centavo de diferencia basta para que NO este conciliado", () => {
+  const v = S.estadoConciliacionCaja({ cobertura:_CUB, rupturas:[], excluidos:[], diferencia:0.01 });
+  assert.equal(v.estado, "CON DIFERENCIAS");
+});
+t("medio centavo es redondeo y no rompe nada", () => {
+  assert.equal(S.estadoConciliacionCaja({ cobertura:_CUB, rupturas:[], excluidos:[], diferencia:0.004 }).estado, "CONCILIADO");
+});
+t("sin diferencia calculable no se inventa un motivo", () => {
+  // Cuando no hay con que comparar, la ausencia de comparacion no es un descuadre.
+  assert.equal(S.estadoConciliacionCaja({ cobertura:_CUB, rupturas:[], excluidos:[], diferencia:null }).estado, "CONCILIADO");
+});
+
+t("la falta de cobertura pesa mas que las diferencias", () => {
+  // Un periodo al que le faltan dias no es "un periodo con diferencias": es un periodo incompleto,
+  // y ponerle la misma etiqueta invita a cerrarlo como si solo hubiera que ajustar unos pesos.
+  const v = S.estadoConciliacionCaja({
+    cobertura:{ cubierto:false, sinRegistro:false, dias:["2026-08-10"], tramos:[{ini:"2026-08-10",fin:"2026-08-10",dias:1}] },
+    rupturas:[{}], excluidos:[{ folio:"x", monto:1 }], diferencia:500 });
+  assert.equal(v.estado, "INCOMPLETO");
+  assert.equal(v.motivos.length, 4, "pero se listan TODOS los motivos, no solo el peor");
+});
+
+console.log("\n== aportaciones: dinero que ENTRA a la caja ==");
+t("las aportaciones suman al saldo del periodo", () => {
+  // Antes solo se avisaba de ellas, y un aviso no suma: el saldo salia corto por esa cantidad.
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:[],
+    cortes:[{ id:"c1", fecha:"2026-08-06", monto:10000 }],
+    aportaciones:[{ id:"a1", fecha:"2026-08-07", monto:2500, concepto:"Fondeo" }] }],
+    cajaSaldoInicial:{ "2026-08-01": { valor:0 } } };
+  const r = S.calcularSaldoCajaPeriodo("2026-08-01", "2026-08-31");
+  close(r.totalAport, 2500, 0.01);
+  close(r.saldo, 12500, 0.01);
+});
+t("una aportacion fuera del periodo no se cuela", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:[], cortes:[],
+    aportaciones:[{ id:"a1", fecha:"2026-09-15", monto:2500 }] }],
+    cajaSaldoInicial:{ "2026-08-01": { valor:0 } } };
+  close(S.calcularSaldoCajaPeriodo("2026-08-01","2026-08-31").saldo, 0, 0.01);
+});
+t("las aportaciones anteriores al periodo entran al arrastre", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:[], cortes:[],
+    aportaciones:[{ id:"a1", fecha:"2026-07-15", monto:800 }] }] };
+  close(S.calcularSaldoAntesDe("2026-08-01").saldo, 800, 0.01);
+});
+t("importar aportaciones: entran con su folio y son idempotentes", () => {
+  const d = _impBase([]);
+  d.aportNuevas = [{ folio:"APO-1", fecha:"2026-07-20", monto:1500, concepto:"Reposicion de fondo" }];
+  const r = S.construirImportacionCortes(d, _previosVacios(), "Diana", 1000);
+  assert.equal(r.nA, 1);
+  assert.equal(r.aportaciones[0]._folioAportacion, "APO-1");
+  close(r.aportaciones[0].monto, 1500, 0.01);
+});
+
+console.log("\n== cadena de saldos entre archivos ==");
+// Cada archivo cuadra consigo mismo. Una fuga ENTRE dos archivos no la ve ninguno de los dos.
+t("lo que un periodo deja a entregar tiene que ser con lo que abre el siguiente", () => {
+  const v = S.validarCadenaPeriodos(
+    { totales:{ efectivoAEntregar:-696.28 } }, { saldoInicial:-696.28 });
+  assert.equal(v.ok, true);
+  close(v.diferencia, 0, 0.001);
+});
+t("una diferencia de un peso rompe la cadena", () => {
+  const v = S.validarCadenaPeriodos({ totales:{ efectivoAEntregar:1000 } }, { saldoInicial:999 });
+  assert.equal(v.ok, false);
+  close(v.diferencia, -1, 0.001);
+});
+t("sin los saldos no se declara ok: se dice que faltan datos", () => {
+  const v = S.validarCadenaPeriodos({ totales:{} }, { saldoInicial:100 });
+  assert.equal(v.ok, false);
+  assert.equal(v.sinDatos, true, "faltar datos no es lo mismo que estar mal");
+});
+t("rupturasDeCadena solo revisa archivos CONSECUTIVOS", () => {
+  // Entre el 3-9 y el 19-25 hay un hueco: no se encadenan, y decir que "la cadena se rompe" ahi
+  // taparia el problema real, que es la falta de cobertura.
+  const r = S.rupturasDeCadena([
+    _M("2026-08-03","2026-08-09",{ totales:{ efectivoAEntregar:5000 } }),
+    _M("2026-08-19","2026-08-25",{ saldoInicial:-24.37 }),
+  ]);
+  assert.equal(r.length, 0);
+});
+t("dos archivos pegados con saldos que no empatan SI se reportan", () => {
+  const r = S.rupturasDeCadena([
+    _M("2026-08-19","2026-08-21",{ totales:{ efectivoAEntregar:-696.28 } }),
+    _M("2026-08-22","2026-08-25",{ saldoInicial:1500 }),
+  ]);
+  assert.equal(r.length, 1);
+  close(r[0].diferencia, 2196.28, 0.01);
+  assert.equal(r[0].anterior.fin, "2026-08-21");
+});
+t("los archivos auditados encadenan al centavo", () => {
+  // 19-21 cierra en -696.28 y 22-25 abre en -696.28.
+  const r = S.rupturasDeCadena([
+    _M("2026-08-22","2026-08-25",{ saldoInicial:-696.28 }),
+    _M("2026-08-19","2026-08-21",{ totales:{ efectivoAEntregar:-696.28 } }),
+  ]);
+  assert.equal(r.length, 0, "y el orden en que se importaron no cambia el resultado");
+});
+
+console.log("\n== la bitacora se escribe con la importacion, no aparte ==");
+t("importar deja constancia del periodo cubierto", () => {
+  const d = _impBase([]);
+  d.obj.emitido = "2026-08-03";
+  const r = S.construirImportacionCortes(d, _previosVacios(), "Diana", 1000);
+  assert.equal(r.importaciones.length, 1);
+  assert.equal(r.importaciones[0].ini, "2026-07-11");
+  assert.equal(r.importaciones[0].importadoPor, "Diana");
+});
+t("si la importacion truena, tampoco queda registrado que el periodo se cubrio", () => {
+  // Seria el peor de los dos mundos: no entraron los movimientos y ademas la app cree que ese
+  // tramo ya esta cubierto, asi que deja de reclamarlo.
+  const previos = { cortes:[], gastos:[], retiros:[], ignorados:[], importaciones:[] };
+  const real = S.canonizarCategoria;
+  S.canonizarCategoria = () => { throw new Error("categoria imposible"); };
+  try{
+    assert.throws(() => S.construirImportacionCortes(
+      _impBase([{ folio:"EGR-1", fecha:"2026-07-22", concepto:"X", monto:10, _clase:"gasto", _cat:"Otro" }]),
+      previos, "Diana", 1000), /categoria imposible/);
+    assert.equal(previos.importaciones.length, 0, "la bitacora del llamador queda intacta");
+  } finally { S.canonizarCategoria = real; }
+});
+
+t("un gasto nuevo de caja nace con montoCaja igual al importe", () => {
+  const r = S.construirImportacionCortes(
+    _impBase([{ folio:"EGR-a", fecha:"2026-08-20", concepto:"COMPRA", monto:250.5, _clase:"gasto", _cat:"Otro" }]),
+    _previosVacios(), "Diana", 1000);
+  close(r.gastos[0].importe, 250.5, 0.01);
+  close(r.gastos[0].montoCaja, 250.5, 0.01, "para el flujo de caja no hay que adivinar");
+});
+
+console.log("\n== importe fiscal vs. efectivo que salio de la caja ==");
+t("sin montoCaja, el efectivo es el importe (todo lo capturado hasta hoy)", () => {
+  close(S.montoEfectivoGasto({ formaPago:"efectivo", importe:1234.5 }), 1234.5, 0.01);
+});
+t("con montoCaja, manda montoCaja", () => {
+  close(S.montoEfectivoGasto({ formaPago:"caja_cortes", importe:5073.99, montoCaja:5124 }), 5124, 0.01);
+});
+t("un gasto que no salio de la caja aporta cero", () => {
+  close(S.montoEfectivoGasto({ formaPago:"transferencia", importe:9999, montoCaja:9999 }), 0, 0.01);
+});
+t("montoCaja en cero es un dato, no un hueco", () => {
+  // 0 es falsy: un `montoCaja || importe` habria cobrado el importe completo de un movimiento
+  // que de la caja no saco nada.
+  close(S.montoEfectivoGasto({ formaPago:"efectivo", importe:500, montoCaja:0 }), 0, 0.01);
+});
+t("un montoCaja invalido no tumba la suma: se cae al importe", () => {
+  close(S.montoEfectivoGasto({ formaPago:"efectivo", importe:500, montoCaja:"" }), 500, 0.01);
+  close(S.montoEfectivoGasto({ formaPago:"efectivo", importe:500, montoCaja:-3 }), 500, 0.01);
+});
+t("difImporteCaja solo marca diferencias de verdad", () => {
+  assert.equal(S.difImporteCaja({ importe:500 }), 0, "sin montoCaja no hay nada que explicar");
+  assert.equal(S.difImporteCaja({ importe:500, montoCaja:500 }), 0);
+  close(S.difImporteCaja({ importe:5073.99, montoCaja:5124 }), 50.01, 0.001);
+  // Un centavo SI se muestra: la caja suma montoCaja, asi que ese centavo esta de verdad en el
+  // total y un renglon que no lo explique deja al total sin cuadrar contra sus propias filas.
+  // Lo que un centavo NO hace es pedir confirmacion al importar — ese umbral (0.02) vive en
+  // confirmarImportarCortes, que es donde se modifica un dato contable.
+  close(S.difImporteCaja({ importe:3914.01, montoCaja:3914.00 }), -0.01, 0.001);
+});
+t("el saldo de caja usa montoCaja, no el importe fiscal", () => {
+  // La prueba de integracion: si esto usara g.importe, la caja cuadraria contra el comprobante
+  // y no contra el dinero, que es justo al reves de para lo que sirve.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[{ id:"c1", fecha:"2026-08-06", monto:10000 }],
+    retiros:[], gastos:[
+      { id:"g1", proveedor:"SAMS", fecha:"2026-08-06", importe:5073.99, montoCaja:5124, formaPago:"caja_cortes" }
+    ]}], cajaSaldoInicial:{ "2026-08-01": { valor:0 } } };
+  const r = S.calcularSaldoCajaPeriodo("2026-08-01", "2026-08-31");
+  close(r.totalGastos, 5124, 0.01, "sale de la caja lo que salio, no lo que dice la factura");
+  close(r.saldo, 10000 - 5124, 0.01);
+});
+
 t("el fixture real entra completo por esta via", () => {
   // Se lee aqui y no se usa la constante FIX de mas abajo: depender del orden de declaracion
   // hace que mover un bloque de pruebas rompa otro por un motivo que no tiene nada que ver.
@@ -1817,6 +2514,60 @@ t("excluir los siete deja el ingreso en los $430,054 de los cortes importados", 
   close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), 430054, 0.01);
   close(S.todosLosCortesNoContables().reduce((t, c) => t + c.monto, 0), 446647, 0.01);
   assert.equal(S.state.weeks[0].cortes.length, 140, "no se borro ni uno: 133 + 7");
+});
+
+console.log("\n== captura: el CFDI timbrado gana sobre lo que lee la IA ==");
+// El XML es el dato fiscal exacto; la IA esta leyendo una imagen o un PDF y puede confundir un
+// 6 con un 8 en el importe, o tomar la fecha de vencimiento en vez de la de emision. Cuando el
+// correo trae las dos cosas, mandan los campos del comprobante.
+const XML_TIMBRADO = { proveedor:"CARNES DEL NORTE SA DE CV", fecha:"2026-07-18", folio:"FCPF4010508626", total:36195.50 };
+const LEIDO_IA     = { proveedor:"CARNES DEL NORT",           fecha:"2026-08-02", factura:"FCPF401050B626", importe:36195.80,
+                       categoria:"Cárnicos" };
+
+t("con CFDI y con lectura de IA, gana el CFDI en los cuatro campos", () => {
+  const r = S.datosDeCaptura(XML_TIMBRADO, LEIDO_IA);
+  assert.equal(r.proveedor, XML_TIMBRADO.proveedor);
+  assert.equal(r.fecha,     "2026-07-18", "la fecha de emision del timbrado, no la que leyo la IA");
+  assert.equal(r.factura,   "FCPF4010508626", "el folio del XML, no el que la IA leyo con una B");
+  close(r.importe, 36195.50, 0.001);
+  assert.equal(r.fechaAsumida, false);
+  assert.equal(r.fechaDelCfdi, true);
+});
+t("sin CFDI, se usa lo que leyo la IA", () => {
+  const r = S.datosDeCaptura(null, LEIDO_IA);
+  assert.equal(r.proveedor, "CARNES DEL NORT");
+  assert.equal(r.fecha,     "2026-08-02");
+  assert.equal(r.factura,   "FCPF401050B626");
+  close(r.importe, 36195.80, 0.001);
+  assert.equal(r.fechaAsumida, false, "la IA si trajo fecha");
+  assert.equal(r.fechaDelCfdi, false);
+});
+t("un CFDI incompleto solo gana en los campos que si trae", () => {
+  const r = S.datosDeCaptura({ folio:"A-123" }, LEIDO_IA);
+  assert.equal(r.factura,   "A-123",           "esto si lo trae el XML");
+  assert.equal(r.proveedor, "CARNES DEL NORT", "esto no, cae a la IA");
+  assert.equal(r.fecha,     "2026-08-02");
+  close(r.importe, 36195.80, 0.001);
+});
+// Un complemento de pago va con Total 0: el monto que enseña el PDF es lo PAGADO de facturas ya
+// registradas. Si el 0 ganara, se guardaria un gasto de cero; si ganara lo que leyo la IA del
+// PDF, se duplicaria el egreso. Por eso total 0 NO gana y el importe queda para que lo decida
+// una persona — el bloqueo de complementos vive aparte.
+t("un total de cero NO gana: es el caso del complemento de pago", () => {
+  const r = S.datosDeCaptura({ ...XML_TIMBRADO, total:0 }, LEIDO_IA);
+  close(r.importe, 36195.80, 0.001, "cae al de la IA, no se guarda un gasto de cero");
+  assert.equal(r.fecha, "2026-07-18", "los demas campos del XML_TIMBRADO siguen ganando");
+});
+t("sin fecha en ningun lado se avisa, y no se inventa una", () => {
+  const r = S.datosDeCaptura(null, { proveedor:"X", importe:100 });
+  assert.equal(r.fecha, null, "null, no la fecha de hoy: quien llama decide y avisa");
+  assert.equal(r.fechaAsumida, true);
+});
+t("sin CFDI y sin lectura de IA no truena: devuelve vacios", () => {
+  const r = S.datosDeCaptura(null, null);
+  assert.deepEqual(
+    { p:r.proveedor, f:r.fecha, x:r.factura, i:r.importe, a:r.fechaAsumida },
+    { p:"", f:null, x:"", i:"", a:true });
 });
 
 console.log("\n== sincronizacion: no escribir lo que ya esta ==");
@@ -3272,6 +4023,36 @@ t("saldoInicial negativo del corte sirve para abrir el periodo siguiente en rojo
 t("un archivo bien formado pasa la validación", () => {
   assert.equal(S.validarArchivoCortes(archivoBase()).ok, true);
 });
+t("una aportacion con fecha invalida se rechaza", () => {
+  const a = archivoBase();
+  a.aportaciones = [{ folio:"APO-1", fecha:"no-es-fecha", monto:100 }];
+  const v = S.validarArchivoCortes(a);
+  assert.equal(v.ok, false);
+  assert.ok(v.errores.some(e=>/Aportaci.*fecha/.test(e)));
+});
+t("una aportacion con monto invalido se rechaza", () => {
+  // Entra al saldo como dinero, igual que un corte: un monto que no es numero lo envenena.
+  const a = archivoBase();
+  a.aportaciones = [{ folio:"APO-1", fecha:"2026-08-03", monto:"mucho" }];
+  const v = S.validarArchivoCortes(a);
+  assert.equal(v.ok, false);
+  assert.ok(v.errores.some(e=>/Aportaci.*monto/.test(e)), "el error tiene que senialar el monto");
+});
+t("una aportacion sin folio se rechaza: sin folio no hay idempotencia", () => {
+  const a = archivoBase();
+  a.aportaciones = [{ fecha:"2026-08-03", monto:100 }];
+  assert.ok(S.validarArchivoCortes(a).errores.some(e=>/Aportaci.*folio/.test(e)));
+});
+t("un folio de aportacion repetido dentro del archivo se caza", () => {
+  const a = archivoBase();
+  a.aportaciones = [{ folio:a.egresos[0].folio, fecha:"2026-08-03", monto:100 }];
+  const v = S.validarArchivoCortes(a);
+  assert.ok(v.errores.some(e=>/repetidos/i.test(e)));
+});
+t("sin aportaciones el archivo sigue siendo valido (v1 y v2 no las traen)", () => {
+  const a = archivoBase(); delete a.aportaciones;
+  assert.equal(S.validarArchivoCortes(a).ok, true);
+});
 t("rechaza versión desconocida", () => {
   const a = archivoBase(); a.version = 99;
   const r = S.validarArchivoCortes(a);
@@ -3380,14 +4161,53 @@ t("el SAMS se SEÑALA por importe, pero entra como gasto — no se preselecciona
   assert.ok(c.dup, "pero se muestra el gasto parecido");
   assert.ok(c.aviso && /importe/i.test(c.aviso), "y se dice que la coincidencia es solo por importe");
 });
-// Una coincidencia FUERTE (mismo proveedor y misma factura) si puede preseleccionar ignorar:
-// ahi no hay ambiguedad, es literalmente el mismo documento.
-t("una coincidencia por proveedor+factura si preselecciona ignorar", () => {
+// Una coincidencia FUERTE (mismo proveedor y misma factura) es literalmente el mismo documento.
+// Antes eso arrancaba en "ignorar", y ahi se perdia el dinero: "ignorar" no crea gasto ni retiro
+// y tampoco toca la factura que ya estaba. Si esa factura estaba como credito o transferencia, la
+// salida de efectivo del concentrado no llegaba NUNCA a Caja, que solo suma esGastoEfectivo(). Lo
+// correcto no es duplicar la factura ni descartar el movimiento: es vincularlos.
+t("una coincidencia por proveedor+factura arranca en VINCULAR, no en ignorar", () => {
   S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
     { id:"ya", proveedor:"COMPRA SAMS", factura:"ICAJG470108", importe:5124, fecha:"2026-08-06" }
   ]}]};
-  const c = S.clasificacionInicialEgreso({ concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06", clase:"gasto" });
+  const c = S.clasificacionInicialEgreso({ folio:"EGR-1", concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06", clase:"gasto" });
+  assert.equal(c.clase, "vincular_efectivo");
+  assert.ok(c.dup && c.dup.gasto.id === "ya");
+});
+t("si la factura existente NO estaba en efectivo, el aviso lo dice", () => {
+  // Es el caso que hacia desaparecer el dinero: la factura existe como credito, asi que la salida
+  // de caja no contaba en ningun lado. Vincular es lo que la hace contar.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"ya", proveedor:"COMPRA SAMS", factura:"ICAJG470108", importe:5124, fecha:"2026-08-06", formaPago:"credito" }
+  ]}]};
+  const c = S.clasificacionInicialEgreso({ folio:"EGR-1", concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06" });
+  assert.equal(c.clase, "vincular_efectivo");
+  assert.ok(/NO esta registrada como pago de caja/.test(c.aviso.normalize("NFD").replace(/[\u0300-\u036f]/g, "")));
+});
+t("si la factura YA estaba en efectivo, se vincula sin duplicar el importe", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"ya", proveedor:"COMPRA SAMS", factura:"ICAJG470108", importe:5124, fecha:"2026-08-06", formaPago:"efectivo" }
+  ]}]};
+  const c = S.clasificacionInicialEgreso({ folio:"EGR-1", concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06" });
+  assert.equal(c.clase, "vincular_efectivo");
+  assert.ok(/sin duplicar/.test(c.aviso));
+});
+t("una factura ya vinculada a otro folio NO se ofrece para vincular de nuevo", () => {
+  // Vincularla dos veces seria decir que la misma factura se pago dos veces desde la caja.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
+    { id:"ya", proveedor:"COMPRA SAMS", factura:"ICAJG470108", importe:5124, fecha:"2026-08-06", _folioEgreso:"EGR-OTRO" }
+  ]}]};
+  const c = S.clasificacionInicialEgreso({ folio:"EGR-1", concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06" });
   assert.equal(c.clase, "ignorar");
+  assert.ok(/EGR-OTRO/.test(c.aviso), "hay que decir con cual esta vinculada");
+});
+t("el aviso de comprobante-que-parece-factura NO se perdio al agregar vincular", () => {
+  // Sobrevive de la version anterior: sin duplicado, un comprobante con letras puede ser una
+  // factura que todavia no llega por Gmail/SAT, y hay que quedar pendiente de ella.
+  S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[] }] };
+  const c = S.clasificacionInicialEgreso({ folio:"EGR-1", concepto:"COMPRA SAMS", comprobante:"ICAJG470108", monto:5124, fecha:"2026-08-06" });
+  assert.equal(c.clase, "gasto");
+  assert.ok(/folio de factura/.test(c.aviso));
 });
 t("un egreso con comprobante de factura pero sin duplicado se avisa, no se ignora", () => {
   S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[] }] };
@@ -3407,14 +4227,15 @@ t("clasificación inicial respeta la clase capturada", () => {
   assert.equal(S.clasificacionInicialEgreso(a.egresos[0]).clase, "gasto");     // clase:gasto
   assert.equal(S.clasificacionInicialEgreso(a.egresos[2]).clase, "retiro");    // clase:deposito
 });
-t("clasificación inicial sugiere 'ignorar' si ya existe un gasto igual", () => {
-  // El SAMS ya está capturado (misma factura + proveedor): la factura entró por otro lado.
+t("clasificación inicial sugiere VINCULAR si ya existe un gasto igual", () => {
+  // El SAMS ya está capturado (misma factura + proveedor): la factura entró por otro lado, pero el
+  // efectivo sí salió del concentrado. Son el mismo hecho visto desde dos sistemas.
   S.state = { budget:{}, weeks:[{ id:"w1", cortes:[], retiros:[], gastos:[
     { id:"g1", proveedor:"COMPRAS SAMS", factura:"ICAJG469779", importe:29487, fecha:"2026-08-03" }
   ]}]};
   const a = archivoBase();
   const c = S.clasificacionInicialEgreso(a.egresos[1]);
-  assert.equal(c.clase, "ignorar");
+  assert.equal(c.clase, "vincular_efectivo");
   assert.ok(c.dup, "trae el gasto que ya existía");
 });
 t("sin clase y sin duplicado, arranca como gasto", () => {

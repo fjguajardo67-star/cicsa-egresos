@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 CICSA Control de Egresos — an expense-tracking / payroll-reading web app for a
 Mexican food-service business (comedores industriales). It has two parts:
 
-- **`index.html`** — a single-file, no-build, vanilla-JS SPA (~3000 lines, no
+- **`index.html`** — a single-file, no-build, vanilla-JS SPA (~11,400 lines, no
   framework) that is the entire frontend. It's deployed as-is to GitHub Pages
   (see `CNAME` → `cicsa-egresos.cicsacomedores.com.mx`).
 - **`servidor_cicsa.py`** — a Flask backend that wraps the Anthropic API to do
@@ -37,9 +37,18 @@ python servidor_cicsa.py
   `<script>` block). When testing backend changes against the deployed
   frontend, or frontend changes against the deployed backend, update/check
   this constant.
-- No test suite, linter, or build tooling exists in this repo — there is
-  nothing to run beyond starting the Flask server and exercising it in a
-  browser.
+- There is no linter or build tooling, but there **are** tests, and they are the
+  only safety net this repo has:
+  - `node tests/run_js_tests.js` — 400 tests. Extracts the real functions out of
+    `index.html` by brace-matching into a `vm` sandbox, so it tests the shipped
+    code, not a copy. New functions must be listed in `FUNCS`, constants in
+    `CONSTS`.
+  - `python3 tests/test_gmail_cicsa.py` — 17 tests, with Google's modules stubbed
+    so they run without network or credentials.
+  Run both before pushing. Several tests are deliberately *source-level guards*
+  (no `<script src>` without `integrity`, `setStatus` never back to `innerHTML`,
+  `gmail_token.json` never versioned again) — if one of those fails, it is
+  telling you a protection was removed, not that a test is flaky.
 
 ## Deployment
 
@@ -90,7 +99,13 @@ python servidor_cicsa.py
    used. These are public Firebase Web API keys (access is meant to be
    controlled by Firestore security rules, not key secrecy) — don't confuse
    them with the server-side `ANTHROPIC_API_KEY`, which must stay secret.
-3. Auth is Firebase Auth (email/password), with a single hardcoded
+3. **Firebase Storage** holds the files, not the data: `facturas/{ts}_{folio}.{pdf|jpg}`
+   (the documentary backup of every expense) and `cortes/{ini}_{fin}.json`. Its
+   rules live in `storage.rules`, which is a **different file in a different
+   console section** from `firestore.rules` — publishing one does not publish the
+   other, and that is the easy mistake to make. Neither is read from the repo;
+   both have to be pasted into the console.
+4. Auth is Firebase Auth (email/password), with a single hardcoded
    `ADMIN_UID` constant granting the `"admin"` role; everyone else defaults to
    role `"operativo"`. Role gates are simple `if(currentRole === "admin")`
    checks scattered through the frontend, not a real permission system.
@@ -111,6 +126,11 @@ strict JSON back:
 - `/sat-leer-cfdi` — large SAT CFDI PDF (70–100 tax receipts) → reads it in
   two halves (two separate Claude calls) because a single pass truncates on
   big documents, then dedupes by `folio` (UUID) and merges.
+  **This is the SAT tab's last resort, not its main path.** The tab offers three
+  options and the UI ranks them: XML files (the real workflow — hundreds of CFDI
+  XMLs parsed *in the browser* with `DOMParser`, no backend, no tokens), the SAT
+  Excel export (also browser-side), and only then this one. Don't assume a change
+  to SAT reconciliation touches the server; usually it does not.
 - `/precios-ingredientes` — no AI call; just aggregates the latest price per
   proveedor from `cicsa_data.json` for the Menú app to consume.
 
