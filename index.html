@@ -1926,7 +1926,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-a";
+const APP_BUILD = "2026-08-28-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3491,10 +3491,27 @@ async function handleFile(file){
 // ═══════════════════════════════════════════════════════════════════════════
 // AI READING
 // ═══════════════════════════════════════════════════════════════════════════
+// El mensaje se escribe como TEXTO, no como HTML. Por aquí pasan el nombre del proveedor, el
+// número de factura y los mensajes de error del servidor —todo eso viene de la IA, del teclado
+// o de fuera— y con innerHTML cualquiera de ellos podía traer etiquetas que el navegador
+// ejecutaba. El caso feo: un operativo escribe código en el nombre de un producto y corre en el
+// navegador del admin, con su sesión.
+// Las pocas llamadas que sí necesitan formato usan setStatusHTML y escapan lo suyo.
 function setStatus(id,msg,type){
   const el=document.getElementById(id);
   el.style.display="block"; el.className="status "+type;
-  el.innerHTML=type==="loading"?`<span class="spin"></span>${msg}`:msg;
+  el.textContent="";
+  if(type==="loading"){
+    const sp=document.createElement("span"); sp.className="spin"; el.appendChild(sp);
+  }
+  el.appendChild(document.createTextNode(String(msg==null?"":msg)));
+}
+// Para los mensajes que llevan formato de verdad (negritas, saltos de línea). Quien la use tiene
+// que escapar lo que interpola — por eso se llama distinto: que sea explícito cuál es la insegura.
+function setStatusHTML(id,html,type){
+  const el=document.getElementById(id);
+  el.style.display="block"; el.className="status "+type;
+  el.innerHTML=(type==="loading"?`<span class="spin"></span>`:"")+html;
 }
 
 async function leerDocumento(){
@@ -3514,7 +3531,7 @@ async function leerDocumento(){
     if(!resp.ok) throw new Error(data.error||"Error desconocido");
     if(Array.isArray(data.productos)) _productosPreleidos=data.productos;   // se usan al guardar
     if(data.mixto){
-      setStatus("statusLectura",`🔀 <strong>Documento mixto detectado</strong> — ${esc(data.proveedor)} · ${fmt(data.importe)}<br><span style="font-size:12px">Este documento tiene productos de varias categorías.</span>`,"ok");
+      setStatusHTML("statusLectura",`🔀 <strong>Documento mixto detectado</strong> — ${esc(data.proveedor)} · ${fmt(data.importe)}<br><span style="font-size:12px">Este documento tiene productos de varias categorías.</span>`,"ok");
       document.getElementById("fProv").value=data.proveedor||"";
       document.getElementById("fFecha").value=data.fecha||todayStr();
       document.getElementById("fFactura").value=data.factura||"";
@@ -3544,7 +3561,7 @@ async function leerDocumento(){
     }
     document.getElementById("btnDividir").style.display="none";
     document.getElementById("extractedCard").style.display="block";
-    setStatus("statusLectura",
+    setStatusHTML("statusLectura",
       bloqueoComplementoPago(_cfdiGmail, _esComplementoIA)
         ? `🚫 <strong>Esto parece un COMPLEMENTO DE PAGO, no una factura de gasto.</strong><br>`+
           `Ampara facturas que <strong>ya están registradas</strong>: contarlo duplicaría el egreso. `+
@@ -3928,9 +3945,9 @@ function guardarGasto(){
       (state && state.weeks) || []);
   }catch(_){}
   if(_fueraDeVista){
-    setStatus("statusGuardar",`⚠ <strong>${esc(gasto.proveedor)} ${fmt(gasto.importe)}</strong> — ${esc(_fueraDeVista)}`,"err");
+    setStatusHTML("statusGuardar",`⚠ <strong>${esc(gasto.proveedor)} ${fmt(gasto.importe)}</strong> — ${esc(_fueraDeVista)}`,"err");
   } else {
-    setStatus("statusGuardar",
+    setStatusHTML("statusGuardar",
       _avisoFecha
         ? `✅ Gasto guardado — ${esc(gasto.proveedor)} ${fmt(gasto.importe)}${conRespaldo}.<br>⚠ ${esc(_avisoFecha)}`
         : `✅ Gasto guardado — ${esc(gasto.proveedor)} ${fmt(gasto.importe)}${conRespaldo}. Puedes capturar otro.`,
@@ -4088,7 +4105,7 @@ async function analizarDivision(proveedor,fecha,factura,total){
     const resp=await fetch(SERVER+"/analizar-division",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:capturedFile?.type||"image/jpeg",categorias:catsActuales()})});
     const data=await resp.json(); if(!resp.ok) throw new Error(data.error||"Error en análisis");
     splitData=data;
-    setStatus("statusLectura",`✅ División lista — ${data.partidas?.length||0} categorías detectadas · Total ${fmt(data.total)}<br><span style="font-size:12px">Haz clic en <strong>"Ver división por categoría"</strong> para revisar y guardar.</span>`,"ok");
+    setStatusHTML("statusLectura",`✅ División lista — ${data.partidas?.length||0} categorías detectadas · Total ${fmt(data.total)}<br><span style="font-size:12px">Haz clic en <strong>"Ver división por categoría"</strong> para revisar y guardar.</span>`,"ok");
   } catch(err){ setStatus("statusLectura","⚠ No pude dividir automáticamente. Guarda como un solo gasto.","err"); splitData=null; }
   document.getElementById("btnLeer").disabled=false;
 }
@@ -8387,7 +8404,9 @@ function checkDuplicateForm(){
   const prov=document.getElementById("fProv")?.value.trim()||"",imp=document.getElementById("fImporte")?.value||"0",fecha=document.getElementById("fFecha")?.value||"",fac=document.getElementById("fFactura")?.value.trim()||"",warn=document.getElementById("dupWarning"),info=document.getElementById("dupInfo");
   if(!prov||!imp||parseFloat(imp)===0){warn.style.display="none";return;}
   const dup=findDuplicate(prov,imp,fecha,fac);
-  if(dup){info.innerHTML=`<span class="dup-badge">${dup.gasto.proveedor}</span> ${fmt(dup.gasto.importe)} · ${fmtDate(dup.gasto.fecha)} · ${dup.reason}`;warn.style.display="block";}
+  // esc() en los dos: el proveedor lo teclea o lo lee la IA, y dup.reason lleva dentro el
+  // número de factura ("Mismo No. de factura: XXX"). Los dos vienen de fuera.
+  if(dup){info.innerHTML=`<span class="dup-badge">${esc(dup.gasto.proveedor)}</span> ${fmt(dup.gasto.importe)} · ${fmtDate(dup.gasto.fecha)} · ${esc(dup.reason)}`;warn.style.display="block";}
   else warn.style.display="none";
 }
 // ── Adjuntos de Gmail ya revisados ──────────────────────────────────
@@ -8968,7 +8987,7 @@ async function gmailProcessItem(idx){
     if(_cfdiGmail && _cfdiGmail.tipo==="P"){
       // Se avisa antes de que nadie teclee nada: el PDF de un complemento se parece a una factura.
       document.getElementById("extractedCard").style.display="block";
-      setStatus("statusLectura",
+      setStatusHTML("statusLectura",
         `🚫 <strong>Esto es un COMPLEMENTO DE PAGO, no una factura de gasto.</strong><br>`+
         `Es el acuse de que se pagaron facturas que <strong>ya están registradas</strong>: capturarlo contaría el mismo dinero dos veces. `+
         `El monto grande que ves en el PDF es lo pagado, no un egreso nuevo (el comprobante va con Total 0).<br>`+
@@ -8977,7 +8996,7 @@ async function gmailProcessItem(idx){
       // Correo que solo trae el XML: no hay nada que leer con IA — el comprobante ya dio todo.
       document.getElementById("extractedCard").style.display="block";
       document.getElementById("btnLeer").disabled=true;
-      setStatus("statusLectura", _cfdiGmail
+      setStatusHTML("statusLectura", _cfdiGmail
         ? `✅ <strong>Datos tomados del CFDI (XML)</strong> — fecha, folio e importe exactos. Elige la categoría y guarda.`
         : `⚠ Este correo solo trae un XML que no se pudo leer como CFDI. Captura manualmente.`,
         _cfdiGmail ? "ok" : "err");
@@ -9873,10 +9892,10 @@ async function cargarUsuarios() {
       div.className = "user-list-item";
       const nombre = u.nombre || "";
       div.innerHTML = `
-        <div class="user-avatar" style="width:36px;height:36px;font-size:14px">${(nombre||u.email||"?").charAt(0).toUpperCase()}</div>
+        <div class="user-avatar" style="width:36px;height:36px;font-size:14px">${esc((nombre||u.email||"?").charAt(0).toUpperCase())}</div>
         <div class="user-email" style="display:flex;flex-direction:column;gap:1px">
           <span style="font-weight:600">${esc(nombre)||'<span style="color:#B8860B;font-weight:400">⚠ sin nombre</span>'}
-            <button onclick="editarNombreUsuario('${doc.id}', ${JSON.stringify(nombre).replace(/"/g,'&quot;')})" title="Editar nombre (aparece en el chat)" style="border:none;background:transparent;cursor:pointer;font-size:12px;padding:0 2px">✏️</button>
+            <button onclick="editarNombreUsuario('${escAttrJs(doc.id)}', '${escAttrJs(nombre)}')" title="Editar nombre (aparece en el chat)" style="border:none;background:transparent;cursor:pointer;font-size:12px;padding:0 2px">✏️</button>
           </span>
           <span style="font-size:12px;color:var(--txt2)">${esc(u.email || doc.id)}</span>
         </div>

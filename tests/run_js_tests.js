@@ -1819,6 +1819,39 @@ t("excluir los siete deja el ingreso en los $430,054 de los cortes importados", 
   assert.equal(S.state.weeks[0].cortes.length, 140, "no se borro ni uno: 133 + 7");
 });
 
+console.log("\n== mensajes de estado: texto, no HTML ==");
+// setStatus escribia con innerHTML, y por ahi pasan el nombre del proveedor, el numero de
+// factura y los mensajes de error del servidor. Ahora escribe con textContent. Las 7 llamadas
+// que si llevan formato usan setStatusHTML y escapan lo suyo. Esta prueba es un guardia sobre
+// el codigo fuente: no hay DOM en el sandbox, pero el error a evitar es textual.
+t("setStatus escribe texto plano, nunca innerHTML", () => {
+  const m = script.match(/function setStatus\(id,msg,type\)\{[\s\S]*?\n\}/);
+  assert.ok(m, "no encontre setStatus");
+  assert.ok(m[0].includes("textContent") || m[0].includes("createTextNode"),
+            "setStatus tiene que escribir texto");
+  assert.ok(!m[0].includes("innerHTML"),
+            "setStatus volvio a innerHTML: cualquier proveedor o factura con etiquetas se ejecuta");
+});
+t("ninguna llamada a setStatus mete etiquetas HTML", () => {
+  // Si alguien necesita formato tiene que usar setStatusHTML, que es la explicita.
+  const malas = [];
+  const re = /(?<![\w.])setStatus\s*\(/g;
+  let m;
+  while ((m = re.exec(script))) {
+    let d = 1, i = re.lastIndex;
+    while (i < script.length && d) {
+      if (script[i] === "(") d++;
+      else if (script[i] === ")") d--;
+      i++;
+    }
+    const args = script.slice(re.lastIndex, i - 1);
+    if (/<(br|strong|span|div|b|i|em|a|small|code)\b|<\/[a-z]+>/.test(args)) {
+      malas.push(script.slice(0, m.index).split("\n").length);
+    }
+  }
+  assert.deepEqual(malas, [], "esas llamadas necesitan setStatusHTML, no setStatus");
+});
+
 console.log("\n== acceso: tener sesion no es estar dado de alta ==");
 // El alta por correo de Firebase es un endpoint PUBLICO de Google y la llave del proyecto va
 // en index.html, que se sirve abierto: cualquiera puede crearse una cuenta sin invitacion.
@@ -2867,6 +2900,23 @@ t("escAttrJs escapa para JavaScript ANTES que para HTML", () => {
   // La diagonal invertida se dobla, si no se comería el escape siguiente.
   assert.equal(S.escAttrJs("a\\b"), "a\\\\b");
 });
+// BUG REAL, cerrado el 2026-08-28: el panel de usuarios metia el nombre en un onclick con
+// JSON.stringify(nombre).replace(/"/g,'&quot;'). Eso escapa la comilla doble, pero NO el &.
+// Un nombre que contuviera el texto literal "&quot;" pasaba entero al atributo, el analizador
+// de HTML lo decodificaba a una comilla de verdad, y el de JavaScript veia la cadena cerrada:
+//   nombre  = a&quot;+alert(1)+&quot;b
+//   atributo= editarNombreUsuario('uid', "a&quot;+alert(1)+&quot;b")
+//   tras decodificar HTML -> editarNombreUsuario('uid', "a"+alert(1)+"b")   <- ejecuta
+// escAttrJs escapa el & primero, asi que el &quot; se queda como texto y nunca vuelve a ser
+// comilla. Solo lo podia disparar un usuario dado de alta, y contra el admin — que es quien
+// abre ese panel.
+t("un nombre con &quot; adentro no puede cerrar la cadena del onclick", () => {
+  const r = S.escAttrJs('a&quot;+alert(1)+&quot;b');
+  assert.ok(!/(^|[^&])&quot;/.test(r), "el &quot; del nombre tiene que quedar neutralizado");
+  assert.ok(r.includes("&amp;quot;"), "el & se escapa primero, si no todo lo demas da igual");
+  assert.ok(!r.includes('"'), "no puede quedar una comilla doble cruda");
+});
+
 t("escAttrJs deja inertes las cargas que se probaron en el navegador", () => {
   [`ACME" onfocus="window.x=1" autofocus q="`,
    `ACME' onmouseover='window.x=1' q='`,
