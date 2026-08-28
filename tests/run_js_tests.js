@@ -106,6 +106,7 @@ const FUNCS = [
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
   "cortesManualesSospechosos", "egresosExcluidos", "folioDeIgnorado", "_unirIgnorados",
   "puedeEntrar", "_bytesUtf8", "medirEstado", "contarMovimientos", "hayQueSubir",
+  "datosDeCaptura",
   "todosLosCortesNoContables",
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
@@ -1817,6 +1818,60 @@ t("excluir los siete deja el ingreso en los $430,054 de los cortes importados", 
   close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), 430054, 0.01);
   close(S.todosLosCortesNoContables().reduce((t, c) => t + c.monto, 0), 446647, 0.01);
   assert.equal(S.state.weeks[0].cortes.length, 140, "no se borro ni uno: 133 + 7");
+});
+
+console.log("\n== captura: el CFDI timbrado gana sobre lo que lee la IA ==");
+// El XML es el dato fiscal exacto; la IA esta leyendo una imagen o un PDF y puede confundir un
+// 6 con un 8 en el importe, o tomar la fecha de vencimiento en vez de la de emision. Cuando el
+// correo trae las dos cosas, mandan los campos del comprobante.
+const XML_TIMBRADO = { proveedor:"CARNES DEL NORTE SA DE CV", fecha:"2026-07-18", folio:"FCPF4010508626", total:36195.50 };
+const LEIDO_IA     = { proveedor:"CARNES DEL NORT",           fecha:"2026-08-02", factura:"FCPF401050B626", importe:36195.80,
+                       categoria:"Cárnicos" };
+
+t("con CFDI y con lectura de IA, gana el CFDI en los cuatro campos", () => {
+  const r = S.datosDeCaptura(XML_TIMBRADO, LEIDO_IA);
+  assert.equal(r.proveedor, XML_TIMBRADO.proveedor);
+  assert.equal(r.fecha,     "2026-07-18", "la fecha de emision del timbrado, no la que leyo la IA");
+  assert.equal(r.factura,   "FCPF4010508626", "el folio del XML, no el que la IA leyo con una B");
+  close(r.importe, 36195.50, 0.001);
+  assert.equal(r.fechaAsumida, false);
+  assert.equal(r.fechaDelCfdi, true);
+});
+t("sin CFDI, se usa lo que leyo la IA", () => {
+  const r = S.datosDeCaptura(null, LEIDO_IA);
+  assert.equal(r.proveedor, "CARNES DEL NORT");
+  assert.equal(r.fecha,     "2026-08-02");
+  assert.equal(r.factura,   "FCPF401050B626");
+  close(r.importe, 36195.80, 0.001);
+  assert.equal(r.fechaAsumida, false, "la IA si trajo fecha");
+  assert.equal(r.fechaDelCfdi, false);
+});
+t("un CFDI incompleto solo gana en los campos que si trae", () => {
+  const r = S.datosDeCaptura({ folio:"A-123" }, LEIDO_IA);
+  assert.equal(r.factura,   "A-123",           "esto si lo trae el XML");
+  assert.equal(r.proveedor, "CARNES DEL NORT", "esto no, cae a la IA");
+  assert.equal(r.fecha,     "2026-08-02");
+  close(r.importe, 36195.80, 0.001);
+});
+// Un complemento de pago va con Total 0: el monto que enseña el PDF es lo PAGADO de facturas ya
+// registradas. Si el 0 ganara, se guardaria un gasto de cero; si ganara lo que leyo la IA del
+// PDF, se duplicaria el egreso. Por eso total 0 NO gana y el importe queda para que lo decida
+// una persona — el bloqueo de complementos vive aparte.
+t("un total de cero NO gana: es el caso del complemento de pago", () => {
+  const r = S.datosDeCaptura({ ...XML_TIMBRADO, total:0 }, LEIDO_IA);
+  close(r.importe, 36195.80, 0.001, "cae al de la IA, no se guarda un gasto de cero");
+  assert.equal(r.fecha, "2026-07-18", "los demas campos del XML_TIMBRADO siguen ganando");
+});
+t("sin fecha en ningun lado se avisa, y no se inventa una", () => {
+  const r = S.datosDeCaptura(null, { proveedor:"X", importe:100 });
+  assert.equal(r.fecha, null, "null, no la fecha de hoy: quien llama decide y avisa");
+  assert.equal(r.fechaAsumida, true);
+});
+t("sin CFDI y sin lectura de IA no truena: devuelve vacios", () => {
+  const r = S.datosDeCaptura(null, null);
+  assert.deepEqual(
+    { p:r.proveedor, f:r.fecha, x:r.factura, i:r.importe, a:r.fechaAsumida },
+    { p:"", f:null, x:"", i:"", a:true });
 });
 
 console.log("\n== sincronizacion: no escribir lo que ya esta ==");

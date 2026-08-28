@@ -1942,7 +1942,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-d";
+const APP_BUILD = "2026-08-28-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3595,6 +3595,30 @@ function setStatusHTML(id,html,type){
   el.innerHTML=(type==="loading"?`<span class="spin"></span>`:"")+html;
 }
 
+// De dónde sale cada dato al capturar: del CFDI timbrado o de lo que leyó la IA.
+// El comprobante GANA siempre que traiga el campo. No es preferencia estética: el XML es el
+// dato fiscal exacto, y la IA está leyendo una imagen o un PDF — puede confundir un 6 con un 8
+// en el importe, o tomar la fecha de vencimiento en vez de la de emisión.
+// La categoría no está aquí a propósito: el CFDI no la trae, es clasificación de la empresa,
+// así que ésa siempre viene de la IA.
+// Vive aparte porque decide de dónde sale el IMPORTE de un gasto, y eso merece pruebas: si
+// alguien invierte el orden de estos ||, el dinero pasaría a salir de la lectura de la imagen
+// en vez del comprobante, y nada lo avisaría.
+// `fecha: null` significa que no se pudo leer de ningún lado; quien llama pone la de hoy y
+// avisa. Se devuelve null en vez de la fecha de hoy para que la función no dependa del reloj.
+function datosDeCaptura(cfdi, ia){
+  const c = cfdi || {}, d = ia || {};
+  const delCfdi = !!c.fecha;
+  return {
+    proveedor: c.proveedor || d.proveedor || "",
+    fecha:     c.fecha     || d.fecha     || null,
+    factura:   c.folio     || d.factura   || "",
+    importe:   (c.total > 0) ? c.total : (d.importe || ""),
+    fechaAsumida: !(delCfdi || d.fecha),
+    fechaDelCfdi: delCfdi,
+  };
+}
+
 async function leerDocumento(){
   if(!capturedFile) return;
   document.getElementById("btnLeer").disabled=true;
@@ -3624,17 +3648,12 @@ async function leerDocumento(){
     }
     _esComplementoIA = !!data.es_complemento_pago;
     // Si el correo traía el CFDI en XML, sus datos GANAN sobre los de la IA: son los timbrados.
-    const _c = _cfdiGmail;
-    document.getElementById("fProv").value=(_c&&_c.proveedor)||data.proveedor||"";
-    if(_c && _c.fecha){
-      _fechaAsumida = false;
-      document.getElementById("fFecha").value=_c.fecha;
-    } else {
-      _fechaAsumida = !data.fecha;
-      document.getElementById("fFecha").value=data.fecha||todayStr();
-    }
-    document.getElementById("fFactura").value=(_c&&_c.folio)||data.factura||"";
-    document.getElementById("fImporte").value=(_c&&_c.total>0)?_c.total:(data.importe||"");
+    const _cap = datosDeCaptura(_cfdiGmail, data);
+    document.getElementById("fProv").value    = _cap.proveedor;
+    document.getElementById("fFecha").value   = _cap.fecha || todayStr();
+    document.getElementById("fFactura").value = _cap.factura;
+    document.getElementById("fImporte").value = _cap.importe;
+    _fechaAsumida = _cap.fechaAsumida;
     if(data.categoria){
       const sel=document.getElementById("fCategoria");
       for(let i=0;i<sel.options.length;i++){ if(sel.options[i].value===data.categoria){sel.selectedIndex=i;break;} }
