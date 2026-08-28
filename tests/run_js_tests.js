@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC"];
+const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA"];
 
 
@@ -131,6 +131,8 @@ const FUNCS = [
   "esc", "escAttrJs",
   "_esFechaISO", "_esNum", "validarArchivoCortes", "avisosControlCortes",
   "foliosCorteImportados", "foliosEgresoImportados", "foliosCorteIgnorados", "clasificacionInicialEgreso",
+  "_sumarDiaISO", "manifiestoDeImportacion", "_claveManifiesto", "agregarManifiesto", "_unirManifiestos",
+  "coberturaDePeriodos", "validarCadenaPeriodos", "rupturasDeCadena",
   "_pareceFolioFactura", "gastoMismoImporte",
   "findDuplicate",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
@@ -1690,6 +1692,199 @@ t("vincular un folio que estaba excluido tambien lo saca de la lista", () => {
   const r = S.construirImportacionCortes(_impBase([_egVinc("EGR-1", g, 100)]), previos, "Diana", 1000);
   assert.equal(r.nV, 1);
   assert.equal(r.ignorados.length, 0);
+});
+
+// ── Cobertura: saber que FALTA un periodo, no solo que no cuadra ────────────
+// El caso que lo motiva: agosto 2026. Estaban los cortes del 3 al 9 y los del 19 al 25, faltaban
+// nueve dias por $150,164.00, y el reporte no dijo nada — cuadraba consigo mismo porque nunca
+// supo que ese tramo debia existir. La deduplicacion es por folio: un folio que jamas llego no se
+// puede detectar por su ausencia.
+console.log("\n== cobertura de periodos: el hueco que nadie avisaba ==");
+
+const _M = (ini, fin, extra) => ({ ini, fin, emitido:(extra&&extra.emitido)||"", ...(extra||{}) });
+
+t("_sumarDiaISO cruza fin de mes, fin de anio y bisiesto sin pasar por UTC", () => {
+  assert.equal(S._sumarDiaISO("2026-08-31", 1), "2026-09-01");
+  assert.equal(S._sumarDiaISO("2026-12-31", 1), "2027-01-01");
+  assert.equal(S._sumarDiaISO("2028-02-28", 1), "2028-02-29", "2028 es bisiesto");
+  assert.equal(S._sumarDiaISO("2026-08-01", -1), "2026-07-31");
+  assert.equal(S._sumarDiaISO("no es fecha", 1), "");
+});
+t("_sumarDiaISO no usa toISOString: guardia sobre el codigo fuente", () => {
+  // toISOString() convierte a UTC. Con la fecha anclada al mediodia local funciona en Mexico
+  // (UTC-6), asi que una prueba de comportamiento aqui NO caza el error: solo se rompe en zonas
+  // horarias adelantadas, donde devuelve el dia de al lado y la cobertura corre un dia. Un dia
+  // corrido acusa un hueco falso, o peor, tapa uno real. Se vigila de forma textual.
+  const m = script.match(/function _sumarDiaISO\(fecha, dias\)\{[\s\S]*?\n\}/);
+  assert.ok(m, "no encontre _sumarDiaISO");
+  assert.ok(!m[0].includes("toISOString"), "volvio a UTC: la cobertura se corre un dia");
+  assert.ok(/getFullYear|fechaLocalStr/.test(m[0]), "tiene que armar la fecha con los getters locales");
+});
+
+t("EL caso: importar 3-9 y 19-25 delata el hueco del 10 al 18", () => {
+  const c = S.coberturaDePeriodos("2026-08-03", "2026-08-25",
+    [_M("2026-08-03","2026-08-09"), _M("2026-08-19","2026-08-25")]);
+  assert.equal(c.cubierto, false);
+  assert.equal(c.dias.length, 9, "nueve dias sin importar");
+  assert.equal(c.tramos.length, 1, "consecutivos: un solo tramo, no nueve renglones");
+  assert.equal(c.tramos[0].ini, "2026-08-10");
+  assert.equal(c.tramos[0].fin, "2026-08-18");
+});
+
+t("al importar el tramo que faltaba, la cobertura queda completa", () => {
+  const c = S.coberturaDePeriodos("2026-08-03", "2026-08-25",
+    [_M("2026-08-03","2026-08-09"), _M("2026-08-10","2026-08-18"), _M("2026-08-19","2026-08-25")]);
+  assert.equal(c.cubierto, true);
+  assert.equal(c.dias.length, 0);
+});
+
+t("huecos separados salen como tramos separados", () => {
+  const c = S.coberturaDePeriodos("2026-08-01", "2026-08-10",
+    [_M("2026-08-03","2026-08-05"), _M("2026-08-08","2026-08-09")]);
+  assert.deepEqual(c.tramos.map(t=>[t.ini,t.fin,t.dias]),
+    [["2026-08-01","2026-08-02",2], ["2026-08-06","2026-08-07",2], ["2026-08-10","2026-08-10",1]]);
+});
+
+t("periodos traslapados no inventan huecos", () => {
+  const c = S.coberturaDePeriodos("2026-08-01", "2026-08-20",
+    [_M("2026-08-01","2026-08-12"), _M("2026-08-10","2026-08-20")]);
+  assert.equal(c.cubierto, true);
+});
+
+t("un periodo mas amplio que lo consultado cubre de sobra", () => {
+  const c = S.coberturaDePeriodos("2026-08-05", "2026-08-06", [_M("2026-07-01","2026-09-30")]);
+  assert.equal(c.cubierto, true);
+});
+
+t("sin NINGUNA constancia no se acusa de un hueco: se dice que no hay con que comprobar", () => {
+  // Quien ya venia usando la app importo sin dejar constancia. Reportar "faltan 30 dias" seria
+  // mentir con la misma seguridad con la que antes se callaba.
+  const c = S.coberturaDePeriodos("2026-08-03", "2026-08-25", []);
+  assert.equal(c.sinRegistro, true);
+  assert.equal(c.cubierto, false, "tampoco se declara cubierto: no se sabe");
+  assert.equal(c.dias.length, 0, "y no se listan dias que nadie puede confirmar");
+});
+
+t("un rango absurdo no cuelga la pestania", () => {
+  const c = S.coberturaDePeriodos("1990-01-01", "2090-01-01", [_M("2026-08-01","2026-08-02")]);
+  // El const se declara DENTRO del contexto del vm, asi que es un binding lexico y no una
+  // propiedad del sandbox: S._COBERTURA_MAX_DIAS seria undefined, y `n <= undefined` es false.
+  const tope = vm.runInContext("_COBERTURA_MAX_DIAS", sandbox);
+  assert.ok(tope > 0, "el tope tiene que existir de verdad, no llegar como undefined");
+  assert.ok(c.dias.length <= tope);
+});
+
+t("los manifiestos con fechas invalidas se ignoran, no tumban el calculo", () => {
+  const c = S.coberturaDePeriodos("2026-08-01", "2026-08-02", [null, {}, _M("","2026-08-02"), _M("2026-08-01","2026-08-02")]);
+  assert.equal(c.cubierto, true);
+  assert.equal(c.nManifiestos, 1);
+});
+
+console.log("\n== bitacora de importaciones: idempotente y compartida ==");
+t("el manifiesto guarda los totales que DECLARA el archivo", () => {
+  const m = S.manifiestoDeImportacion({ periodo:{ini:"2026-08-19",fin:"2026-08-25"}, emitido:"2026-08-26",
+    version:3, saldoInicial:-24.37, cortes:[1,2], egresos:[1], totales:{ efectivo:119425.5, efectivoAEntregar:12284.22 } }, "Diana", "T1");
+  assert.equal(m.ini, "2026-08-19"); assert.equal(m.cortes, 2); assert.equal(m.egresos, 1);
+  close(m.saldoInicial, -24.37, 0.01);
+  close(m.totales.efectivoAEntregar, 12284.22, 0.01, "es el dato del archivo, para poder compararlo despues");
+  assert.equal(m.importadoPor, "Diana");
+});
+t("reimportar EL MISMO archivo no agrega otro renglon", () => {
+  const m = _M("2026-08-19","2026-08-25",{emitido:"2026-08-26"});
+  const l1 = S.agregarManifiesto([], m);
+  const l2 = S.agregarManifiesto(l1, { ...m });
+  assert.equal(l1.length, 1); assert.equal(l2.length, 1);
+});
+t("volver a exportar el mismo periodo SI deja constancia aparte", () => {
+  // Es otro archivo. La trazabilidad pide saber cual de los dos se uso.
+  const l = S.agregarManifiesto(
+    S.agregarManifiesto([], _M("2026-08-19","2026-08-25",{emitido:"2026-08-26"})),
+    _M("2026-08-19","2026-08-25",{emitido:"2026-08-28"}));
+  assert.equal(l.length, 2);
+});
+t("un manifiesto sin periodo no entra a la bitacora", () => {
+  assert.equal(S.agregarManifiesto([], { ini:"", fin:"" }).length, 0);
+});
+t("los manifiestos se UNEN entre dispositivos y salen ordenados", () => {
+  // Si una companiera importo un periodo desde su equipo y aqui no esta su constancia, la app
+  // reportaria un hueco que no existe.
+  const u = S._unirManifiestos([_M("2026-08-19","2026-08-25")], [_M("2026-08-03","2026-08-09"), _M("2026-08-19","2026-08-25")]);
+  assert.equal(u.length, 2, "el repetido no se duplica");
+  assert.equal(u[0].ini, "2026-08-03", "y quedan en orden de fecha");
+});
+t("mergeEstados conserva las constancias de los dos dispositivos", () => {
+  const r = S.mergeEstados(
+    { weeks:[], cortesImportaciones:[_M("2026-08-03","2026-08-09")] },
+    { weeks:[], cortesImportaciones:[_M("2026-08-19","2026-08-25")] });
+  assert.equal(r.cortesImportaciones.length, 2);
+});
+
+console.log("\n== cadena de saldos entre archivos ==");
+// Cada archivo cuadra consigo mismo. Una fuga ENTRE dos archivos no la ve ninguno de los dos.
+t("lo que un periodo deja a entregar tiene que ser con lo que abre el siguiente", () => {
+  const v = S.validarCadenaPeriodos(
+    { totales:{ efectivoAEntregar:-696.28 } }, { saldoInicial:-696.28 });
+  assert.equal(v.ok, true);
+  close(v.diferencia, 0, 0.001);
+});
+t("una diferencia de un peso rompe la cadena", () => {
+  const v = S.validarCadenaPeriodos({ totales:{ efectivoAEntregar:1000 } }, { saldoInicial:999 });
+  assert.equal(v.ok, false);
+  close(v.diferencia, -1, 0.001);
+});
+t("sin los saldos no se declara ok: se dice que faltan datos", () => {
+  const v = S.validarCadenaPeriodos({ totales:{} }, { saldoInicial:100 });
+  assert.equal(v.ok, false);
+  assert.equal(v.sinDatos, true, "faltar datos no es lo mismo que estar mal");
+});
+t("rupturasDeCadena solo revisa archivos CONSECUTIVOS", () => {
+  // Entre el 3-9 y el 19-25 hay un hueco: no se encadenan, y decir que "la cadena se rompe" ahi
+  // taparia el problema real, que es la falta de cobertura.
+  const r = S.rupturasDeCadena([
+    _M("2026-08-03","2026-08-09",{ totales:{ efectivoAEntregar:5000 } }),
+    _M("2026-08-19","2026-08-25",{ saldoInicial:-24.37 }),
+  ]);
+  assert.equal(r.length, 0);
+});
+t("dos archivos pegados con saldos que no empatan SI se reportan", () => {
+  const r = S.rupturasDeCadena([
+    _M("2026-08-19","2026-08-21",{ totales:{ efectivoAEntregar:-696.28 } }),
+    _M("2026-08-22","2026-08-25",{ saldoInicial:1500 }),
+  ]);
+  assert.equal(r.length, 1);
+  close(r[0].diferencia, 2196.28, 0.01);
+  assert.equal(r[0].anterior.fin, "2026-08-21");
+});
+t("los archivos auditados encadenan al centavo", () => {
+  // 19-21 cierra en -696.28 y 22-25 abre en -696.28.
+  const r = S.rupturasDeCadena([
+    _M("2026-08-22","2026-08-25",{ saldoInicial:-696.28 }),
+    _M("2026-08-19","2026-08-21",{ totales:{ efectivoAEntregar:-696.28 } }),
+  ]);
+  assert.equal(r.length, 0, "y el orden en que se importaron no cambia el resultado");
+});
+
+console.log("\n== la bitacora se escribe con la importacion, no aparte ==");
+t("importar deja constancia del periodo cubierto", () => {
+  const d = _impBase([]);
+  d.obj.emitido = "2026-08-03";
+  const r = S.construirImportacionCortes(d, _previosVacios(), "Diana", 1000);
+  assert.equal(r.importaciones.length, 1);
+  assert.equal(r.importaciones[0].ini, "2026-07-11");
+  assert.equal(r.importaciones[0].importadoPor, "Diana");
+});
+t("si la importacion truena, tampoco queda registrado que el periodo se cubrio", () => {
+  // Seria el peor de los dos mundos: no entraron los movimientos y ademas la app cree que ese
+  // tramo ya esta cubierto, asi que deja de reclamarlo.
+  const previos = { cortes:[], gastos:[], retiros:[], ignorados:[], importaciones:[] };
+  const real = S.canonizarCategoria;
+  S.canonizarCategoria = () => { throw new Error("categoria imposible"); };
+  try{
+    assert.throws(() => S.construirImportacionCortes(
+      _impBase([{ folio:"EGR-1", fecha:"2026-07-22", concepto:"X", monto:10, _clase:"gasto", _cat:"Otro" }]),
+      previos, "Diana", 1000), /categoria imposible/);
+    assert.equal(previos.importaciones.length, 0, "la bitacora del llamador queda intacta");
+  } finally { S.canonizarCategoria = real; }
 });
 
 t("un gasto nuevo de caja nace con montoCaja igual al importe", () => {

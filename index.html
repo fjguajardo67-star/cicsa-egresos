@@ -1942,7 +1942,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-g";
+const APP_BUILD = "2026-08-28-h";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2762,6 +2762,9 @@ function mergeEstados(remote, local){
     // Los folios de cortes ignorados se UNEN (no "gana el último"): si un dispositivo marcó un
     // egreso como "ya facturado", esa decisión no se debe perder porque otro no la tenga.
     cortesIgnorados: _unirIgnorados(remote.cortesIgnorados, local.cortesIgnorados),
+    // Igual que los excluidos: se UNEN. Si una compañera importó un periodo desde su equipo y
+    // este dispositivo no tiene su constancia, la app reportaría un hueco que no existe.
+    cortesImportaciones: _unirManifiestos(remote.cortesImportaciones, local.cortesImportaciones),
   };
 }
 // Marca un id como borrado para que la fusión no lo resucite desde una copia vieja de otro
@@ -10823,6 +10826,116 @@ function egresosExcluidos(state){
           motivo:x.motivo||"", _sinDetalle:false })
     .filter(x=>x.folio);
 }
+// ── Cobertura: qué periodos se importaron de verdad ───────────────────────────
+// La deduplicación de la importación es por FOLIO: un corte que ya está no se vuelve a meter.
+// Eso protege contra importar dos veces, pero no contra NO importar: un folio que nunca llegó no
+// se puede detectar por su ausencia, porque no hay nada que comparar.
+// Fue exactamente lo que pasó con el 10–18 de agosto de 2026: estaban los cortes del 3 al 9 y los
+// del 19 al 25, faltaban nueve días por $150,164.00, y el reporte no dijo nada — cuadraba consigo
+// mismo porque nunca supo que ese tramo debía existir. Un saldo que no cuadra al menos avisa; un
+// hueco callado se ve idéntico a un periodo sin operación.
+// Por eso cada importación deja constancia de QUÉ PERIODO cubrió, y la cobertura se comprueba
+// contra esa constancia, no contra los movimientos.
+
+// Suma días a una fecha ISO sin pasar por UTC. toISOString() sobre una fecha anclada al mediodía
+// local convierte de zona horaria y puede devolver el día de al lado; aquí se arma la cadena con
+// los getters locales, que es lo mismo que hace fechaLocalStr().
+function _sumarDiaISO(fecha, dias){
+  const d = new Date(String(fecha) + "T12:00:00");
+  if(isNaN(d)) return "";
+  d.setDate(d.getDate() + (dias||0));
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+
+// La constancia de una importación. Guarda los totales que declaraba el archivo, no los que
+// calculó Egresos: sirve justamente para comparar uno contra otro después.
+function manifiestoDeImportacion(obj, autor, ts){
+  const o = obj || {}, p = o.periodo || {};
+  return {
+    ini: p.ini || "", fin: p.fin || "", emitido: o.emitido || "", version: o.version || "",
+    cortes: (o.cortes||[]).length, egresos: (o.egresos||[]).length,
+    aportaciones: (o.aportaciones||[]).length,
+    saldoInicial: (typeof o.saldoInicial === "number") ? o.saldoInicial : null,
+    totales: { ...(o.totales || {}) },
+    importadoPor: autor || "", importadoEn: ts || new Date().toISOString(),
+  };
+}
+function _claveManifiesto(m){ return `${(m&&m.ini)||""}|${(m&&m.fin)||""}|${(m&&m.emitido)||""}`; }
+// Se identifica por periodo + fecha de emisión del archivo. Reimportar EL MISMO archivo no agrega
+// un renglón (la importación tiene que ser idempotente también en su bitácora); volver a exportar
+// el mismo periodo desde Cortes sí, porque es otro archivo y la trazabilidad pide saberlo.
+function agregarManifiesto(lista, m){
+  const prev = (lista||[]).filter(x=>x && x.ini && x.fin);
+  if(!m || !m.ini || !m.fin) return prev;
+  const k = _claveManifiesto(m);
+  return prev.some(x=>_claveManifiesto(x) === k) ? prev : [...prev, m];
+}
+// Fusión entre dispositivos: se UNEN. Si una compañera importó un periodo y este dispositivo no
+// lo tiene, perder su constancia haría que la app reportara un hueco que no existe.
+function _unirManifiestos(a, b){
+  const out = new Map();
+  [...(a||[]), ...(b||[])].forEach(m=>{
+    if(!m || !m.ini || !m.fin) return;
+    const k = _claveManifiesto(m);
+    if(!out.has(k)) out.set(k, m);
+  });
+  return [...out.values()].sort((x,y)=> x.ini < y.ini ? -1 : x.ini > y.ini ? 1 : 0);
+}
+
+// ¿Qué días del periodo consultado NO están cubiertos por ninguna importación?
+// Devuelve los días sueltos y también agrupados en TRAMOS: "faltan del 10 al 18 de agosto" se
+// entiende y se va a buscar; nueve fechas en fila no.
+const _COBERTURA_MAX_DIAS = 1000;   // tope de seguridad: un rango absurdo no cuelga la pestaña
+function coberturaDePeriodos(ini, fin, manifiestos){
+  const ms = (manifiestos||[]).filter(m=>m && m.ini && m.fin);
+  const vacio = { sinRegistro: !ms.length, dias: [], tramos: [], cubierto: false, nManifiestos: ms.length };
+  if(!ini || !fin || ini > fin) return { ...vacio, cubierto: true };
+  if(!ms.length) return vacio;
+  const dias = [];
+  let f = ini, vueltas = 0;
+  while(f && f <= fin && vueltas++ < _COBERTURA_MAX_DIAS){
+    if(!ms.some(m => m.ini <= f && m.fin >= f)) dias.push(f);
+    f = _sumarDiaISO(f, 1);
+  }
+  // Días consecutivos → un tramo. La consecutividad se comprueba con la misma suma de días, no
+  // comparando cadenas: entre el 31 y el 1 hay un día, aunque como texto no se parezcan.
+  const tramos = [];
+  dias.forEach(d=>{
+    const ult = tramos[tramos.length-1];
+    if(ult && _sumarDiaISO(ult.fin, 1) === d){ ult.fin = d; ult.dias++; }
+    else tramos.push({ ini:d, fin:d, dias:1 });
+  });
+  return { sinRegistro:false, dias, tramos, cubierto: dias.length === 0, nManifiestos: ms.length };
+}
+
+// El efectivo a entregar de un periodo tiene que ser el saldo inicial del siguiente. Si no lo es,
+// entre los dos archivos se perdió o se coló dinero, y ninguno de los dos lo dice por su cuenta:
+// cada uno cuadra consigo mismo.
+function validarCadenaPeriodos(anterior, siguiente){
+  const esperado = parseFloat(anterior && anterior.totales && anterior.totales.efectivoAEntregar);
+  const recibido = parseFloat(siguiente && siguiente.saldoInicial);
+  if(!isFinite(esperado) || !isFinite(recibido)){
+    return { ok:false, sinDatos:true, motivo:"El archivo no trae los saldos para poder encadenarlos." };
+  }
+  const diferencia = recibido - esperado;
+  return { ok: Math.abs(diferencia) < 0.01, sinDatos:false, esperado, recibido, diferencia };
+}
+// Recorre los manifiestos en orden y devuelve SOLO donde se rompe la cadena. Dos archivos que se
+// traslapan o que dejan un hueco no se encadenan: ahí manda coberturaDePeriodos, no esto.
+function rupturasDeCadena(manifiestos){
+  const ms = (manifiestos||[]).filter(m=>m && m.ini && m.fin).slice()
+    .sort((a,b)=> a.ini < b.ini ? -1 : a.ini > b.ini ? 1 : 0);
+  const out = [];
+  for(let i=1; i<ms.length; i++){
+    const ant = ms[i-1], sig = ms[i];
+    if(_sumarDiaISO(ant.fin, 1) !== sig.ini) continue;   // no son consecutivos: no hay cadena que validar
+    const v = validarCadenaPeriodos(ant, sig);
+    if(!v.ok && !v.sinDatos) out.push({ ...v, anterior:ant, siguiente:sig });
+  }
+  return out;
+}
+
 function foliosEgresoImportados(){
   const s = new Set();
   (state.weeks||[]).forEach(w=>{
@@ -11169,7 +11282,10 @@ function construirImportacionCortes(d, previos, autor, base){
     saldo = { fecha:p.ini, entrada:{ valor:d.obj.saldoInicial, conteo:{}, fecha:todayStr(),
               porEmail:"Manejo de Cortes", ts:ahora, _origenCorte:true } };
   }
-  return { cortes, gastos, retiros, ignorados, vinculos, saldo, nC, nG, nR, nI, nV };
+  // La constancia del periodo importado va DENTRO del plan, no se escribe aparte: si la
+  // importación se aborta, tampoco puede quedar registrado que este periodo se cubrió.
+  const importaciones = agregarManifiesto(p0.importaciones, manifiestoDeImportacion(d.obj, autor, ahora));
+  return { cortes, gastos, retiros, ignorados, vinculos, importaciones, saldo, nC, nG, nR, nI, nV };
 }
 
 function confirmarImportarCortes(){
@@ -11204,6 +11320,7 @@ function confirmarImportarCortes(){
       // claro que de aquí no sale nada que se escriba.
       gastosTodos: (typeof allGastosAllWeeks==="function") ? allGastosAllWeeks() : [],
       ignorados: Array.isArray(state.cortesIgnorados) ? state.cortesIgnorados : [],
+      importaciones: Array.isArray(state.cortesImportaciones) ? state.cortesImportaciones : [],
     }, (typeof currentNombre!=="undefined" && currentNombre) || (currentUser&&currentUser.email) || "");
   }catch(err){
     console.warn("construirImportacionCortes:", err);
@@ -11218,6 +11335,7 @@ function confirmarImportarCortes(){
   week.gastos  = plan.gastos;
   week.retiros = plan.retiros;
   state.cortesIgnorados = plan.ignorados;
+  state.cortesImportaciones = plan.importaciones;
   // Los vínculos se aplican DESPUÉS de reasignar las listas, y sobre todas las semanas: la factura
   // vinculada casi siempre está en otra. Van después porque week.gastos acaba de cambiar de arreglo
   // y hay que parchar el vigente, no el que se reemplazó. Son asignaciones sueltas, sin await de
@@ -11300,6 +11418,65 @@ function _pintarAuditoriaCaja(){
     .filter(c=>enRango(c.fecha)).sort((a,b)=>(b.monto||0)-(a.monto||0));
 
   let h = "";
+
+  // ── Cobertura: primero de todo, porque manda sobre lo demás ────────────────
+  // Un saldo que no cuadra al menos avisa. Un tramo que nunca se importó no avisa de nada: el
+  // reporte cuadra consigo mismo porque jamás supo que ese tramo debía existir, y se ve idéntico
+  // a un periodo sin operación. Por eso va arriba: si falta cobertura, cualquier conclusión sobre
+  // el saldo de abajo está incompleta, y hay que leerla sabiéndolo.
+  const manifiestos = Array.isArray(state.cortesImportaciones) ? state.cortesImportaciones : [];
+  const cob = coberturaDePeriodos(ini, fin, manifiestos);
+  if(cob.sinRegistro){
+    // Los manifiestos empiezan a existir con esta versión: quien ya venía usando la app importó
+    // sin dejar constancia. Decir "faltan 30 días" sería mentir. Lo honesto es decir que todavía
+    // no hay con qué comprobarlo, y enseñar la evidencia que sí hay: hasta dónde llegan los
+    // cortes importados que están guardados.
+    const imp = cortes.filter(c=>c && c._folioCorte && c.fecha).map(c=>c.fecha).sort();
+    h += `<div style="background:#ECEFF1;border:1.5px solid #90A4AE;border-radius:10px;padding:12px 14px;margin-top:16px">
+      <div style="font-weight:700;color:#455A64;font-size:13px">📋 Cobertura: todavía sin registro</div>
+      <div style="font-size:12px;color:var(--txt2);margin-top:6px">
+        Egresos empezó a anotar qué periodos se importan a partir de esta versión, así que de las
+        importaciones anteriores no hay constancia y no se puede comprobar si falta algún tramo.
+        A partir de la próxima importación este control ya sirve.
+        ${imp.length?`<br>Por lo pronto, los cortes importados que hay van del <strong>${fmtDate(imp[0])}</strong> al <strong>${fmtDate(imp[imp.length-1])}</strong> — es evidencia de lo que entró, no prueba de lo que falta.`:""}
+      </div></div>`;
+  } else if(!cob.cubierto){
+    const detalle = cob.tramos.map(t=> t.dias===1
+      ? `<li>${esc(fmtDate(t.ini))}</li>`
+      : `<li>del <strong>${esc(fmtDate(t.ini))}</strong> al <strong>${esc(fmtDate(t.fin))}</strong> — ${t.dias} días</li>`).join("");
+    h += `<div style="background:#FFEBEE;border:2px solid var(--red);border-radius:10px;padding:12px 14px;margin-top:16px">
+      <div style="font-weight:700;color:var(--red);font-size:13px">⛔ COBERTURA INCOMPLETA — faltan ${cob.dias.length} día(s) por importar</div>
+      <div style="font-size:12px;color:var(--txt2);margin:6px 0 8px">
+        Ningún archivo de Manejo de Cortes cubre estas fechas, así que el ingreso y el egreso de
+        esos días <strong>no están en Egresos</strong>. El saldo de abajo no se puede dar por
+        conciliado: cuadra con lo que hay, no con lo que hubo.
+        <ul style="margin:6px 0 0 18px;padding:0">${detalle}</ul>
+        <div style="margin-top:8px">Exporta esos periodos desde Manejo de Cortes e impórtalos aquí.</div>
+      </div></div>`;
+  } else {
+    h += `<div style="background:#F1F8E9;border:1.5px solid var(--vd);border-radius:10px;padding:10px 14px;margin-top:16px">
+      <div style="font-weight:700;color:var(--vd);font-size:13px">✅ Cobertura completa del periodo</div>
+      <div style="font-size:12px;color:var(--txt2);margin-top:4px">Todos los días del ${fmtDate(ini)} al ${fmtDate(fin)} están cubiertos por ${cob.nManifiestos} archivo(s) importado(s) de Manejo de Cortes.</div>
+    </div>`;
+  }
+  // Cadena de saldos: el efectivo a entregar de un archivo tiene que ser el saldo inicial del
+  // siguiente. Cada archivo cuadra consigo mismo, así que una fuga ENTRE dos solo se ve aquí.
+  const rupturas = (typeof rupturasDeCadena==="function") ? rupturasDeCadena(manifiestos) : [];
+  if(rupturas.length){
+    h += `<div style="background:#FFF3E0;border:1.5px solid var(--naranja);border-radius:10px;padding:12px 14px;margin-top:14px">
+      <div style="font-weight:700;color:var(--naranja);font-size:13px">⚠ La cadena de saldos se rompe en ${rupturas.length} punto(s)</div>
+      <div style="font-size:12px;color:var(--txt2);margin:6px 0 8px">Un periodo tiene que abrir con lo que cerró el anterior. Donde no coincide, entre los dos archivos se perdió o se coló dinero — y ninguno de los dos lo dice solo, porque cada uno cuadra consigo mismo.</div>
+      <div class="tbl-wrap"><table style="width:100%;font-size:12px"><thead><tr>
+        <th>Cierra</th><th>Abre</th><th style="text-align:right">Debía abrir con</th><th style="text-align:right">Abrió con</th><th style="text-align:right">Diferencia</th></tr></thead><tbody>
+        ${rupturas.map(r=>`<tr>
+          <td style="white-space:nowrap">${esc(fmtDate(r.anterior.fin))}</td>
+          <td style="white-space:nowrap">${esc(fmtDate(r.siguiente.ini))}</td>
+          <td class="amount-cell">${fmt(r.esperado)}</td>
+          <td class="amount-cell">${fmt(r.recibido)}</td>
+          <td class="amount-cell" style="color:var(--red);font-weight:700">${r.diferencia>0?"+":""}${fmt(r.diferencia)}</td></tr>`).join("")}
+      </tbody></table></div></div>`;
+  }
+
   if(excluidos.length){
     const tot = excluidos.reduce((t,c)=>t+(parseFloat(c.monto)||0),0);
     h += `<div style="background:#F1F8E9;border:1.5px solid var(--vd);border-radius:10px;padding:12px 14px;margin-top:16px">
