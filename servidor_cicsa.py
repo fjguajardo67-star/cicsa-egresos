@@ -15,14 +15,6 @@ except ImportError:
     GMAIL_AVAILABLE = False
     def fetch_invoice_attachments(**k): return [{'error':'gmail_cicsa.py no encontrado'}]
 
-try:
-    from sheets_cicsa import (push_gasto, pull_gastos, update_aprobacion,
-        delete_gasto, get_sheet_url, get_status as sheets_status,
-        get_or_create_sheet, save_config, load_config)
-    SHEETS_AVAILABLE = True
-except ImportError:
-    SHEETS_AVAILABLE = False
-
 PORT     = 7432
 BASE_DIR   = Path(__file__).parent
 STATE_FILE = BASE_DIR / "cicsa_data.json"
@@ -448,100 +440,6 @@ def gmail_status():
     return jsonify({"credentials": creds_ok, "authorized": token_ok, "available": GMAIL_AVAILABLE})
 
 
-# ── /sheets-status ────────────────────────────────────────────────────────────
-@app.route("/sheets-status", methods=["GET"])
-def sheets_status_route():
-    if not SHEETS_AVAILABLE:
-        return jsonify({"available": False, "error": "sheets_cicsa.py no encontrado"})
-    try:
-        st = sheets_status()
-        st["available"] = True
-        return jsonify(st)
-    except Exception as e:
-        return jsonify({"available": True, "configured": False, "error": str(e)})
-
-# ── /sheets-config ────────────────────────────────────────────────────────────
-@app.route("/sheets-config", methods=["POST"])
-@require_auth
-def sheets_config():
-    if not SHEETS_AVAILABLE:
-        return jsonify({"error": "sheets_cicsa.py no encontrado"}), 400
-    try:
-        d       = request.get_json()
-        cfg     = load_config()
-        usuario = d.get("usuario","").strip()
-        sheet_id= d.get("sheet_id","").strip()
-        if usuario: cfg["usuario"]  = usuario
-        if sheet_id:cfg["sheet_id"] = sheet_id
-        save_config(cfg)
-        # Try to connect
-        sh = get_or_create_sheet()
-        return jsonify({"ok": True, "sheet_url": get_sheet_url(),
-                        "sheet_id": sh.id})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ── /sheets-push ──────────────────────────────────────────────────────────────
-@app.route("/sheets-push", methods=["POST"])
-@require_auth
-def sheets_push():
-    if not SHEETS_AVAILABLE:
-        return jsonify({"error": "No disponible"}), 400
-    try:
-        d      = request.get_json()
-        gastos = d.get("gastos", [])
-        semana = d.get("semana_label", "")
-        ok, fail = 0, 0
-        for g in gastos:
-            if push_gasto(g, semana): ok += 1
-            else: fail += 1
-        return jsonify({"ok": ok, "failed": fail, "sheet_url": get_sheet_url()})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ── /sheets-pull ──────────────────────────────────────────────────────────────
-@app.route("/sheets-pull", methods=["GET"])
-@require_auth
-def sheets_pull():
-    if not SHEETS_AVAILABLE:
-        return jsonify({"error": "No disponible"}), 400
-    try:
-        gastos = pull_gastos()
-        return jsonify({"gastos": gastos, "count": len(gastos),
-                        "sheet_url": get_sheet_url()})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ── /sheets-aprobar ───────────────────────────────────────────────────────────
-@app.route("/sheets-aprobar", methods=["POST"])
-@require_auth
-def sheets_aprobar():
-    if not SHEETS_AVAILABLE:
-        return jsonify({"error": "No disponible"}), 400
-    try:
-        d          = request.get_json()
-        gasto_id   = d.get("id","")
-        estado     = d.get("estado","aprobado")   # aprobado / rechazado
-        usuario    = d.get("usuario","")
-        ok = update_aprobacion(gasto_id, estado, usuario)
-        return jsonify({"ok": ok})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ── /sheets-delete ────────────────────────────────────────────────────────────
-@app.route("/sheets-delete", methods=["POST"])
-@require_auth
-def sheets_delete():
-    if not SHEETS_AVAILABLE:
-        return jsonify({"error": "No disponible"}), 400
-    try:
-        gasto_id = request.get_json().get("id","")
-        ok = delete_gasto(gasto_id)
-        return jsonify({"ok": ok})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 # ── /save-state  (persist state to local file) ────────────────────────────────
 # save/load-state existen para el uso LOCAL (respaldo en cicsa_data.json). En Railway el
 # disco es efímero (se pierde en cada redeploy) y estos endpoints no tienen autenticación:
@@ -864,6 +762,12 @@ def load_api_key():
                 os.environ["ANTHROPIC_API_KEY"] = line
                 return True
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+# Bajo un servidor WSGI (Gunicorn en Railway) el bloque __main__ NO se ejecuta, así que la
+# clave hay que cargarla al importar. En Railway viene por variable de entorno y esto es un
+# no-op; en local lee CICSA_APIKEY.txt igual que siempre. get_client() la consulta en cada
+# petición, no al arrancar, así que con esto queda cubierto cualquier forma de arranque.
+load_api_key()
 
 if __name__ == "__main__":
     print("="*55)

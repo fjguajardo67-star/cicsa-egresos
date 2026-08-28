@@ -85,18 +85,28 @@ class TestExtractParts(unittest.TestCase):
 
 
 class TestIncludeSeen(unittest.TestCase):
-    """El correo M1 ya está en 'vistos': con include_seen=False se salta; con True se devuelve.
-    Es el fix para re-cargar facturas ya capturadas y re-leerlas con IA ('Leer igual')."""
+    """include_seen ya no cambia el resultado: el registro de vistos vive en Firestore."""
 
     _PATCHED = ["get_gmail_service", "load_seen", "save_seen", "get_attachment_data",
                 "is_whitelisted_sender", "is_inline_part"]
 
+    # fetch_invoice_attachments guarda cada adjunto en disco, así que sin esto la prueba
+    # dejaba archivos sueltos en facturas_inbox/ dentro del repo cada vez que se corría.
+    # Están en .gitignore —nunca se habrían subido— pero una prueba que ensucia el árbol
+    # de trabajo es una prueba que la gente deja de correr, y ésta llevaba meses en rojo
+    # justamente porque nadie la corría.
     def setUp(self):
+        import tempfile
         self._orig = {n: getattr(gc, n, None) for n in self._PATCHED}
+        self._tmp = tempfile.TemporaryDirectory()
+        self._inbox_real = gc.INBOX_DIR
+        gc.INBOX_DIR = Path(self._tmp.name)
 
     def tearDown(self):
         for n, fn in self._orig.items():
             setattr(gc, n, fn)
+        gc.INBOX_DIR = self._inbox_real
+        self._tmp.cleanup()
 
     def _fake_service(self):
         part = {"mimeType": "application/pdf", "filename": "factura.pdf",
@@ -141,14 +151,86 @@ class TestIncludeSeen(unittest.TestCase):
         gc.is_inline_part        = lambda part, name: False
         return gc.fetch_invoice_attachments(days_back=30, include_seen=include_seen)
 
-    def test_sin_include_seen_se_salta(self):
-        self.assertEqual(self._run(False), [])
+    # El filtrado por gmail_seen.json se retiro a proposito: ese archivo vivia en el
+    # disco de Railway, se borraba en cada redespliegue y no lo compartia el equipo.
+    # Ahora quien recuerda lo ya atendido es la coleccion gmail_revisados de Firestore.
+    # include_seen se sigue aceptando por compatibilidad con clientes viejos, pero YA NO
+    # cambia el resultado — y esta prueba existe para que eso siga siendo cierto.
+    # (Antes afirmaba lo contrario y llevaba meses en rojo sin que nadie la corriera.)
+    def test_include_seen_ya_no_cambia_el_resultado(self):
+        con = self._run(True)
+        sin = self._run(False)
+        self.assertEqual(len(con), 1)
+        self.assertEqual(len(sin), 1, "el registro de vistos del servidor ya no filtra")
+        self.assertEqual(con[0]["msg_id"], sin[0]["msg_id"], "M1")
 
-    def test_con_include_seen_se_devuelve(self):
-        res = self._run(True)
-        self.assertEqual(len(res), 1)
-        self.assertEqual(res[0]["msg_id"], "M1")
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# Guardias del token de Gmail
+# ════════════════════════════════════════════════════════════════════════════
+# Un refresh_token de Gmail de este proyecto terminó en el historial público del
+# repositorio y estuvo ahí tres meses. Estas pruebas no arreglan aquello —eso se
+# revoca en Google— pero cierran las dos puertas por las que volvió a pasar:
+# versionar el archivo, e imprimir el token en la terminal al generarlo.
+sys.modules.setdefault("google_auth_oauthlib", types.ModuleType("google_auth_oauthlib"))
+_flow_mod = types.ModuleType("google_auth_oauthlib.flow")
+_flow_mod.InstalledAppFlow = object
+sys.modules.setdefault("google_auth_oauthlib.flow", _flow_mod)
+
+RAIZ = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(RAIZ))
+import generar_token_gmail as gt
+
+
+class TestTokenNoSeVersiona(unittest.TestCase):
+    def test_gmail_token_no_esta_en_el_arbol_de_git(self):
+        import subprocess
+        r = subprocess.run(["git", "ls-files", "gmail_token.json", "gmail_credentials.json"],
+                           cwd=str(RAIZ), capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "",
+                         "gmail_token.json o gmail_credentials.json volvieron a versionarse")
+
+    def test_el_gitignore_los_cubre(self):
+        ignore = (RAIZ / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("gmail_token.json", ignore)
+        self.assertIn("gmail_credentials.json", ignore)
+
+
+class TestGeneradorNoImprimeElToken(unittest.TestCase):
+    def test_el_codigo_no_imprime_el_json_del_token(self):
+        src = (RAIZ / "generar_token_gmail.py").read_text(encoding="utf-8")
+        self.assertNotIn("print(token_json)", src,
+                         "el generador volvió a imprimir el token en pantalla")
+
+    def test_escribir_privado_deja_el_archivo_solo_para_el_dueno(self):
+        import stat, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            ruta = Path(d) / "token.json"
+            aplico = gt.escribir_privado(ruta, '{"refresh_token":"no-es-real"}')
+            self.assertEqual(ruta.read_text(encoding="utf-8"), '{"refresh_token":"no-es-real"}')
+            if aplico:   # en Windows los permisos POSIX no aplican
+                modo = stat.S_IMODE(ruta.stat().st_mode)
+                self.assertEqual(modo, 0o600, f"quedó en {oct(modo)}, no en 0o600")
+
+    def test_escribir_privado_corrige_un_archivo_que_ya_estaba_abierto(self):
+        # O_CREAT no cambia los permisos de un archivo existente: si el token ya
+        # estaba ahí con 0644, sin el chmod posterior seguiría siendo legible.
+        import stat, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            ruta = Path(d) / "token.json"
+            ruta.write_text("viejo", encoding="utf-8")
+            ruta.chmod(0o644)
+            if gt.escribir_privado(ruta, "nuevo"):
+                self.assertEqual(stat.S_IMODE(ruta.stat().st_mode), 0o600)
+
+    def test_sin_herramienta_de_portapapeles_no_truena(self):
+        original = gt.shutil.which
+        gt.shutil.which = lambda _c: None
+        try:
+            self.assertEqual(gt.copiar_al_portapapeles("lo que sea"), "")
+        finally:
+            gt.shutil.which = original
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

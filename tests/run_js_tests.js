@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX"];
+const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA"];
 
 
@@ -97,14 +97,16 @@ const FUNCS = [
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros",
-  "findDuplicate", "saldoInicialSemana", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
+  "findDuplicate", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "separarNombresMenu", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
   "variantesLlaveMenu", "llavesMenuDeFila",
   "_desescaparXml", "unidadDesdeClaveSAT", "_cfdiConceptos", "_cfdiNomina", "corridasDeNomina", "corridaNominaRegistrada", "preciosDesdeCfdis", "resolverPreciosCatalogo",
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
-  "cortesManualesSospechosos", "egresosExcluidos", "totalExcluido", "folioDeIgnorado", "_unirIgnorados",
+  "cortesManualesSospechosos", "egresosExcluidos", "folioDeIgnorado", "_unirIgnorados",
+  "puedeEntrar", "_bytesUtf8", "medirEstado", "contarMovimientos", "hayQueSubir",
+  "todosLosCortesNoContables",
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
@@ -300,17 +302,6 @@ const semanas = [
   { id: "2", label: "s2", gastos: [{ id: "g2", importe: 80, formaPago: "transferencia", fecha: "2026-06-08" }], cortes: [{ id: "c2", monto: 200, fecha: "2026-06-09" }], retiros: [] },
   { id: "3", label: "s3", gastos: [], cortes: [], retiros: [] },
 ];
-t("saldoInicialSemana: semana 3 = cortes − efectivo − retiros de las 2 anteriores", () => {
-  S.state.weeks = semanas;
-  const r = S.saldoInicialSemana("3");
-  close(r.saldo, 500 - 100 - 50 + 200); // transferencia NO resta
-  assert.equal(r.fechaMin, "2026-06-01"); assert.equal(r.fechaMax, "2026-06-09");
-});
-t("saldoInicialSemana: primera semana → 0 sin movimientos", () => {
-  S.state.weeks = semanas;
-  const r = S.saldoInicialSemana("1");
-  assert.equal(r.saldo, 0); assert.equal(r.n, 0);
-});
 t("calcularSaldoAntesDe: corte estricto por fecha (<, no ≤)", () => {
   S.state.weeks = semanas;
   close(S.calcularSaldoAntesDe("2026-06-09").saldo, 500 - 100 - 50); // corte del 09 NO entra
@@ -1791,6 +1782,178 @@ t("un global tecleado sobre ese mismo estado se detecta, y explica los $384,542"
   // pero fuera del tramo, que es justo la distincion que hay que poder hacer.
   assert.equal(r.hallazgos.filter(h => h.dentroDelTramo).length, 4);
 });
+// El septimo global aparecio en el PDF de balance de julio: 03/jul $62,105. Con el, los cortes
+// tecleados a mano suman $446,647 y el ingreso correcto del periodo son los 133 importados.
+// Manejo de Cortes empezo a operar el 11 de julio, asi que los tres anteriores a esa fecha no
+// pueden ser ingreso de cortes; el codigo no puede saberlo, pero SI puede separarlos de los que
+// caen dentro del tramo, para no acusarlos de duplicados sin prueba.
+t("los siete globales se clasifican por su posicion respecto al tramo importado", () => {
+  S.state.weeks[0].cortes.push({ id:"glob6", fecha:"2026-07-03", monto:62105 });
+  const r = S.cortesManualesSospechosos(S.todosLosCortes(), "2026-07-01", "2026-08-02");
+  assert.equal(r.tramo.desde, "2026-07-11", "el primer corte importado es del 11 de julio");
+  assert.equal(r.tramo.hasta, "2026-08-02");
+  close(r.montoManual, 446647);
+  close(r.montoImportado, 430054);
+
+  const antes = r.hallazgos.filter(h => h.posicion === "antes");
+  assert.deepEqual(antes.map(h => h.fecha).sort(), ["2026-07-03","2026-07-07","2026-07-10"]);
+  close(antes.reduce((t, h) => t + h.monto, 0), 189847);
+
+  const dentro = r.hallazgos.filter(h => h.posicion === "dentro");
+  assert.deepEqual(dentro.map(h => h.fecha).sort(), ["2026-07-14","2026-07-18","2026-07-22","2026-07-24"]);
+  close(dentro.reduce((t, h) => t + h.monto, 0), 256800);
+
+  assert.equal(r.hallazgos.filter(h => h.posicion === "despues").length, 0);
+  // posicion y dentroDelTramo no pueden contradecirse: el panel usa las dos.
+  assert.ok(r.hallazgos.every(h => h.dentroDelTramo === (h.posicion === "dentro")));
+});
+// Marcar NO borra: el movimiento se conserva, deja de sumar, y el total baja exactamente por el
+// monto excluido. Sin esto, "excluir" seria indistinguible de perder un dato.
+t("excluir los siete deja el ingreso en los $430,054 de los cortes importados", () => {
+  const antes = S.todosLosCortes().reduce((t, c) => t + c.monto, 0);
+  close(antes, 876701, 0.01);                       // 430,054 importados + 446,647 tecleados
+  S.state.weeks[0].cortes.filter(c => !c._folioCorte)
+    .forEach(c => { c._noContable = { motivo:"prueba", por:"", ts:"2026-08-27T00:00:00Z" }; });
+  close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), 430054, 0.01);
+  close(S.todosLosCortesNoContables().reduce((t, c) => t + c.monto, 0), 446647, 0.01);
+  assert.equal(S.state.weeks[0].cortes.length, 140, "no se borro ni uno: 133 + 7");
+});
+
+console.log("\n== sincronizacion: no escribir lo que ya esta ==");
+t("si la nube ya tiene exactamente esto, no se sube", () => {
+  assert.equal(S.hayQueSubir('{"a":1}', '{"a":1}'), false);
+});
+t("si cambio algo, se sube", () => {
+  assert.equal(S.hayQueSubir('{"a":1}', '{"a":2}'), true);
+});
+t("sin remoto SIEMPRE se sube: ante la duda, escribir", () => {
+  // Primera vez, o el fbGet fallo. Perder una captura es peor que una escritura de mas.
+  assert.equal(S.hayQueSubir(null, '{"a":1}'), true);
+  assert.equal(S.hayQueSubir(undefined, '{"a":1}'), true);
+});
+
+console.log("\n== tamano del estado: el techo de 1 MiB ==");
+// Todo el estado vive en UN documento y Firestore corta en 1 MiB. Nada se archiva, asi que
+// crece siempre. El dia que se cruce, la app deja de poder guardar. Esto lo hace visible antes.
+const TOPE = vm.runInContext("FIRESTORE_TOPE_DOC", sandbox);
+t("el tope es el limite real de Firestore, no un numero inventado", () => {
+  assert.equal(TOPE, 1048576, "1 MiB por documento");
+});
+t("mide BYTES utf-8, no caracteres: esta app escribe en espanol", () => {
+  // "ñ" y los acentos ocupan dos bytes. Contar caracteres subestimaria el tamano real, que es
+  // justo el error que hace que un medidor de espacio no sirva para nada.
+  assert.equal(S.medirEstado("abc", 0).bytes, 3);
+  assert.equal(S.medirEstado("ñ", 0).bytes, 2);
+  assert.equal(S.medirEstado("Cárnicos", 0).bytes, 9, "8 caracteres, 9 bytes");
+  assert.equal(S.medirEstado("€", 0).bytes, 3);
+  assert.equal(S.medirEstado("🍽", 0).bytes, 4, "un emoji son 4 bytes, aunque JS lo vea como 2");
+  // Contra la referencia del entorno, cuando existe.
+  if (typeof TextEncoder !== "undefined") {
+    for (const txt of ["Cárnicos", "ñ", "🍽 Comedores", "ACME S.A. de C.V.", ""]) {
+      assert.equal(S.medirEstado(txt, 0).bytes, new TextEncoder().encode(txt).length, txt);
+    }
+  }
+});
+t("los tres niveles cambian donde deben", () => {
+  const en = p => S.medirEstado("x".repeat(Math.round(TOPE * p / 100)), 0).nivel;
+  assert.equal(en(10), "ok");
+  assert.equal(en(59), "ok");
+  assert.equal(en(60), "aviso",  "al 60% empieza a avisar");
+  assert.equal(en(79), "aviso");
+  assert.equal(en(80), "critico", "al 80% ya es urgente");
+  assert.equal(en(95), "critico");
+});
+t("cuenta gastos, cortes y retiros de todas las semanas", () => {
+  assert.equal(S.contarMovimientos({ weeks: [
+    { gastos:[1,2,3], cortes:[1], retiros:[] },
+    { gastos:[1],     cortes:[],  retiros:[1,2] },
+  ]}), 7);
+  assert.equal(S.contarMovimientos({}), 0, "estado vacio no truena");
+  assert.equal(S.contarMovimientos(null), 0);
+});
+t("el peso por movimiento sale de los datos reales, no de una estimacion", () => {
+  const m = S.medirEstado("x".repeat(1000), 10);
+  assert.equal(m.porMovimiento, 100);
+  assert.equal(m.movimientosQueCaben, Math.floor((TOPE - 1000) / 100));
+});
+t("sin movimientos no se inventa una proyeccion", () => {
+  const m = S.medirEstado("x".repeat(1000), 0);
+  assert.equal(m.porMovimiento, 0);
+  assert.equal(m.movimientosQueCaben, null, "mejor no decir nada que decir un numero falso");
+});
+
+console.log("\n== librerias externas: nada se ejecuta sin verificar ==");
+// Sin integrity el navegador ejecuta lo que devuelva el CDN, con la sesion de Firebase del
+// usuario y acceso a todo el estado. Los hashes son de versiones EXACTAS: si alguien sube una
+// version y no recalcula, el archivo deja de cargar — ruidoso, que es justo lo que se quiere.
+t("todo <script src> externo lleva integrity y crossorigin", () => {
+  const html = require("fs").readFileSync(require("path").join(__dirname, "..", "index.html"), "utf8");
+  const sinSri = [];
+  for (const m of html.matchAll(/<script\b[^>]*\bsrc="(https?:[^"]+)"[^>]*>/g)) {
+    if (!/\bintegrity="sha(256|384|512)-/.test(m[0]) || !/\bcrossorigin=/.test(m[0])) {
+      sinSri.push(m[1]);
+    }
+  }
+  assert.deepEqual(sinSri, [], "estos scripts entran sin verificar");
+});
+
+console.log("\n== mensajes de estado: texto, no HTML ==");
+// setStatus escribia con innerHTML, y por ahi pasan el nombre del proveedor, el numero de
+// factura y los mensajes de error del servidor. Ahora escribe con textContent. Las 7 llamadas
+// que si llevan formato usan setStatusHTML y escapan lo suyo. Esta prueba es un guardia sobre
+// el codigo fuente: no hay DOM en el sandbox, pero el error a evitar es textual.
+t("setStatus escribe texto plano, nunca innerHTML", () => {
+  const m = script.match(/function setStatus\(id,msg,type\)\{[\s\S]*?\n\}/);
+  assert.ok(m, "no encontre setStatus");
+  assert.ok(m[0].includes("textContent") || m[0].includes("createTextNode"),
+            "setStatus tiene que escribir texto");
+  assert.ok(!m[0].includes("innerHTML"),
+            "setStatus volvio a innerHTML: cualquier proveedor o factura con etiquetas se ejecuta");
+});
+t("ninguna llamada a setStatus mete etiquetas HTML", () => {
+  // Si alguien necesita formato tiene que usar setStatusHTML, que es la explicita.
+  const malas = [];
+  const re = /(?<![\w.])setStatus\s*\(/g;
+  let m;
+  while ((m = re.exec(script))) {
+    let d = 1, i = re.lastIndex;
+    while (i < script.length && d) {
+      if (script[i] === "(") d++;
+      else if (script[i] === ")") d--;
+      i++;
+    }
+    const args = script.slice(re.lastIndex, i - 1);
+    if (/<(br|strong|span|div|b|i|em|a|small|code)\b|<\/[a-z]+>/.test(args)) {
+      malas.push(script.slice(0, m.index).split("\n").length);
+    }
+  }
+  assert.deepEqual(malas, [], "esas llamadas necesitan setStatusHTML, no setStatus");
+});
+
+console.log("\n== acceso: tener sesion no es estar dado de alta ==");
+// El alta por correo de Firebase es un endpoint PUBLICO de Google y la llave del proyecto va
+// en index.html, que se sirve abierto: cualquiera puede crearse una cuenta sin invitacion.
+// Antes, al entrar sin registro se le creaba uno como "operativo" — y con el, lectura y
+// escritura de estado/cicsa, o sea de todo el dinero. Ahora sin registro no se entra.
+t("una cuenta dada de alta entra", () => {
+  assert.equal(S.puedeEntrar(true, "cualquierUid"), true);
+});
+t("una cuenta SIN registro no entra, aunque su contrasena sea valida", () => {
+  assert.equal(S.puedeEntrar(false, "uidDeAlguienQueSeRegistroSolo"), false);
+});
+// ADMIN_UID se declara con const, y un const de vm.runInContext queda en el ambito lexico
+// del contexto, NO como propiedad del sandbox: S.ADMIN_UID seria undefined. Las funciones si
+// aparecen (function es var-scoped), por eso S.puedeEntrar si existe. Se lee desde dentro.
+const ADMIN = vm.runInContext("ADMIN_UID", sandbox);
+t("el dueno entra por UID aunque le falte su registro: si no, nadie podria dar de alta a nadie", () => {
+  assert.ok(typeof ADMIN === "string" && ADMIN.length > 20, "ADMIN_UID salio de index.html");
+  assert.equal(S.puedeEntrar(false, ADMIN), true);
+});
+t("un uid parecido al del dueno NO pasa: la comparacion es exacta", () => {
+  assert.equal(S.puedeEntrar(false, ADMIN + "x"), false);
+  assert.equal(S.puedeEntrar(false, ADMIN.slice(0, -1)), false);
+  assert.equal(S.puedeEntrar(false, ADMIN.toLowerCase()), false);
+});
 
 console.log("\n== auditoría de caja: doble conteo de ingresos y egresos excluidos ==");
 // Caso real: el balance mostro $814,596 de ingreso cuando los 133 cortes del archivo suman
@@ -1817,6 +1980,21 @@ t("si no hay cortes importados no se acusa a nadie", () => {
   assert.equal(r.hallazgos.length, 1, "se lista");
   assert.equal(r.hallazgos[0].dentroDelTramo, false, "pero NO como doble conteo: no hay tramo importado");
 });
+t("un global POSTERIOR al ultimo corte importado tambien queda fuera del tramo", () => {
+  const r = S.cortesManualesSospechosos([
+    { id:"i1", fecha:"2026-07-11", monto:10000, _folioCorte:"RCE-1" },
+    { id:"i2", fecha:"2026-07-20", monto:12000, _folioCorte:"RCE-2" },
+    { id:"m1", fecha:"2026-07-28", monto:50000 },
+  ], "2026-07-01", "2026-07-31");
+  assert.equal(r.hallazgos.length, 1);
+  assert.equal(r.hallazgos[0].posicion, "despues");
+  assert.equal(r.hallazgos[0].dentroDelTramo, false, "fuera del tramo no es doble conteo");
+});
+t("sin ningun corte importado, la posicion es sin_tramo: no hay contra que comparar", () => {
+  const r = S.cortesManualesSospechosos([{ id:"m1", fecha:"2026-07-18", monto:63175 }], "", "");
+  assert.equal(r.hallazgos[0].posicion, "sin_tramo");
+  assert.equal(r.hallazgos[0].dentroDelTramo, false);
+});
 t("solo con cortes importados no hay hallazgos", () => {
   const r = S.cortesManualesSospechosos([{ id:"i1", fecha:"2026-07-18", monto:10000, _folioCorte:"RCE-1" }], "", "");
   assert.deepEqual(r.hallazgos, []);
@@ -1840,7 +2018,6 @@ t("un excluido con detalle dice cuanto y por que", () => {
   assert.equal(r.length, 1);
   close(r[0].monto, 20000);
   assert.equal(r[0]._sinDetalle, false);
-  close(S.totalExcluido(st), 20000);
 });
 t("los excluidos viejos (solo folio) se siguen leyendo, marcados como sin detalle", () => {
   const st = { cortesIgnorados:["EGR-viejo", { folio:"EGR-nuevo", monto:500 }] };
@@ -1848,7 +2025,6 @@ t("los excluidos viejos (solo folio) se siguen leyendo, marcados como sin detall
   assert.equal(r.length, 2);
   assert.equal(r[0]._sinDetalle, true, "del viejo no se sabe el monto");
   assert.equal(r[0].monto, null);
-  close(S.totalExcluido(st), 500, 0.01);
 });
 // REGRESIÓN REAL: mergeEstados hacía [...new Set(...map(String))] sobre esta lista. Con los
 // renglones nuevos (objetos), String() da "[object Object]": el Set los colapsaba en UNO, se
@@ -1861,7 +2037,6 @@ t("fusionar excluidos NO los colapsa en [object Object]", () => {
   assert.equal(r.length, 2, "dos folios distintos siguen siendo dos");
   assert.deepEqual(r.map(S.folioDeIgnorado).sort(), ["EGR-a", "EGR-b"]);
   assert.ok(r.every(x => typeof x !== "string"), "conservan el detalle");
-  close(S.totalExcluido({ cortesIgnorados:r }), 20500);
 });
 t("el mismo folio en los dos dispositivos no se duplica", () => {
   const r = S._unirIgnorados([{ folio:"EGR-a", monto:100, ts:"2026-08-01T10:00:00Z" }],
@@ -1883,7 +2058,6 @@ t("mergeEstados conserva el detalle de los excluidos", () => {
   const local  = { weeks:[], cortesIgnorados:["EGR-b"] };
   const m = S.mergeEstados(remote, local);
   assert.equal(m.cortesIgnorados.length, 2);
-  close(S.totalExcluido(m), 20000, 0.01);
   assert.ok(m.cortesIgnorados.some(x => typeof x === "object" && x.monto === 20000),
             "el renglón con importe sobrevive al sync");
 });
@@ -1900,7 +2074,6 @@ t("folioDeIgnorado lee las dos formas", () => {
 });
 t("sin nada excluido, cero", () => {
   assert.deepEqual(S.egresosExcluidos({}), []);
-  close(S.totalExcluido({}), 0);
 });
 
 console.log("\n== conciliación SAT: el folio se compara contra la FACTURA, no contra el UUID ==");
@@ -2805,6 +2978,23 @@ t("escAttrJs escapa para JavaScript ANTES que para HTML", () => {
   // La diagonal invertida se dobla, si no se comería el escape siguiente.
   assert.equal(S.escAttrJs("a\\b"), "a\\\\b");
 });
+// BUG REAL, cerrado el 2026-08-28: el panel de usuarios metia el nombre en un onclick con
+// JSON.stringify(nombre).replace(/"/g,'&quot;'). Eso escapa la comilla doble, pero NO el &.
+// Un nombre que contuviera el texto literal "&quot;" pasaba entero al atributo, el analizador
+// de HTML lo decodificaba a una comilla de verdad, y el de JavaScript veia la cadena cerrada:
+//   nombre  = a&quot;+alert(1)+&quot;b
+//   atributo= editarNombreUsuario('uid', "a&quot;+alert(1)+&quot;b")
+//   tras decodificar HTML -> editarNombreUsuario('uid', "a"+alert(1)+"b")   <- ejecuta
+// escAttrJs escapa el & primero, asi que el &quot; se queda como texto y nunca vuelve a ser
+// comilla. Solo lo podia disparar un usuario dado de alta, y contra el admin — que es quien
+// abre ese panel.
+t("un nombre con &quot; adentro no puede cerrar la cadena del onclick", () => {
+  const r = S.escAttrJs('a&quot;+alert(1)+&quot;b');
+  assert.ok(!/(^|[^&])&quot;/.test(r), "el &quot; del nombre tiene que quedar neutralizado");
+  assert.ok(r.includes("&amp;quot;"), "el & se escapa primero, si no todo lo demas da igual");
+  assert.ok(!r.includes('"'), "no puede quedar una comilla doble cruda");
+});
+
 t("escAttrJs deja inertes las cargas que se probaron en el navegador", () => {
   [`ACME" onfocus="window.x=1" autofocus q="`,
    `ACME' onmouseover='window.x=1' q='`,

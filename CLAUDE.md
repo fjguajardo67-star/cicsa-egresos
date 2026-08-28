@@ -47,9 +47,27 @@ python servidor_cicsa.py
   domain from `CNAME`. Deploying is just pushing `index.html`.
 - **Backend**: Railway, via `Procfile`/`railway.json:` (note the literal
   trailing colon in that filename — this is a pre-existing quirk, not a typo
-  to silently fix). Railway sets `PORT` and `RAILWAY_ENVIRONMENT`, which
-  `servidor_cicsa.py` detects to bind `0.0.0.0:$PORT` instead of opening a
-  local browser window.
+  to silently fix). The `Procfile` runs **Gunicorn**, not `python
+  servidor_cicsa.py` — that started Flask's development server, which has no
+  timeouts and warns on its own that it isn't for production. Consequence to
+  keep in mind: under Gunicorn the `if __name__ == "__main__"` block **never
+  runs**, so anything the routes need at startup has to happen at import time.
+  That is why `load_api_key()` is called at module level; `get_client()` reads
+  `ANTHROPIC_API_KEY` per request, so both ways of starting work.
+  - `--timeout 300` is deliberate: `/sat-leer-cfdi` makes two Claude calls over
+    a PDF with 70–100 receipts and can take minutes. Gunicorn's default of 30 s
+    would kill it mid-read.
+  - `--workers 2 --threads 4`: the work is I/O-bound (waiting on Anthropic), so
+    threads buy more than processes. If Railway starts restarting the container
+    out of memory, drop to `--workers 1 --threads 8` — Gunicorn's master
+    restarts a dead worker on its own, so one worker is not a single point of
+    failure.
+  - Running locally is unchanged: `python servidor_cicsa.py` still opens the
+    browser and serves `index.html`. The `Procfile` only applies to Railway.
+- **Dependencies are pinned**, direct and indirect, to the versions of the
+  Railway build of 2026-08-28. They used to float: that build silently pulled
+  `anthropic` 1.2.0, a major-version jump nobody chose. To upgrade, drop the
+  `==`, install in a clean environment, test, and re-pin with `pip freeze`.
 - CORS in `servidor_cicsa.py` is an explicit origin allowlist (local dev,
   GitHub Pages, and the custom domain). Adding a new frontend origin requires
   updating the `CORS(app, origins=[...])` call.
@@ -109,24 +127,26 @@ responses (strips markdown fences, then falls back to scanning for a balanced
 `{...}` block) before `json.loads`. Reuse this helper for any new
 document-reading endpoint rather than re-implementing JSON extraction.
 
-### Gmail integration — two near-duplicate files, only one is live
+### Gmail integration
 
-- `gmail_cicsa.py` (underscore) is the one actually imported by
-  `servidor_cicsa.py` (`from gmail_cicsa import fetch_invoice_attachments`).
-  It reads the OAuth token solely from the `GMAIL_TOKEN` env var (Railway has
-  a read-only filesystem, so it can't persist a refreshed token to disk).
-- `gmail-cicsa.py` (hyphen) is an **unused, not-imported** alternate version
-  with a different/older token-loading strategy (env var → Firebase → local
-  file, with a hardcoded Firebase key/project baked in). Python can't import a
-  module with a hyphen in its filename anyway, so this file is effectively
-  dead code — don't assume both are wired up, and don't be misled by its
-  similarity when only `gmail_cicsa.py` is on the request path. If Gmail
-  behavior needs to change, edit `gmail_cicsa.py`.
-- `sheets_cicsa.py` (Google Sheets sync for the `/sheets-*` routes) is
-  imported the same optional way (`try/except ImportError` → `SHEETS_AVAILABLE`)
-  but the file does not exist in this repo, so those routes currently 400 with
-  "No disponible". Treat any Sheets-related work as needing that module built
-  from scratch, not modified.
+- `gmail_cicsa.py` is imported by `servidor_cicsa.py`
+  (`from gmail_cicsa import fetch_invoice_attachments`) behind a
+  `try/except ImportError` → `GMAIL_AVAILABLE`. It reads the OAuth token solely
+  from the `GMAIL_TOKEN` env var (Railway has a read-only filesystem, so it
+  can't persist a refreshed token to disk). If Gmail behavior needs to change,
+  this is the file.
+- Older notes described a second `gmail-cicsa.py` (hyphen) sitting next to it.
+  That file is not in the repo — don't go looking for it.
+
+### There is no Google Sheets integration
+
+`sheets_cicsa.py` never existed in this repo. The `/sheets-*` routes that
+imported it were removed (they had answered `400 "No disponible"` since the
+day they were written), along with the frontend's `renderAprobaciones` /
+`aprobarGasto` / `syncSubir` / `syncBajar` — all four had empty bodies or wrote
+to DOM ids that no page contains. Sheets work means building the whole thing
+from scratch; the scaffolding is gone, and `git log` has it if you want to see
+what it looked like.
 
 ### Frontend structure (`index.html`)
 
