@@ -97,7 +97,7 @@ const FUNCS = [
   "montoEfectivoGasto", "difImporteCaja", "_yaVinculadoAOtroFolio",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
-  "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros",
+  "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
   "findDuplicate", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
   "conciliarSAT", "dedupeProductos", "rangoSemanaLabel", "aliasSospechosos",
   "fmt", "duplicadosSospechosos", "separarNombresMenu", "construirMapaPreciosMenu", "migrarCategorias", "consolidarFacturaDividida",
@@ -130,9 +130,10 @@ const FUNCS = [
   "resumenEstado", "_estadoValido", "podarRespaldos",
   "esc", "escAttrJs",
   "_esFechaISO", "_esNum", "validarArchivoCortes", "avisosControlCortes",
-  "foliosCorteImportados", "foliosEgresoImportados", "foliosCorteIgnorados", "clasificacionInicialEgreso",
+  "foliosCorteImportados", "foliosEgresoImportados", "foliosCorteIgnorados", "foliosAportacionImportadas", "clasificacionInicialEgreso",
   "_sumarDiaISO", "manifiestoDeImportacion", "_claveManifiesto", "agregarManifiesto", "_unirManifiestos",
   "coberturaDePeriodos", "validarCadenaPeriodos", "rupturasDeCadena",
+  "totalesDeclarados", "estadoConciliacionCaja",
   "_pareceFolioFactura", "gastoMismoImporte",
   "findDuplicate",
   "totalesPorCatPeriodo", "gastosDelPeriodoSP", "getPeriodoSP", "getPeriodoSPRaw", "getActiveWeek",
@@ -1817,6 +1818,145 @@ t("mergeEstados conserva las constancias de los dos dispositivos", () => {
     { weeks:[], cortesImportaciones:[_M("2026-08-03","2026-08-09")] },
     { weeks:[], cortesImportaciones:[_M("2026-08-19","2026-08-25")] });
   assert.equal(r.cortesImportaciones.length, 2);
+});
+
+console.log("\n== lo que declaran los archivos vs. lo que tiene Egresos ==");
+// Hasta aqui Egresos solo podia cuadrar consigo mismo, y cuadrar consigo mismo es lo que hace un
+// sistema aunque le falte medio mes. Esta es la otra mitad de la conciliacion.
+const _MT = (ini, fin, tot, extra) => ({ ini, fin, emitido:"", totales:tot||{}, ...(extra||{}) });
+
+t("un solo archivo que cubre el periodo exacto SI es comparable", () => {
+  const d = S.totalesDeclarados("2026-08-19", "2026-08-25",
+    [_MT("2026-08-19","2026-08-25",{ efectivo:119425.5, egresos:107116.91, aportaciones:0 }, { saldoInicial:-24.37 })]);
+  assert.equal(d.comparable, true);
+  close(d.efectivo, 119425.5, 0.01);
+  close(d.saldoInicial, -24.37, 0.01);
+});
+
+t("dos archivos pegados suman, y el saldo inicial es el del PRIMERO", () => {
+  // Los saldos iniciales de en medio son arrastre interno: sumarlos contaria el mismo dinero dos
+  // veces. Solo cuenta con cuanto abrio el tramo completo.
+  const d = S.totalesDeclarados("2026-08-19", "2026-08-25", [
+    _MT("2026-08-22","2026-08-25",{ efectivo:60000, egresos:50000 }, { saldoInicial:-696.28 }),
+    _MT("2026-08-19","2026-08-21",{ efectivo:59425.5, egresos:57116.91 }, { saldoInicial:-24.37 }),
+  ]);
+  assert.equal(d.comparable, true);
+  assert.equal(d.nArchivos, 2);
+  close(d.efectivo, 119425.5, 0.01);
+  close(d.saldoInicial, -24.37, 0.01, "el del 19, no el del 22");
+});
+
+t("con un hueco en medio NO es comparable", () => {
+  // Comparar contra una suma parcial daria una diferencia que parece un descuadre y es un
+  // artefacto del recorte. Una diferencia falsa erosiona la confianza en las verdaderas.
+  const d = S.totalesDeclarados("2026-08-03", "2026-08-25", [
+    _MT("2026-08-03","2026-08-09",{ efectivo:100 }),
+    _MT("2026-08-19","2026-08-25",{ efectivo:200 }),
+  ]);
+  assert.equal(d.comparable, false);
+});
+
+t("si los archivos no empiezan o no terminan donde el periodo, tampoco", () => {
+  assert.equal(S.totalesDeclarados("2026-08-01","2026-08-25",[_MT("2026-08-03","2026-08-25",{})]).comparable, false);
+  assert.equal(S.totalesDeclarados("2026-08-03","2026-08-31",[_MT("2026-08-03","2026-08-25",{})]).comparable, false);
+});
+
+t("un archivo que se sale del periodo consultado ni se considera", () => {
+  const d = S.totalesDeclarados("2026-08-03", "2026-08-09", [_MT("2026-07-01","2026-09-30",{ efectivo:999999 })]);
+  assert.equal(d.comparable, false);
+  assert.equal(d.nArchivos, 0);
+});
+
+t("sin archivos no se inventa una comparacion", () => {
+  assert.equal(S.totalesDeclarados("2026-08-03","2026-08-09",[]).comparable, false);
+  assert.equal(S.totalesDeclarados("", "", [_MT("2026-08-03","2026-08-09",{})]).comparable, false);
+});
+
+console.log("\n== el veredicto: CONCILIADO no se dice a la ligera ==");
+// La pantalla y el PDF salen de esta misma funcion. Que pudieran decir cosas distintas del mismo
+// periodo era el problema de fondo: se firma lo que dice el PDF y se decide con la pantalla.
+const _CUB = { cubierto:true, sinRegistro:false, dias:[], tramos:[], nManifiestos:1 };
+
+t("todo en orden: CONCILIADO", () => {
+  const v = S.estadoConciliacionCaja({ cobertura:_CUB, rupturas:[], excluidos:[], diferencia:0 });
+  assert.equal(v.estado, "CONCILIADO");
+  assert.equal(v.conciliado, true);
+  assert.equal(v.motivos.length, 0);
+});
+
+t("faltan dias: INCOMPLETO, y se dice cuales", () => {
+  const v = S.estadoConciliacionCaja({
+    cobertura:{ cubierto:false, sinRegistro:false, dias:["2026-08-10"], tramos:[{ini:"2026-08-10",fin:"2026-08-18",dias:9}] },
+    rupturas:[], excluidos:[], diferencia:0 });
+  assert.equal(v.estado, "INCOMPLETO");
+  assert.ok(/2026-08-10 a 2026-08-18/.test(v.motivos[0].texto));
+});
+
+t("sin constancia de importaciones tampoco se declara conciliado", () => {
+  const v = S.estadoConciliacionCaja({ cobertura:{ sinRegistro:true }, rupturas:[], excluidos:[], diferencia:0 });
+  assert.equal(v.estado, "INCOMPLETO");
+});
+
+t("una exclusion sin resolver impide el verde", () => {
+  // "Ignorar" no puede significar que el dinero desaparece. Mientras haya un egreso excluido sin
+  // vincular ni corregir en el origen, el periodo no esta conciliado.
+  const v = S.estadoConciliacionCaja({ cobertura:_CUB, rupturas:[],
+    excluidos:[{ folio:"EGR-1", monto:3184 }], diferencia:0 });
+  assert.equal(v.estado, "CON DIFERENCIAS");
+  assert.ok(/3184/.test(v.motivos[0].texto), "con su monto, no solo el conteo");
+});
+
+t("un centavo de diferencia basta para que NO este conciliado", () => {
+  const v = S.estadoConciliacionCaja({ cobertura:_CUB, rupturas:[], excluidos:[], diferencia:0.01 });
+  assert.equal(v.estado, "CON DIFERENCIAS");
+});
+t("medio centavo es redondeo y no rompe nada", () => {
+  assert.equal(S.estadoConciliacionCaja({ cobertura:_CUB, rupturas:[], excluidos:[], diferencia:0.004 }).estado, "CONCILIADO");
+});
+t("sin diferencia calculable no se inventa un motivo", () => {
+  // Cuando no hay con que comparar, la ausencia de comparacion no es un descuadre.
+  assert.equal(S.estadoConciliacionCaja({ cobertura:_CUB, rupturas:[], excluidos:[], diferencia:null }).estado, "CONCILIADO");
+});
+
+t("la falta de cobertura pesa mas que las diferencias", () => {
+  // Un periodo al que le faltan dias no es "un periodo con diferencias": es un periodo incompleto,
+  // y ponerle la misma etiqueta invita a cerrarlo como si solo hubiera que ajustar unos pesos.
+  const v = S.estadoConciliacionCaja({
+    cobertura:{ cubierto:false, sinRegistro:false, dias:["2026-08-10"], tramos:[{ini:"2026-08-10",fin:"2026-08-10",dias:1}] },
+    rupturas:[{}], excluidos:[{ folio:"x", monto:1 }], diferencia:500 });
+  assert.equal(v.estado, "INCOMPLETO");
+  assert.equal(v.motivos.length, 4, "pero se listan TODOS los motivos, no solo el peor");
+});
+
+console.log("\n== aportaciones: dinero que ENTRA a la caja ==");
+t("las aportaciones suman al saldo del periodo", () => {
+  // Antes solo se avisaba de ellas, y un aviso no suma: el saldo salia corto por esa cantidad.
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:[],
+    cortes:[{ id:"c1", fecha:"2026-08-06", monto:10000 }],
+    aportaciones:[{ id:"a1", fecha:"2026-08-07", monto:2500, concepto:"Fondeo" }] }],
+    cajaSaldoInicial:{ "2026-08-01": { valor:0 } } };
+  const r = S.calcularSaldoCajaPeriodo("2026-08-01", "2026-08-31");
+  close(r.totalAport, 2500, 0.01);
+  close(r.saldo, 12500, 0.01);
+});
+t("una aportacion fuera del periodo no se cuela", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:[], cortes:[],
+    aportaciones:[{ id:"a1", fecha:"2026-09-15", monto:2500 }] }],
+    cajaSaldoInicial:{ "2026-08-01": { valor:0 } } };
+  close(S.calcularSaldoCajaPeriodo("2026-08-01","2026-08-31").saldo, 0, 0.01);
+});
+t("las aportaciones anteriores al periodo entran al arrastre", () => {
+  S.state = { budget:{}, weeks:[{ id:"w1", retiros:[], gastos:[], cortes:[],
+    aportaciones:[{ id:"a1", fecha:"2026-07-15", monto:800 }] }] };
+  close(S.calcularSaldoAntesDe("2026-08-01").saldo, 800, 0.01);
+});
+t("importar aportaciones: entran con su folio y son idempotentes", () => {
+  const d = _impBase([]);
+  d.aportNuevas = [{ folio:"APO-1", fecha:"2026-07-20", monto:1500, concepto:"Reposicion de fondo" }];
+  const r = S.construirImportacionCortes(d, _previosVacios(), "Diana", 1000);
+  assert.equal(r.nA, 1);
+  assert.equal(r.aportaciones[0]._folioAportacion, "APO-1");
+  close(r.aportaciones[0].monto, 1500, 0.01);
 });
 
 console.log("\n== cadena de saldos entre archivos ==");
@@ -3756,6 +3896,36 @@ t("saldoInicial negativo del corte sirve para abrir el periodo siguiente en rojo
 });
 t("un archivo bien formado pasa la validación", () => {
   assert.equal(S.validarArchivoCortes(archivoBase()).ok, true);
+});
+t("una aportacion con fecha invalida se rechaza", () => {
+  const a = archivoBase();
+  a.aportaciones = [{ folio:"APO-1", fecha:"no-es-fecha", monto:100 }];
+  const v = S.validarArchivoCortes(a);
+  assert.equal(v.ok, false);
+  assert.ok(v.errores.some(e=>/Aportaci.*fecha/.test(e)));
+});
+t("una aportacion con monto invalido se rechaza", () => {
+  // Entra al saldo como dinero, igual que un corte: un monto que no es numero lo envenena.
+  const a = archivoBase();
+  a.aportaciones = [{ folio:"APO-1", fecha:"2026-08-03", monto:"mucho" }];
+  const v = S.validarArchivoCortes(a);
+  assert.equal(v.ok, false);
+  assert.ok(v.errores.some(e=>/Aportaci.*monto/.test(e)), "el error tiene que senialar el monto");
+});
+t("una aportacion sin folio se rechaza: sin folio no hay idempotencia", () => {
+  const a = archivoBase();
+  a.aportaciones = [{ fecha:"2026-08-03", monto:100 }];
+  assert.ok(S.validarArchivoCortes(a).errores.some(e=>/Aportaci.*folio/.test(e)));
+});
+t("un folio de aportacion repetido dentro del archivo se caza", () => {
+  const a = archivoBase();
+  a.aportaciones = [{ folio:a.egresos[0].folio, fecha:"2026-08-03", monto:100 }];
+  const v = S.validarArchivoCortes(a);
+  assert.ok(v.errores.some(e=>/repetidos/i.test(e)));
+});
+t("sin aportaciones el archivo sigue siendo valido (v1 y v2 no las traen)", () => {
+  const a = archivoBase(); delete a.aportaciones;
+  assert.equal(S.validarArchivoCortes(a).ok, true);
 });
 t("rechaza versión desconocida", () => {
   const a = archivoBase(); a.version = 99;

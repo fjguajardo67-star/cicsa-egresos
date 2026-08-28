@@ -1942,7 +1942,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-h";
+const APP_BUILD = "2026-08-28-i";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2750,6 +2750,7 @@ function mergeEstados(remote, local){
       gastos:  _unionPorId(ex.gastos,  w.gastos,  borradas),
       cortes:  _unionPorId(ex.cortes,  w.cortes,  borradas),
       retiros: _unionPorId(ex.retiros, w.retiros, borradas),
+      aportaciones: _unionPorId(ex.aportaciones, w.aportaciones, borradas),
     });
   });
   const weeks = [...wById.values()].sort((a,b)=> String(a.id)<String(b.id)?-1:1);
@@ -10270,12 +10271,14 @@ function calcularSaldoCajaPeriodo(ini, fin){
   const cortes  = todosLosCortes().filter(c=>c.fecha>=ini && c.fecha<=fin);
   const gastos  = allGastosAllWeeks().filter(esGastoEfectivo).filter(g=>g.fecha>=ini && g.fecha<=fin);
   const retiros = todosLosRetiros().filter(r=>r.fecha>=ini && r.fecha<=fin);
+  const aport   = todasLasAportaciones().filter(a=>a.fecha>=ini && a.fecha<=fin);
   const totalCortes  = cortes .reduce((s,c)=>s+(parseFloat(c.monto  )||0),0);
   const totalGastos  = gastos .reduce((s,g)=>s+montoEfectivoGasto(g),0);
   const totalRetiros = retiros.reduce((s,r)=>s+(parseFloat(r.monto  )||0),0);
+  const totalAport   = aport  .reduce((s,a)=>s+(parseFloat(a.monto  )||0),0);
   const baseInicial  = saldoInicialManual!=null ? saldoInicialManual : 0;
-  return { ini, fin, saldoInicialManual, baseInicial, totalCortes, totalGastos, totalRetiros,
-           saldo: baseInicial + totalCortes - totalGastos - totalRetiros };
+  return { ini, fin, saldoInicialManual, baseInicial, totalCortes, totalGastos, totalRetiros, totalAport,
+           saldo: baseInicial + totalCortes + totalAport - totalGastos - totalRetiros };
 }
 // Periodo que tiene puesto la pestaña Caja, aunque no se haya abierto todavía en esta
 // sesión (se guarda por dispositivo). Así el Resumen refleja EL MISMO periodo que Caja.
@@ -10420,6 +10423,12 @@ function _cortesCrudos(){ return filtrarPorCorte(state.weeks.flatMap(w => (w.cor
 function todosLosCortes(){ return _cortesCrudos().filter(esCorteContable); }
 function todosLosCortesNoContables(){ return _cortesCrudos().filter(c=>!esCorteContable(c)); }
 function todosLosRetiros(){ return filtrarPorCorte(state.weeks.flatMap(w => (w.retiros||[]).map(r => ({...r})))); }
+// Aportaciones: dinero que se METE a la caja desde fuera de la operación (un fondeo, una
+// reposición). Llegaron con la v3 del contrato de Manejo de Cortes y este importador no las
+// leía: solo avisaba de ellas. Un aviso no suma, así que el saldo salía corto por esa cantidad
+// y había que confiar en que alguien capturara el ajuste a mano en el momento correcto.
+// Suman como ENTRADA, igual que un corte, y pasan por el mismo filtro de fecha de corte.
+function todasLasAportaciones(){ return filtrarPorCorte(state.weeks.flatMap(w => (w.aportaciones||[]).map(a => ({...a})))); }
 
 // Saldo de caja acumulado hasta ANTES de una fecha dada, estrictamente por fecha y cruzando
 // todas las semanas: las "semanas" de esta app son bolsas de captura, no rangos de fecha, así
@@ -10434,10 +10443,12 @@ function calcularSaldoAntesDe(fecha){
   const cortes = todosLosCortes().filter(c=>c.fecha<fecha);
   const gastosEf = allGastosAllWeeks().filter(esGastoEfectivo).filter(g=>g.fecha<fecha);
   const retiros = todosLosRetiros().filter(r=>r.fecha<fecha);
+  const aport = todasLasAportaciones().filter(a=>a.fecha<fecha);
   const saldo = cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0)
+    + aport.reduce((s,a)=>s+(parseFloat(a.monto)||0),0)
     - gastosEf.reduce((s,g)=>s+montoEfectivoGasto(g),0)
     - retiros.reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
-  const fechas=[...cortes,...gastosEf,...retiros].map(m=>m.fecha).filter(Boolean).sort();
+  const fechas=[...cortes,...gastosEf,...retiros,...aport].map(m=>m.fecha).filter(Boolean).sort();
   return { saldo, fechaMin:fechas[0]||null, fechaMax:fechas[fechas.length-1]||null, n:fechas.length };
 }
 
@@ -10451,7 +10462,7 @@ function obtenerDatosCaja(){
   const ini = document.getElementById("cajaRangoIni")?.value;
   const fin = document.getElementById("cajaRangoFin")?.value;
   if(!ini || !fin){
-    return { cortes:[], gastosCaja:[], retiros:[], saldoInicial:0, saldoInicialDetalle:null, saldoInicialManual:null, saldoInicialAjuste:null, periodoLabel:"Selecciona el periodo", vacio:true };
+    return { cortes:[], gastosCaja:[], retiros:[], aportaciones:[], saldoInicial:0, saldoInicialDetalle:null, saldoInicialManual:null, saldoInicialAjuste:null, periodoLabel:"Selecciona el periodo", vacio:true };
   }
   const detalleIni = calcularSaldoAntesDe(ini);
   const ajuste = cajaSaldoAjusteActual();
@@ -10460,6 +10471,7 @@ function obtenerDatosCaja(){
     cortes: todosLosCortes().filter(c=>c.fecha>=ini && c.fecha<=fin),
     gastosCaja: allGastosAllWeeks().filter(esGastoEfectivo).filter(g=>g.fecha>=ini && g.fecha<=fin),
     retiros: todosLosRetiros().filter(r=>r.fecha>=ini && r.fecha<=fin),
+    aportaciones: todasLasAportaciones().filter(a=>a.fecha>=ini && a.fecha<=fin),
     saldoInicial: detalleIni.saldo,      // arrastre calculado (referencia/auditoría)
     saldoInicialDetalle: detalleIni,
     saldoInicialManual: ajuste ? ajuste.valor : null,
@@ -10693,6 +10705,14 @@ function validarArchivoCortes(obj){
     if(!e || typeof e.concepto !== "string" || !e.concepto.trim()) err.push(`${et} (${(e&&e.folio)||"?"}): sin concepto.`);
     if(!_esNum(e && e.monto)) err.push(`${et} (${(e&&e.folio)||"?"}): monto no es un número.`);
   });
+  // Las aportaciones son opcionales (la v1 y la v2 no las traen), pero si vienen tienen que estar
+  // bien: entran al saldo como dinero, igual que un corte.
+  (Array.isArray(obj.aportaciones) ? obj.aportaciones : []).forEach((a,i)=>{
+    const et = `Aportación #${i+1}`;
+    if(!a || typeof a.folio !== "string" || !a.folio.trim()) err.push(`${et}: sin folio.`); else marcaFolio(a.folio.trim());
+    if(!_esFechaISO(a && a.fecha)) err.push(`${et} (${(a&&a.folio)||"?"}): fecha no válida.`);
+    if(!_esNum(a && (a.monto!=null?a.monto:a.importe))) err.push(`${et} (${(a&&a.folio)||"?"}): monto no es un número.`);
+  });
   const repetidos = [...folios.entries()].filter(([,n])=>n>1).map(([f])=>f);
   if(repetidos.length) err.push(`Folios repetidos dentro del archivo: ${repetidos.join(", ")}. Cada renglón necesita un folio único.`);
   return { ok: err.length === 0, errores: err };
@@ -10712,13 +10732,18 @@ function avisosControlCortes(obj){
     const eg = suma(obj.egresos,"monto");
     if(_esNum(t.egresos) && !cerca(eg, t.egresos)) av.push(`Los egresos sumados (${fmt(eg)}) no coinciden con el total del archivo (${fmt(t.egresos)}).`);
   }
-  // 'aportaciones' (dinero que se METE a la caja) llegó con la v3 y este importador no la lee:
-  // ingresa los cortes y clasifica los egresos, nada más. Callarlo haría que el saldo de caja
-  // saliera bajo sin explicación, así que se dice y la persona decide.
+  // 'aportaciones' (dinero que se METE a la caja desde fuera de la operación) llegó con la v3.
+  // Durante un tiempo esta pantalla solo AVISABA de ellas, y un aviso no suma: el saldo salía
+  // corto por esa cantidad. Ya se importan como entrada; el aviso se queda porque son un
+  // movimiento poco frecuente y conviene que se vean antes de aceptarlo, no después.
   if(Array.isArray(obj.aportaciones) && obj.aportaciones.length){
     const sa = obj.aportaciones.reduce((s,x)=>s+(parseFloat(x && (x.monto!=null?x.monto:x.importe))||0),0);
-    av.push(`El archivo trae ${obj.aportaciones.length} aportación(es) por ${fmt(sa)} que esta pantalla NO importa. `+
-            `Si son dinero que entró a la caja, hay que capturarlo aparte o el saldo quedará corto por esa cantidad.`);
+    av.push(`El archivo trae ${obj.aportaciones.length} aportación(es) por ${fmt(sa)}: dinero que ENTRÓ a la caja `+
+            `desde fuera de la operación. Se importan como ingreso, aparte de los cortes. Revísalas.`);
+  }
+  if(t && _esNum(t.aportaciones)){
+    const sa = suma(obj.aportaciones,"monto");
+    if(!cerca(sa, t.aportaciones)) av.push(`Las aportaciones sumadas (${fmt(sa)}) no coinciden con el total del archivo (${fmt(t.aportaciones)}).`);
   }
   const cont = obj.conteo;
   if(cont && cont.capturado === true && _esNum(cont.total)){
@@ -10909,6 +10934,73 @@ function coberturaDePeriodos(ini, fin, manifiestos){
   return { sinRegistro:false, dias, tramos, cubierto: dias.length === 0, nManifiestos: ms.length };
 }
 
+// Lo que DECLARAN los archivos que cubren exactamente el periodo consultado. Es la otra mitad de
+// la conciliación: hasta ahora Egresos solo podía cuadrar consigo mismo, y cuadrar consigo mismo
+// es lo que hace un sistema aunque le falte medio mes.
+// Solo se declara comparable si los archivos EMBALDOSAN el periodo: empiezan donde empieza,
+// terminan donde termina y se encadenan día con día, sin huecos ni traslapes. Comparar contra una
+// suma parcial daría una diferencia que parece un descuadre y es un artefacto del recorte — y una
+// diferencia falsa erosiona la confianza en las verdaderas.
+function totalesDeclarados(ini, fin, manifiestos){
+  const no = { comparable:false, nArchivos:0 };
+  if(!ini || !fin) return no;
+  const ms = (manifiestos||[]).filter(m=>m && m.ini && m.fin && m.ini >= ini && m.fin <= fin)
+    .slice().sort((a,b)=> a.ini < b.ini ? -1 : a.ini > b.ini ? 1 : 0);
+  if(!ms.length) return no;
+  if(ms[0].ini !== ini || ms[ms.length-1].fin !== fin) return { ...no, nArchivos:ms.length };
+  for(let i=1; i<ms.length; i++){
+    if(_sumarDiaISO(ms[i-1].fin, 1) !== ms[i].ini) return { ...no, nArchivos:ms.length };
+  }
+  const num = (x)=>{ const v = parseFloat(x); return isFinite(v) ? v : 0; };
+  const sumT = (k)=>ms.reduce((s,m)=>s + num(m.totales && m.totales[k]), 0);
+  return {
+    comparable:true, nArchivos:ms.length, archivos:ms,
+    // El saldo inicial de un tramo es el del PRIMER archivo: los de en medio son arrastre interno.
+    saldoInicial: num(ms[0].saldoInicial),
+    efectivoAEntregar: num(ms[ms.length-1].totales && ms[ms.length-1].totales.efectivoAEntregar),
+    efectivo: sumT("efectivo"), egresos: sumT("egresos"),
+    aportaciones: sumT("aportaciones"), terminal: sumT("terminal"),
+  };
+}
+
+// El veredicto del periodo, en un solo lugar. Lo usan la pantalla y el PDF: si cada uno lo
+// dedujera por su cuenta volverían a poder decir cosas distintas del mismo periodo, que es
+// exactamente el problema que este reporte existe para no tener.
+// La regla dura: "CONCILIADO" es una afirmación fuerte y no se dice a la ligera. Falta de
+// cobertura, una exclusión sin resolver, una cadena rota o un centavo de diferencia bastan para
+// que NO lo sea. Un periodo incompleto no es un periodo que cuadra.
+function estadoConciliacionCaja(o){
+  const d = o || {};
+  const cob = d.cobertura || {};
+  const motivos = [];
+  if(cob.sinRegistro){
+    motivos.push({ clave:"sin_registro", grave:true,
+      texto:"No hay constancia de qué periodos se importaron, así que no se puede comprobar la cobertura." });
+  } else if(cob.cubierto === false){
+    const t = (cob.tramos||[]).map(x=>x.dias===1 ? x.ini : `${x.ini} a ${x.fin}`).join("; ");
+    motivos.push({ clave:"cobertura", grave:true,
+      texto:`Faltan ${(cob.dias||[]).length} día(s) por importar${t?` (${t})`:""}.` });
+  }
+  if((d.rupturas||[]).length){
+    motivos.push({ clave:"cadena", grave:false,
+      texto:`La cadena de saldos se rompe en ${d.rupturas.length} punto(s): un periodo no abre con lo que cerró el anterior.` });
+  }
+  if((d.excluidos||[]).length){
+    const m = d.excluidos.reduce((s,x)=>s+(parseFloat(x && x.monto)||0),0);
+    motivos.push({ clave:"excluidos", grave:false,
+      texto:`${d.excluidos.length} egreso(s) excluidos${m?` por ${m.toFixed(2)}`:""} sin vincular ni corregir en el origen.` });
+  }
+  const dif = parseFloat(d.diferencia);
+  if(isFinite(dif) && Math.abs(dif) >= 0.01){
+    motivos.push({ clave:"diferencia", grave:false,
+      texto:`El saldo de Egresos difiere del que declaran los archivos por ${dif.toFixed(2)}.` });
+  }
+  const estado = !motivos.length ? "CONCILIADO"
+    : motivos.some(m=>m.grave) ? "INCOMPLETO"
+    : "CON DIFERENCIAS";
+  return { estado, motivos, conciliado: estado === "CONCILIADO" };
+}
+
 // El efectivo a entregar de un periodo tiene que ser el saldo inicial del siguiente. Si no lo es,
 // entre los dos archivos se perdió o se coló dinero, y ninguno de los dos lo dice por su cuenta:
 // cada uno cuadra consigo mismo.
@@ -10936,6 +11028,12 @@ function rupturasDeCadena(manifiestos){
   return out;
 }
 
+// Idempotencia de las aportaciones, igual que la de cortes y egresos: por folio.
+function foliosAportacionImportadas(){
+  const s = new Set();
+  (state.weeks||[]).forEach(w=>(w.aportaciones||[]).forEach(a=>{ if(a && a._folioAportacion) s.add(String(a._folioAportacion)); }));
+  return s;
+}
 function foliosEgresoImportados(){
   const s = new Set();
   (state.weeks||[]).forEach(w=>{
@@ -11084,8 +11182,11 @@ function cargarArchivoCortes(obj){
     return { ...e, _yaImportado:yaImp, _yaIgnorado:yaIgn,
       _clase: (yaImp || yaIgn) ? "ignorar" : ini.clase, _cat: "Otro", _dup: ini.dup, _aviso: ini.aviso||null };
   });
-  _cortesImport = { obj, avisos: avisosControlCortes(obj), cortesNuevos, cortesDup, egresos };
-  setStatus("cortesImportStatus", `✅ Archivo leído: ${cortesNuevos.length} corte(s) nuevo(s), ${egresos.length} egreso(s). Revisa abajo antes de importar.`, "ok");
+  const foliosA = foliosAportacionImportadas();
+  const aportNuevas = (obj.aportaciones||[]).filter(a=>a && a.folio && !foliosA.has(String(a.folio).trim()));
+  _cortesImport = { obj, avisos: avisosControlCortes(obj), cortesNuevos, cortesDup, egresos, aportNuevas };
+  const apMsg = aportNuevas.length ? `, ${aportNuevas.length} aportación(es)` : "";
+  setStatus("cortesImportStatus", `✅ Archivo leído: ${cortesNuevos.length} corte(s) nuevo(s), ${egresos.length} egreso(s)${apMsg}. Revisa abajo antes de importar.`, "ok");
   renderRevisionCortes();
 }
 
@@ -11113,6 +11214,18 @@ function renderRevisionCortes(){
     h += `<tr style="border-top:2px solid var(--border)"><td colspan="3"><strong>Total a ingresar</strong></td><td class="amount-cell" style="font-weight:700;color:var(--vm)">${fmt(totC)}</td></tr>`;
     h += `</tbody></table></div>`;
   } else h += `<div style="font-size:13px;color:var(--txt2)">No hay cortes nuevos que ingresar.</div>`;
+
+  // Aportaciones — no se clasifican, pero SÍ se ven: es dinero que entra y es poco frecuente.
+  if((d.aportNuevas||[]).length){
+    const totA = d.aportNuevas.reduce((s,a)=>s+(parseFloat(a.monto!=null?a.monto:a.importe)||0),0);
+    h += `<div style="font-weight:700;color:var(--vd);margin:20px 0 6px">➕ Aportaciones — dinero que entró a la caja</div>`;
+    h += `<div class="tbl-wrap"><table style="width:100%"><thead><tr><th>Folio</th><th>Fecha</th><th>Concepto</th><th style="text-align:right">Monto</th></tr></thead><tbody>`;
+    h += d.aportNuevas.map(a=>`<tr><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(a.folio)}</td>`+
+      `<td>${esc(fmtDate(a.fecha))}</td><td>${esc(a.concepto||a.origen||"—")}</td>`+
+      `<td class="amount-cell">${fmt(parseFloat(a.monto!=null?a.monto:a.importe)||0)}</td></tr>`).join("");
+    h += `<tr style="border-top:2px solid var(--border)"><td colspan="3"><strong>Total a ingresar</strong></td><td class="amount-cell" style="font-weight:700;color:var(--vm)">${fmt(totA)}</td></tr>`;
+    h += `</tbody></table></div>`;
+  }
 
   // Egresos — clasificación
   h += `<div style="font-weight:700;color:var(--vd);margin:20px 0 6px">📤 Egresos del concentrado — clasifica cada uno</div>`;
@@ -11154,7 +11267,7 @@ function renderRevisionCortes(){
   // enterarse de cuánto fue al revisar el saldo tres semanas después es demasiado tarde.
   const montoI = d.egresos.filter(e=>e._clase==="ignorar").reduce((s,e)=>s+(parseFloat(e.monto)||0),0);
   h += `<div style="margin-top:18px;display:flex;gap:20px;flex-wrap:wrap;align-items:center">`+
-    `<div style="font-size:13px;color:var(--txt2)">Entrarán: <strong>${d.cortesNuevos.length}</strong> cortes · <strong>${nG}</strong> gastos · <strong>${nV}</strong> vínculos · <strong>${nR}</strong> retiros · <strong>${nI}</strong> ignorados${nI?` (${fmt(montoI)} fuera del reporte)`:""}</div>`+
+    `<div style="font-size:13px;color:var(--txt2)">Entrarán: <strong>${d.cortesNuevos.length}</strong> cortes · ${(d.aportNuevas||[]).length?`<strong>${d.aportNuevas.length}</strong> aportaciones · `:""}<strong>${nG}</strong> gastos · <strong>${nV}</strong> vínculos · <strong>${nR}</strong> retiros · <strong>${nI}</strong> ignorados${nI?` (${fmt(montoI)} fuera del reporte)`:""}</div>`+
     `<button class="btn btn-primary" onclick="confirmarImportarCortes()" style="margin-left:auto">✅ Importar al periodo</button>`+
     `<button class="btn btn-light" onclick="cancelarImportarCortes()">Cancelar</button></div>`;
   cont.innerHTML = h;
@@ -11186,8 +11299,9 @@ function construirImportacionCortes(d, previos, autor, base){
   // aparte y el estado se toca al final" solo se sostiene con la copia.
   const gastos   = (p0.gastos||[]).map(g=>({...g}));
   const retiros  = [...(p0.retiros||[])];
+  const aportaciones = [...(p0.aportaciones||[])];
   let ignorados  = [...(p0.ignorados||[])];
-  let nC=0, nG=0, nR=0, nI=0, nV=0;
+  let nC=0, nG=0, nR=0, nI=0, nV=0, nA=0;
   let seq = 0;
   const semilla = base || Date.now();
   const nuevoId = ()=>String(semilla + (seq++));
@@ -11200,6 +11314,17 @@ function construirImportacionCortes(d, previos, autor, base){
     cortes.push({ id:nuevoId(), fecha:c.fecha, tipo:(label||"").toLowerCase(), monto, label,
       _folioCorte:String(c.folio).trim(), _origenCorte:true, cajera:c.cajera||"", turno:c.turno||"", terminal:parseFloat(c.terminal)||0 });
     nC++;
+  });
+
+  // Aportaciones: dinero que ENTRÓ a la caja desde fuera de la operación. No se clasifican como
+  // los egresos —no hay nada que decidir: o entró o no entró—, así que van directo, con su folio
+  // para que reimportar el archivo no las cuente dos veces.
+  (d.aportNuevas||[]).forEach(a=>{
+    const folio = String((a && a.folio) || "").trim();
+    if(!folio) return;
+    aportaciones.push({ id:nuevoId(), fecha:a.fecha, monto:parseFloat(a.monto!=null?a.monto:a.importe)||0,
+      concepto:a.concepto||"", origen:a.origen||"", _folioAportacion:folio, _origenCorte:true });
+    nA++;
   });
 
   // Egresos: según la clasificación del usuario.
@@ -11285,7 +11410,7 @@ function construirImportacionCortes(d, previos, autor, base){
   // La constancia del periodo importado va DENTRO del plan, no se escribe aparte: si la
   // importación se aborta, tampoco puede quedar registrado que este periodo se cubrió.
   const importaciones = agregarManifiesto(p0.importaciones, manifiestoDeImportacion(d.obj, autor, ahora));
-  return { cortes, gastos, retiros, ignorados, vinculos, importaciones, saldo, nC, nG, nR, nI, nV };
+  return { cortes, gastos, retiros, aportaciones, ignorados, vinculos, importaciones, saldo, nC, nG, nR, nI, nV, nA };
 }
 
 function confirmarImportarCortes(){
@@ -11315,6 +11440,7 @@ function confirmarImportarCortes(){
   try{
     plan = construirImportacionCortes(d, {
       cortes: week.cortes, gastos: week.gastos, retiros: week.retiros,
+      aportaciones: week.aportaciones,
       // gastosTodos es solo para BUSCAR la factura a vincular: vive en cualquier semana, no en la
       // activa. Se pasa aparte de `gastos` (que es la lista que se va a reescribir) para que quede
       // claro que de aquí no sale nada que se escriba.
@@ -11334,6 +11460,7 @@ function confirmarImportarCortes(){
   week.cortes  = plan.cortes;
   week.gastos  = plan.gastos;
   week.retiros = plan.retiros;
+  week.aportaciones = plan.aportaciones;
   state.cortesIgnorados = plan.ignorados;
   state.cortesImportaciones = plan.importaciones;
   // Los vínculos se aplican DESPUÉS de reasignar las listas, y sobre todas las semanas: la factura
@@ -11357,7 +11484,7 @@ function confirmarImportarCortes(){
     state.cajaSaldoInicial[plan.saldo.fecha] = plan.saldo.entrada;
     saldoFijado = plan.saldo.entrada.valor;
   }
-  const nC = plan.nC, nG = plan.nG, nR = plan.nR;
+  const nC = plan.nC, nG = plan.nG, nR = plan.nR, nA = plan.nA;
   const p = (d.obj && d.obj.periodo) || {};
 
   save();
@@ -11379,7 +11506,8 @@ function confirmarImportarCortes(){
   const exclMsg = plan.nI ? ` ${plan.nI} egreso(s) quedaron EXCLUIDOS (ver el detalle abajo).` : "";
   const vincMsg = nVAplicados ? ` ${nVAplicados} factura(s) ya capturada(s) quedaron vinculadas como pago de caja.` : "";
   const perdMsg = vPerdidos.length ? ` ⚠ ${vPerdidos.length} vínculo(s) NO se pudieron aplicar (${vPerdidos.join(", ")}): esas salidas de efectivo siguen sin contar en Caja.` : "";
-  setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s).${vincMsg}${exclMsg}${perdMsg}${saldoMsg} La conciliación de abajo ya quedó en el periodo ${fmtDate(p.ini)}–${fmtDate(p.fin)}.`, perdMsg?"warn":"ok");
+  const apMsg = nA ? ` ${nA} aportación(es) entraron como ingreso.` : "";
+  setStatus("cortesImportStatus", `✅ Importado: ${nC} corte(s), ${nG} gasto(s) y ${nR} retiro(s).${apMsg}${vincMsg}${exclMsg}${perdMsg}${saldoMsg} La conciliación de abajo ya quedó en el periodo ${fmtDate(p.ini)}–${fmtDate(p.fin)}.`, perdMsg?"warn":"ok");
   renderCaja();
 }
 
@@ -11419,13 +11547,47 @@ function _pintarAuditoriaCaja(){
 
   let h = "";
 
-  // ── Cobertura: primero de todo, porque manda sobre lo demás ────────────────
+  // ── El veredicto, arriba de todo ───────────────────────────────────────────
+  // Sale de estadoConciliacionCaja(), la MISMA función que usa el PDF. Que la pantalla y el papel
+  // pudieran decir cosas distintas del mismo periodo era el problema de fondo: se firma lo que
+  // dice el PDF, pero se decide con lo que dice la pantalla.
+  const _manif = Array.isArray(state.cortesImportaciones) ? state.cortesImportaciones : [];
+  const _cobV  = coberturaDePeriodos(ini, fin, _manif);
+  const _ruptV = rupturasDeCadena(_manif);
+  const _declV = totalesDeclarados(ini, fin, _manif);
+  const _exclV = egresosExcluidos(state).filter(x => !x.fecha || (x.fecha>=ini && x.fecha<=fin));
+  const _scp = calcularSaldoCajaPeriodo(ini, fin) || {};
+  const _saldoV = _scp.saldo;
+  const _espV = _declV.comparable
+    ? _declV.saldoInicial + _declV.efectivo + _declV.aportaciones - _declV.egresos : null;
+  const _difV = (_espV === null || _saldoV == null) ? null : (_saldoV - _espV);
+  const _ver = estadoConciliacionCaja({ cobertura:_cobV, rupturas:_ruptV, excluidos:_exclV, diferencia:_difV });
+  const _colV = _ver.estado==="CONCILIADO" ? "var(--vd)" : _ver.estado==="INCOMPLETO" ? "var(--red)" : "var(--naranja)";
+  const _bgV  = _ver.estado==="CONCILIADO" ? "#F1F8E9" : _ver.estado==="INCOMPLETO" ? "#FFEBEE" : "#FFF3E0";
+  h += `<div style="background:${_bgV};border:2px solid ${_colV};border-radius:10px;padding:12px 14px;margin-top:16px">
+    <div style="font-weight:700;color:${_colV};font-size:14px">${_ver.conciliado?"✅":"⛔"} ${_ver.estado}</div>
+    ${_ver.motivos.length?`<ul style="margin:6px 0 0 18px;padding:0;font-size:12px;color:var(--txt2)">${_ver.motivos.map(m=>`<li>${esc(m.texto)}</li>`).join("")}</ul>`
+      :`<div style="font-size:12px;color:var(--txt2);margin-top:4px">La cobertura está completa, la cadena de saldos empata, no hay egresos excluidos y el saldo coincide con lo que declaran los archivos.</div>`}
+    ${_declV.comparable?`<div class="tbl-wrap" style="margin-top:10px"><table style="width:100%;font-size:12px"><thead><tr>
+      <th>Control</th><th style="text-align:right">Según los archivos</th><th style="text-align:right">Según Egresos</th><th style="text-align:right">Diferencia</th></tr></thead><tbody>
+      ${[["Ingresos de efectivo", _declV.efectivo, _scp.totalCortes||0],
+         ["Egresos", _declV.egresos, (_scp.totalGastos||0)+(_scp.totalRetiros||0)],
+         ["Aportaciones", _declV.aportaciones, _scp.totalAport||0],
+         ["Saldo del periodo", _espV, _saldoV]
+        ].map(([et,dec,loc])=>{
+          const dd = (loc||0)-(dec||0);
+          return `<tr><td>${esc(et)}</td><td class="amount-cell">${fmt(dec||0)}</td><td class="amount-cell">${fmt(loc||0)}</td>
+            <td class="amount-cell" style="color:${Math.abs(dd)<0.01?"var(--vd)":"var(--red)"};font-weight:${Math.abs(dd)<0.01?"400":"700"}">${Math.abs(dd)<0.01?"0.00":(dd>0?"+":"")+fmt(dd)}</td></tr>`;
+        }).join("")}
+    </tbody></table></div>`:`<div style="font-size:11.5px;color:var(--txt2);margin-top:8px">No se puede comparar cifra contra cifra: los archivos importados no cubren exactamente este periodo. Consulta el periodo que sí cubren.</div>`}
+  </div>`;
+
+  // ── Cobertura: el detalle de lo que falta ──────────────────────────────────
   // Un saldo que no cuadra al menos avisa. Un tramo que nunca se importó no avisa de nada: el
   // reporte cuadra consigo mismo porque jamás supo que ese tramo debía existir, y se ve idéntico
   // a un periodo sin operación. Por eso va arriba: si falta cobertura, cualquier conclusión sobre
   // el saldo de abajo está incompleta, y hay que leerla sabiéndolo.
-  const manifiestos = Array.isArray(state.cortesImportaciones) ? state.cortesImportaciones : [];
-  const cob = coberturaDePeriodos(ini, fin, manifiestos);
+  const manifiestos = _manif, cob = _cobV;
   if(cob.sinRegistro){
     // Los manifiestos empiezan a existir con esta versión: quien ya venía usando la app importó
     // sin dejar constancia. Decir "faltan 30 días" sería mentir. Lo honesto es decir que todavía
@@ -11461,7 +11623,7 @@ function _pintarAuditoriaCaja(){
   }
   // Cadena de saldos: el efectivo a entregar de un archivo tiene que ser el saldo inicial del
   // siguiente. Cada archivo cuadra consigo mismo, así que una fuga ENTRE dos solo se ve aquí.
-  const rupturas = (typeof rupturasDeCadena==="function") ? rupturasDeCadena(manifiestos) : [];
+  const rupturas = _ruptV;
   if(rupturas.length){
     h += `<div style="background:#FFF3E0;border:1.5px solid var(--naranja);border-radius:10px;padding:12px 14px;margin-top:14px">
       <div style="font-weight:700;color:var(--naranja);font-size:13px">⚠ La cadena de saldos se rompe en ${rupturas.length} punto(s)</div>
@@ -11568,7 +11730,7 @@ function eliminarRetiro(id) {
 
 function renderCaja() {
   const datos = obtenerDatosCaja();
-  const { cortes, gastosCaja, retiros, saldoInicial, saldoInicialDetalle, saldoInicialManual, saldoInicialAjuste, periodoLabel, vacio } = datos;
+  const { cortes, gastosCaja, retiros, aportaciones, saldoInicial, saldoInicialDetalle, saldoInicialManual, saldoInicialAjuste, periodoLabel, vacio } = datos;
   const esAdmin = (typeof currentRole !== "undefined" && currentRole === "admin");
 
   const lbl = document.getElementById("cajaPeriodoLabel");
@@ -11588,6 +11750,7 @@ function renderCaja() {
   const totalCortes = cortes.reduce((s, c) => s + (parseFloat(c.monto) || 0), 0);
   const totalGastos = gastosCaja.reduce((s, g) => s + montoEfectivoGasto(g), 0);
   const totalRetiros = retiros.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  const totalAport = (aportaciones||[]).reduce((s, a) => s + (parseFloat(a.monto) || 0), 0);
   // Solo un saldo inicial fijado (conteo real, como en Cortes) entra al cálculo; sin fijar,
   // el periodo parte de $0 y el arrastre histórico se muestra aparte, colapsado.
   const baseInicial = usaManual ? saldoInicialManual : 0;
@@ -11653,6 +11816,18 @@ function renderCaja() {
         <span style="display:flex;align-items:center;gap:8px;flex-shrink:0"><span style="font-size:14px;color:var(--red);font-weight:600">−${fmt(r.monto)}</span>
           <button onclick="eliminarRetiro('${String(r.id).replace(/'/g,"\\'")}')" style="padding:2px 8px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:11px">🗑️</button></span>
       </div>`).join("");
+  // Las aportaciones solo se pintan si las hay: son un movimiento poco frecuente, y una sección
+  // vacía en cada reporte acaba siendo ruido que nadie lee.
+  const seccionAport = totalAport ? `
+    <div style="margin-bottom:18px">
+      <h4 style="margin:0 0 8px;color:var(--vd);font-size:14px">➕ Aportaciones — dinero que entró a la caja</h4>
+      ${aportaciones.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map(a=>`
+        <div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+          <span style="font-size:14px;color:var(--txt2)"><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#9DB89D">${fmtDate(a.fecha)}</span> (+) ${esc(a.concepto||a.origen||"Aportación")}</span>
+          <span style="font-size:14px;color:var(--vd);font-weight:600;flex-shrink:0">+${fmt(a.monto)}</span>
+        </div>`).join("")}
+      <div style="margin-top:6px;font-size:13px;font-weight:600;color:var(--txt2)">Total aportaciones — <span style="color:var(--vd)">${fmt(totalAport)}</span></div>
+    </div>` : "";
   const seccionEgresos = `
     <div style="margin-bottom:6px;font-size:13px;font-weight:600;color:var(--txt2)">Gastos pagados en efectivo — <span style="color:var(--red)">${fmt(totalGastos)}</span> (${gastosCaja.length})</div>
     ${gastosCaja.length?filasGastos:`<div style="color:var(--txt2);font-size:14px;padding:6px 0">Sin gastos de caja en el periodo.</div>`}
@@ -11669,6 +11844,7 @@ function renderCaja() {
       <h4 style="margin:0 0 8px;color:var(--vd);font-size:14px">2️⃣ Ingresos del periodo — cortes de efectivo</h4>
       ${tablaIngresos}
     </div>
+    ${seccionAport}
     <div style="margin-bottom:18px">
       <h4 style="margin:0 0 8px;color:var(--vd);font-size:14px">3️⃣ Egresos del periodo</h4>
       ${seccionEgresos}
@@ -11676,7 +11852,7 @@ function renderCaja() {
     <div style="background:${saldoFinal >= 0 ? "var(--claro)" : "#FFF5F5"};border-radius:12px;padding:18px;text-align:center;border:2px solid ${saldoFinal >= 0 ? "var(--vd)" : "var(--red)"}">
       <div style="font-size:13px;color:var(--txt2);margin-bottom:4px">4️⃣ Saldo del periodo</div>
       <div style="font-size:30px;font-weight:700;color:${saldoFinal >= 0 ? "var(--vd)" : "var(--red)"}">${fmt(saldoFinal)}</div>
-      <div style="font-size:12px;color:var(--txt2);font-family:'JetBrains Mono',monospace">${fmt(baseInicial)} inicial + ${fmt(totalCortes)} ingresos − ${fmt(totalGastos)} gastos − ${fmt(totalRetiros)} retiros</div>
+      <div style="font-size:12px;color:var(--txt2);font-family:'JetBrains Mono',monospace">${fmt(baseInicial)} inicial + ${fmt(totalCortes)} ingresos${totalAport?` + ${fmt(totalAport)} aportaciones`:""} − ${fmt(totalGastos)} gastos − ${fmt(totalRetiros)} retiros</div>
       ${usaManual?"":`<div style="font-size:11px;color:#B8860B;margin-top:4px">⚠ Sin saldo inicial fijado — el saldo parte de $0.00</div>`}
     </div>`;
 }
@@ -11685,15 +11861,44 @@ function exportarCajaPDF(){
   const {jsPDF}=window.jspdf;
   const datos = obtenerDatosCaja();
   if(datos.vacio){ alert("Selecciona un rango de fechas antes de exportar."); return; }
-  const { cortes, gastosCaja, retiros, saldoInicial, periodoLabel } = datos;
+  const { cortes, gastosCaja, retiros, aportaciones, saldoInicial, periodoLabel } = datos;
   const usaManual = datos.saldoInicialManual !== null && datos.saldoInicialManual !== undefined;
+  // Todo se ordena por FECHA y folio, no por orden de importación. Antes las semanas salían en el
+  // orden en que se capturaron, así que un reporte del 19 al 25 podía imprimir el 22–25 antes que
+  // el 19–21: nadie puede seguir un flujo de efectivo que va y viene en el tiempo.
+  const porFecha = (a,b)=> (a.fecha||"") < (b.fecha||"") ? -1 : (a.fecha||"") > (b.fecha||"") ? 1
+    : String(a._folioCorte||a._folioEgreso||a._folioAportacion||a.factura||"") < String(b._folioCorte||b._folioEgreso||b._folioAportacion||b.factura||"") ? -1 : 1;
+  const cortesOrd  = cortes.slice().sort(porFecha);
+  const gastosOrd  = gastosCaja.slice().sort(porFecha);
+  const retirosOrd = retiros.slice().sort(porFecha);
+  const aportOrd   = (aportaciones||[]).slice().sort(porFecha);
   const totalCortes=cortes.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
   const totalGastos=gastosCaja.reduce((s,g)=>s+montoEfectivoGasto(g),0);
   const totalRetiros=retiros.reduce((s,r)=>s+(parseFloat(r.monto)||0),0);
+  const totalAport=aportOrd.reduce((s,a)=>s+(parseFloat(a.monto)||0),0);
+  const totalTerm=cortes.reduce((s,c)=>s+(parseFloat(c.terminal)||0),0);
   // Consistente con renderCaja: solo un saldo inicial capturado entra al cálculo; sin capturar
   // (rango o semana) parte de 0 y el saldo anterior se muestra aparte, no incluido.
   const baseInicial = usaManual ? datos.saldoInicialManual : 0;
   const saldoFinal = calcularSaldoCajaPeriodo(datos.ini, datos.fin).saldo;
+
+  // ── Controles de conciliación ─────────────────────────────────────────────
+  // Un reporte que solo suma sus propios renglones cuadra siempre: cuadra consigo mismo aunque le
+  // falte medio mes. Lo que lo vuelve auditable es lo de abajo — contra qué se comparó, qué se
+  // dejó fuera y por qué. Sale del MISMO cálculo que la pantalla, a propósito.
+  const manifiestos = Array.isArray(state.cortesImportaciones) ? state.cortesImportaciones : [];
+  const cob  = coberturaDePeriodos(datos.ini, datos.fin, manifiestos);
+  const rupt = rupturasDeCadena(manifiestos);
+  const decl = totalesDeclarados(datos.ini, datos.fin, manifiestos);
+  const enRangoPDF = f => !!f && f >= datos.ini && f <= datos.fin;
+  const excl = egresosExcluidos(state).filter(x => !x.fecha || enRangoPDF(x.fecha));
+  const vinculados = gastosOrd.filter(g => g && g._vinculoCaja);
+  const conDif = gastosOrd.filter(g => difImporteCaja(g));
+  // El esperado según los archivos, para poder restar y ver la diferencia real.
+  const esperado = decl.comparable
+    ? decl.saldoInicial + decl.efectivo + decl.aportaciones - decl.egresos : null;
+  const difJson = (esperado === null) ? null : (saldoFinal - esperado);
+  const ver = estadoConciliacionCaja({ cobertura:cob, rupturas:rupt, excluidos:excl, diferencia:difJson });
 
   const doc=new jsPDF({unit:"mm",format:"letter"});
   const PW=215.9,MAR=15,W=PW-MAR*2; let Y=MAR;
@@ -11707,7 +11912,8 @@ function exportarCajaPDF(){
   Y=40;
 
   const cards=[["Saldo inicial del periodo",fmt(baseInicial)+(usaManual?"":" (sin fijar)")],["Ingresos (cortes)",fmt(totalCortes)],["Gastos efectivo",fmt(totalGastos)],["Retiros",fmt(totalRetiros)]];
-  const cw=W/4;
+  if(totalAport) cards.push(["Aportaciones",fmt(totalAport)]);
+  const cw=W/cards.length;
   cards.forEach(([lbl,val],i)=>{
     const x=MAR+i*cw; doc.setFillColor(...CL); doc.roundedRect(x,Y,cw-3,18,2,2,"F");
     doc.setTextColor(...VD); doc.setFontSize(7); doc.setFont("helvetica","normal"); doc.text(lbl,x+4,Y+6);
@@ -11717,12 +11923,83 @@ function exportarCajaPDF(){
   doc.setFillColor(...(saldoFinal>=0?ME:RED)); doc.roundedRect(MAR,Y,W,16,2,2,"F");
   doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont("helvetica","normal"); doc.text("SALDO DEL PERIODO",MAR+4,Y+6);
   doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.text(fmt(saldoFinal),MAR+4,Y+13);
-  Y+=24;
+  Y+=20;
+
+  // ── Estado de la conciliación ─────────────────────────────────────────────
+  const COL_EST = ver.estado==="CONCILIADO" ? ME : ver.estado==="INCOMPLETO" ? RED : [230,145,20];
+  doc.setFillColor(...COL_EST); doc.roundedRect(MAR,Y,W,9,2,2,"F");
+  doc.setTextColor(255,255,255); doc.setFontSize(10); doc.setFont("helvetica","bold");
+  doc.text(`ESTADO: ${ver.estado}`,MAR+4,Y+6.2);
+  Y+=12;
+  if(ver.motivos.length){
+    doc.setTextColor(...RED); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
+    ver.motivos.forEach(m=>{
+      if(Y>270){ doc.addPage(); Y=MAR; }
+      doc.splitTextToSize("• "+m.texto, W-6).forEach(l=>{ doc.text(l,MAR+3,Y+3.5); Y+=4; });
+    });
+    Y+=3;
+  }
+
+  // ── Tabla de control: Egresos contra lo que declaran los archivos ─────────
+  if(Y>225){ doc.addPage(); Y=MAR; }
+  doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
+  doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold");
+  doc.text("CONTROL — EGRESOS CONTRA LOS ARCHIVOS DE MANEJO DE CORTES",MAR+3,Y+4.8); Y+=7;
+  const C1=MAR+3, C2=MAR+70, C3=MAR+118, C4=PW-MAR-3;
+  doc.setFillColor(230,235,228); doc.rect(MAR,Y,W,5.5,"F");
+  doc.setTextColor(...VD); doc.setFontSize(6.8); doc.setFont("helvetica","bold");
+  doc.text("Control",C1,Y+3.9); doc.text("Según los archivos",C2,Y+3.9);
+  doc.text("Según Egresos",C3,Y+3.9); doc.text("Diferencia",C4,Y+3.9,{align:"right"});
+  Y+=5.5;
+  const dosCifras = (dec, loc)=>{
+    if(dec === null) return ["—", fmt(loc), "no comparable"];
+    const d = loc - dec;
+    return [fmt(dec), fmt(loc), (Math.abs(d)<0.01 ? "0.00" : (d>0?"+":"")+fmt(d))];
+  };
+  const filasCtl = [];
+  const cobTxt = cob.sinRegistro ? "Sin constancia de importaciones"
+    : cob.cubierto ? `Completa — ${cob.nManifiestos} archivo(s)`
+    : `INCOMPLETA — faltan ${(cob.dias||[]).length} día(s)`;
+  filasCtl.push(["Cobertura del periodo", cobTxt, "", ""]);
+  if(!cob.cubierto && !cob.sinRegistro){
+    (cob.tramos||[]).forEach(t=>filasCtl.push(["   sin importar",
+      t.dias===1 ? fmtDate(t.ini) : `${fmtDate(t.ini)} al ${fmtDate(t.fin)} (${t.dias} días)`, "", ""]));
+  }
+  filasCtl.push(["Saldo inicial",
+    decl.comparable ? fmt(decl.saldoInicial) : "—",
+    fmt(baseInicial) + (usaManual ? " (conteo fijado)" : " (sin fijar)"),
+    decl.comparable ? ((Math.abs(baseInicial-decl.saldoInicial)<0.01) ? "0.00" : fmt(baseInicial-decl.saldoInicial)) : "no comparable"]);
+  filasCtl.push(["Ingresos de efectivo", ...dosCifras(decl.comparable?decl.efectivo:null, totalCortes)]);
+  filasCtl.push(["Egresos", ...dosCifras(decl.comparable?decl.egresos:null, totalGastos+totalRetiros)]);
+  filasCtl.push(["Aportaciones", ...dosCifras(decl.comparable?decl.aportaciones:null, totalAport)]);
+  filasCtl.push(["Terminal (informativo)", decl.comparable?fmt(decl.terminal):"—", fmt(totalTerm), "no entra al efectivo"]);
+  filasCtl.push(["SALDO DEL PERIODO", esperado===null?"—":fmt(esperado), fmt(saldoFinal),
+    difJson===null ? "no comparable" : (Math.abs(difJson)<0.01 ? "0.00" : (difJson>0?"+":"")+fmt(difJson))]);
+  filasCtl.forEach(([a,b,c,d],i)=>{
+    if(Y>268){ doc.addPage(); Y=MAR; }
+    const ultima = i===filasCtl.length-1;
+    doc.setFillColor(...(ultima?[230,235,228]:(i%2===0?CL:[255,255,255]))); doc.rect(MAR,Y,W,5.5,"F");
+    doc.setTextColor(60,60,60); doc.setFontSize(6.8); doc.setFont("helvetica",ultima?"bold":"normal");
+    doc.text(String(a).slice(0,42),C1,Y+3.9);
+    doc.text(String(b).slice(0,32),C2,Y+3.9);
+    doc.text(String(c).slice(0,30),C3,Y+3.9);
+    if(/^\+?-?[\d$,.]+$/.test(String(d)) && String(d)!=="0.00") doc.setTextColor(...RED);
+    doc.text(String(d).slice(0,22),C4,Y+3.9,{align:"right"});
+    Y+=5.5;
+  });
+  if(!decl.comparable){
+    doc.setTextColor(120,120,120); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
+    doc.splitTextToSize(decl.nArchivos
+      ? "No comparable: los archivos importados no cubren exactamente este periodo (empiezan o terminan fuera, o dejan un hueco). Consulta el periodo que sí cubren para poder comparar cifra contra cifra."
+      : "No comparable: todavía no hay constancia de qué archivos se importaron para este periodo. A partir de la próxima importación esta columna se llena sola.", W-6)
+      .forEach(l=>{ doc.text(l,MAR+3,Y+3.5); Y+=3.5; });
+  }
+  Y+=8;
 
   doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
   doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.text("INGRESOS DEL PERIODO — CORTES",MAR+3,Y+4.8); Y+=7;
   if(cortes.length===0){ doc.setTextColor(120,120,120); doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.text("Sin cortes en el periodo.",MAR+3,Y+5); Y+=8; }
-  else cortes.forEach((c,i)=>{
+  else cortesOrd.forEach((c,i)=>{
     if(Y>260){ doc.addPage(); Y=MAR; }
     doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6,"F");
     doc.setTextColor(60,60,60); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
@@ -11735,11 +12012,14 @@ function exportarCajaPDF(){
   doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
   doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.text("EGRESOS — GASTOS EN EFECTIVO",MAR+3,Y+4.8); Y+=7;
   if(gastosCaja.length===0){ doc.setTextColor(120,120,120); doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.text("Sin gastos en efectivo en el periodo.",MAR+3,Y+5); Y+=8; }
-  else gastosCaja.forEach((g,i)=>{
+  else gastosOrd.forEach((g,i)=>{
     if(Y>260){ doc.addPage(); Y=MAR; }
     doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6,"F");
     doc.setTextColor(60,60,60); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
-    doc.text(fmtDate(g.fecha),MAR+3,Y+4.2); doc.text((g.proveedor||"").slice(0,45),MAR+40,Y+4.2);
+    doc.text(fmtDate(g.fecha),MAR+3,Y+4.2); doc.text((g.proveedor||"").slice(0,42),MAR+28,Y+4.2);
+    // El folio de origen es lo que permite volver del reporte al renglón del concentrado. Sin él,
+    // "revisa ese gasto" obliga a buscarlo a mano en el archivo.
+    if(g._folioEgreso){ doc.setFontSize(6); doc.setTextColor(120,120,120); doc.text(String(g._folioEgreso).slice(0,16),MAR+95,Y+4.2); doc.setFontSize(7.5); doc.setTextColor(60,60,60); }
     // Cuando la salida de caja no es igual al importe de la factura hay que imprimir las dos:
     // un renglón con una sola cifra obliga a adivinar cuál de las dos es, y ésa es justo la
     // ambigüedad que hace que alguien "cuadre" el reporte pisando el importe fiscal.
@@ -11753,7 +12033,7 @@ function exportarCajaPDF(){
   doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
   doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.text("EGRESOS — RETIROS",MAR+3,Y+4.8); Y+=7;
   if(retiros.length===0){ doc.setTextColor(120,120,120); doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.text("Sin retiros en el periodo.",MAR+3,Y+5); Y+=8; }
-  else retiros.forEach((r,i)=>{
+  else retirosOrd.forEach((r,i)=>{
     if(Y>260){ doc.addPage(); Y=MAR; }
     doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6,"F");
     doc.setTextColor(60,60,60); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
@@ -11761,6 +12041,142 @@ function exportarCajaPDF(){
     doc.setFont("helvetica","bold"); doc.setTextColor(...RED); doc.text(fmt(r.monto),PW-MAR-3,Y+4.2,{align:"right"});
     Y+=6;
   });
+
+  Y+=8;
+
+  // ── Aportaciones ──────────────────────────────────────────────────────────
+  if(aportOrd.length){
+    if(Y>245){ doc.addPage(); Y=MAR; }
+    doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
+    doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold");
+    doc.text("INGRESOS — APORTACIONES A LA CAJA",MAR+3,Y+4.8); Y+=7;
+    aportOrd.forEach((a,i)=>{
+      if(Y>268){ doc.addPage(); Y=MAR; }
+      doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6,"F");
+      doc.setTextColor(60,60,60); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
+      doc.text(fmtDate(a.fecha),MAR+3,Y+4.2);
+      doc.text(String(a.concepto||a.origen||"Aportación").slice(0,55),MAR+28,Y+4.2);
+      doc.setFont("helvetica","bold"); doc.setTextColor(...VD); doc.text(fmt(a.monto),PW-MAR-3,Y+4.2,{align:"right"});
+      Y+=6;
+    });
+    Y+=8;
+  }
+
+  // ── Facturas vinculadas ───────────────────────────────────────────────────
+  // Un vínculo cambió la forma de pago de una factura que ya existía. Es una decisión contable
+  // tomada por una persona sobre un documento fiscal, así que tiene que quedar impresa con
+  // nombre y fecha: quién lo hizo, cuándo, desde qué forma de pago y con qué folio de origen.
+  if(vinculados.length){
+    if(Y>235){ doc.addPage(); Y=MAR; }
+    doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
+    doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold");
+    doc.text(`FACTURAS VINCULADAS COMO PAGO DE CAJA (${vinculados.length})`,MAR+3,Y+4.8); Y+=7;
+    doc.setFillColor(230,235,228); doc.rect(MAR,Y,W,5,"F");
+    doc.setTextColor(...VD); doc.setFontSize(6.5); doc.setFont("helvetica","bold");
+    doc.text("Fecha",MAR+3,Y+3.6); doc.text("Proveedor",MAR+22,Y+3.6); doc.text("Folio origen",MAR+78,Y+3.6);
+    doc.text("Venía como",MAR+112,Y+3.6); doc.text("Autorizó",MAR+138,Y+3.6);
+    doc.text("Factura / Caja",PW-MAR-3,Y+3.6,{align:"right"}); Y+=5;
+    vinculados.forEach((g,i)=>{
+      if(Y>268){ doc.addPage(); Y=MAR; }
+      const v = g._vinculoCaja||{};
+      doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,5.5,"F");
+      doc.setTextColor(60,60,60); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
+      doc.text(fmtDate(g.fecha),MAR+3,Y+3.8);
+      doc.text(String(g.proveedor||"").slice(0,32),MAR+22,Y+3.8);
+      doc.text(String(g._folioEgreso||"").slice(0,20),MAR+78,Y+3.8);
+      doc.text(String(g.formaPagoAnterior||"—").slice(0,14),MAR+112,Y+3.8);
+      doc.text(String(v.por||"—").slice(0,16),MAR+138,Y+3.8);
+      const mc = montoEfectivoGasto(g), d = difImporteCaja(g);
+      if(d) doc.setTextColor(...RED);
+      doc.text(`${fmt(g.importe)} / ${fmt(mc)}`,PW-MAR-3,Y+3.8,{align:"right"});
+      Y+=5.5;
+    });
+    Y+=8;
+  }
+
+  // ── Diferencias entre el comprobante y lo que salió de la caja ────────────
+  if(conDif.length){
+    if(Y>240){ doc.addPage(); Y=MAR; }
+    doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
+    doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold");
+    doc.text(`DIFERENCIAS ENTRE FACTURA Y SALIDA DE CAJA (${conDif.length})`,MAR+3,Y+4.8); Y+=7;
+    doc.setTextColor(90,90,90); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
+    doc.splitTextToSize("Las dos cifras son correctas y sirven para cosas distintas: el importe es lo que dice el comprobante y es lo que se declara; la salida de caja es lo que se sacó del concentrado y es lo que cuadra contra el conteo físico. No se sobrescribe ninguna para forzar la coincidencia.", W-6)
+      .forEach(l=>{ doc.text(l,MAR+3,Y+3.4); Y+=3.4; });
+    Y+=2;
+    let totDif = 0;
+    conDif.forEach((g,i)=>{
+      if(Y>268){ doc.addPage(); Y=MAR; }
+      const d = difImporteCaja(g); totDif += d;
+      doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,5.5,"F");
+      doc.setTextColor(60,60,60); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
+      doc.text(fmtDate(g.fecha),MAR+3,Y+3.8);
+      doc.text(String(g.proveedor||"").slice(0,40),MAR+22,Y+3.8);
+      doc.text(`Factura ${fmt(g.importe)}`,MAR+90,Y+3.8);
+      doc.text(`Caja ${fmt(montoEfectivoGasto(g))}`,MAR+125,Y+3.8);
+      doc.setTextColor(...RED); doc.setFont("helvetica","bold");
+      doc.text(`${d>0?"+":""}${fmt(d)}`,PW-MAR-3,Y+3.8,{align:"right"});
+      Y+=5.5;
+    });
+    doc.setFillColor(230,235,228); doc.rect(MAR,Y,W,5.5,"F");
+    doc.setTextColor(...VD); doc.setFontSize(6.8); doc.setFont("helvetica","bold");
+    doc.text("Diferencia acumulada",MAR+3,Y+3.9);
+    doc.text(`${totDif>0?"+":""}${fmt(totDif)}`,PW-MAR-3,Y+3.9,{align:"right"});
+    Y+=5.5+8;
+  }
+
+  // ── Egresos excluidos ─────────────────────────────────────────────────────
+  // Esto estaba en pantalla y NO en el PDF, así que el reporte impreso —el que se archiva y el
+  // que se enseña— no podía explicar su propio faltante. Un egreso excluido es dinero que salió
+  // del concentrado y que este reporte decidió no contar: sin decirlo, el saldo miente por
+  // omisión, y omitir es peor que equivocarse porque no deja rastro de que hubo una decisión.
+  if(excl.length){
+    if(Y>235){ doc.addPage(); Y=MAR; }
+    const conDetalle = excl.filter(x=>!x._sinDetalle);
+    const sinDetalle = excl.filter(x=>x._sinDetalle);
+    const totExcl = conDetalle.reduce((s,x)=>s+(x.monto||0),0);
+    doc.setFillColor(...RED); doc.rect(MAR,Y,W,7,"F");
+    doc.setTextColor(255,255,255); doc.setFontSize(8); doc.setFont("helvetica","bold");
+    doc.text(`EGRESOS EXCLUIDOS DEL REPORTE (${excl.length}) — ${fmt(totExcl)} fuera del saldo`,MAR+3,Y+4.8); Y+=7;
+    doc.setTextColor(90,90,90); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
+    doc.splitTextToSize("Se marcaron «Ignorar» al importar, así que no entraron ni como gasto ni como retiro. Si alguno era un gasto real, el saldo de arriba está alto por esa cantidad. Mientras haya exclusiones sin vincular ni corregir en el origen, el periodo NO está conciliado.", W-6)
+      .forEach(l=>{ doc.text(l,MAR+3,Y+3.4); Y+=3.4; });
+    Y+=2;
+    doc.setFillColor(230,235,228); doc.rect(MAR,Y,W,5,"F");
+    doc.setTextColor(...VD); doc.setFontSize(6.5); doc.setFont("helvetica","bold");
+    doc.text("Fecha",MAR+3,Y+3.6); doc.text("Concepto",MAR+22,Y+3.6); doc.text("Folio",MAR+80,Y+3.6);
+    doc.text("Motivo / quién",MAR+112,Y+3.6); doc.text("Monto",PW-MAR-3,Y+3.6,{align:"right"}); Y+=5;
+    conDetalle.slice().sort((a,b)=>(a.fecha||"")<(b.fecha||"")?-1:1).forEach((x,i)=>{
+      if(Y>268){ doc.addPage(); Y=MAR; }
+      doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,5.5,"F");
+      doc.setTextColor(60,60,60); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
+      doc.text(x.fecha?fmtDate(x.fecha):"—",MAR+3,Y+3.8);
+      doc.text(String(x.concepto||"—").slice(0,33),MAR+22,Y+3.8);
+      doc.text(String(x.folio||"").slice(0,18),MAR+80,Y+3.8);
+      doc.text(`${String(x.motivo||"—").slice(0,22)}${x.por?" · "+String(x.por).slice(0,14):""}`,MAR+112,Y+3.8);
+      doc.setFont("helvetica","bold"); doc.setTextColor(...RED);
+      doc.text(fmt(x.monto||0),PW-MAR-3,Y+3.8,{align:"right"});
+      Y+=5.5;
+    });
+    if(sinDetalle.length){
+      if(Y>265){ doc.addPage(); Y=MAR; }
+      doc.setTextColor(120,120,120); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
+      doc.splitTextToSize(`Otros ${sinDetalle.length} se excluyeron antes de que se guardara el detalle, así que solo queda el folio: ${sinDetalle.map(x=>x.folio).join(", ")}. Para saber cuánto eran hay que buscarlos en el .json del periodo.`, W-6)
+        .forEach(l=>{ doc.text(l,MAR+3,Y+3.4); Y+=3.4; });
+    }
+    Y+=8;
+  }
+
+  // ── Procedencia ───────────────────────────────────────────────────────────
+  // De qué archivos salió todo esto. Sin esto el reporte es una cifra sin fuente.
+  if(Y>250){ doc.addPage(); Y=MAR; }
+  doc.setTextColor(120,120,120); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
+  const fuentes = (decl.archivos||[]).length ? decl.archivos
+    : manifiestos.filter(m=>m && m.ini && m.fin && !(m.fin < datos.ini || m.ini > datos.fin));
+  const proc = fuentes.length
+    ? "Archivos de Manejo de Cortes usados: " + fuentes.map(m=>`${m.ini}–${m.fin}${m.emitido?` (emitido ${m.emitido})`:""}${m.importadoPor?`, importado por ${m.importadoPor}`:""}`).join(" · ")
+    : "Sin constancia de archivos importados para este periodo.";
+  doc.splitTextToSize(proc, W-6).forEach(l=>{ doc.text(l,MAR+3,Y+3.4); Y+=3.4; });
 
   doc.save(`Caja_${(periodoLabel||"periodo").replace(/[^A-Za-z0-9]/g,"_")}.pdf`);
 }
