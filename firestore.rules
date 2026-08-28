@@ -11,6 +11,16 @@
 // colecciones — incluido borrar CFDIs o auto-asignarse el rol de admin.
 // Ahora cada colección declara lo que realmente necesita.
 //
+// Segundo cambio (2026-08-28): tener sesión dejó de ser suficiente. El alta por
+// correo y contraseña de Firebase es un endpoint PÚBLICO de Google, y la llave del
+// proyecto va en index.html, que se sirve abierto en GitHub Pages: cualquiera podía
+// crearse una cuenta sin invitación y, con esa sesión, leer y ESCRIBIR el documento
+// estado/cicsa —todo el dinero de la empresa— además de los CFDIs y los respaldos,
+// que son copias completas del mismo estado. No es un descuido de configuración:
+// en Firebase Auth clásico el alta pública no se puede cerrar desde la consola.
+// Por eso el candado va aquí: esUsuario() exige registro en usuarios/{uid}, y ese
+// registro sólo lo crea el admin.
+//
 // IMPORTANTE: al quitar el comodín, cualquier colección NO listada abajo queda
 // denegada. Las colecciones que la app usa hoy están todas cubiertas:
 //   datos · estado · usuarios · chat · productos_comerciales · proveedores
@@ -36,8 +46,8 @@ service cloud.firestore {
     // privilegiadas: no vuelven a pasar por estas reglas, así que no hay
     // recursión aunque 'usuarios' esté restringida.
     // El exists() NO es adorno: get() sobre un documento inexistente truena y
-    // la regla deniega. Sin él, un usuario cuyo registro fue eliminado (el caso
-    // de "dar de alta otra vez a alguien que borré") no podría recrearlo.
+    // la regla entera deniega. Con él, un uid sin registro simplemente no es
+    // admin, en vez de romper la evaluación.
     function esAdmin() {
       return conSesion() && (
         request.auth.uid == 'NVapfgY8pshXwYbMq7Wz28ry3pC3' ||
@@ -46,12 +56,24 @@ service cloud.firestore {
       );
     }
 
+    // Tener sesión NO es estar autorizado. El alta por correo de Firebase es un
+    // endpoint PÚBLICO de Google: cualquiera que lea la llave del proyecto en
+    // index.html —que se sirve abierto— puede crearse una cuenta sin invitación.
+    // Lo que autoriza es estar dado de alta: tener registro en usuarios/{uid}.
+    // El dueño se exceptúa por UID porque es quien tiene que poder recrear el suyo.
+    function esUsuario() {
+      return conSesion() && (
+        request.auth.uid == 'NVapfgY8pshXwYbMq7Wz28ry3pC3' ||
+        exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+      );
+    }
+
     // ── datos/precios — lo lee CICSA Menú SIN sesión ───────────────────────
     // Lectura pública a propósito (el Menú consulta precios sin login);
     // escribir sigue requiriendo sesión.
     match /datos/{doc} {
       allow read: if true;
-      allow write: if conSesion();
+      allow write: if esUsuario();
     }
 
     // ── estado/cicsa — el estado financiero completo ───────────────────────
@@ -61,7 +83,7 @@ service cloud.firestore {
     // del mismo documento que todo lo demás (habría que separarlo para poder
     // protegerlo por reglas).
     match /estado/{doc} {
-      allow read, write: if conSesion();
+      allow read, write: if esUsuario();
     }
 
     // ── usuarios — roles y nombres ─────────────────────────────────────────
@@ -73,9 +95,12 @@ service cloud.firestore {
     // Modificar rol/nombre y eliminar: solo admin.
     match /usuarios/{uid} {
       allow read:   if esAdmin() || (conSesion() && request.auth.uid == uid);
-      allow create: if esAdmin() ||
-                       (conSesion() && request.auth.uid == uid &&
-                        request.resource.data.rol == 'operativo');
+      // Antes cada quien podía crear SU PROPIO registro como "operativo", para
+      // re-vincularse al volver a entrar. Esa puerta anulaba todo lo demás: quien se
+      // registrara por su cuenta se creaba el registro y con él pasaba a ser usuario
+      // dado de alta. Ahora sólo el admin da de alta. Se pierde la re-vinculación
+      // automática: a quien borres del panel hay que volver a agregarlo a mano.
+      allow create: if esAdmin();
       allow update, delete: if esAdmin();
     }
 
@@ -84,25 +109,25 @@ service cloud.firestore {
     // uid de quien lo manda (no se puede publicar a nombre de otro). Editar o
     // borrar mensajes ajenos: solo admin.
     match /chat/{msg} {
-      allow read:   if conSesion();
-      allow create: if conSesion() && request.resource.data.uid == request.auth.uid;
+      allow read:   if esUsuario();
+      allow create: if esUsuario() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if esAdmin();
     }
 
     // ── Catálogo de productos y proveedores ────────────────────────────────
     // Los operativos validan y editan productos como parte de su trabajo.
     match /productos_comerciales/{doc} {
-      allow read, write: if conSesion();
+      allow read, write: if esUsuario();
     }
     match /proveedores/{doc} {
-      allow read, write: if conSesion();
+      allow read, write: if esUsuario();
     }
 
     // ── cfdis — CFDIs guardados para la conciliación SAT ───────────────────
     // Cualquiera con sesión puede subir XML y consultarlos; BORRAR es solo del
     // admin (igual que en la interfaz, pero ahora sí aplicado de verdad).
     match /cfdis/{uuid} {
-      allow read, create, update: if conSesion();
+      allow read, create, update: if esUsuario();
       allow delete: if esAdmin();
     }
 
@@ -112,7 +137,7 @@ service cloud.firestore {
     // interfaz, así que delete queda denegado (un borrado haría reaparecer
     // facturas ya capturadas como si fueran nuevas).
     match /gmail_revisados/{doc} {
-      allow read, create, update: if conSesion();
+      allow read, create, update: if esUsuario();
       allow delete: if esAdmin();
     }
 
@@ -120,7 +145,7 @@ service cloud.firestore {
     // Cualquiera con sesión genera respaldos al capturar; PODAR los viejos es
     // solo del admin, que es justo lo que ya asume podarRespaldos().
     match /respaldos/{doc} {
-      allow read, create, update: if conSesion();
+      allow read, create, update: if esUsuario();
       allow delete: if esAdmin();
     }
 
@@ -128,8 +153,8 @@ service cloud.firestore {
     // Cada usuario solo puede escribir SU propio latido (no puede inflar ni
     // falsear el de otro). Lo consulta el admin; cada quien puede ver el suyo.
     match /actividad/{uid} {
-      allow read:          if esAdmin() || (conSesion() && request.auth.uid == uid);
-      allow create, update: if conSesion() && request.auth.uid == uid;
+      allow read:          if esAdmin() || (esUsuario() && request.auth.uid == uid);
+      allow create, update: if esUsuario() && request.auth.uid == uid;
       allow delete:        if esAdmin();
     }
   }

@@ -1926,7 +1926,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-27-b";
+const APP_BUILD = "2026-08-28-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -9381,27 +9381,53 @@ async function renderActividad(){
 }
 
 // ── Auth State Observer ────────────────────────────────────────────────────────
+// ¿Esta cuenta puede entrar? Es EL candado del frontend, así que vive aparte y con pruebas.
+// `tieneRegistro` es si existe usuarios/{uid}; el dueño se exceptúa por UID porque es el
+// único que debe poder recrear el suyo — si no, nadie podría dar de alta a nadie.
+// Las reglas de Firestore aplican exactamente el mismo criterio (esUsuario()): esto es para
+// que la persona vea un mensaje claro en vez de una app donde todo falla en silencio.
+function puedeEntrar(tieneRegistro, uid){
+  return !!tieneRegistro || uid === ADMIN_UID;
+}
+
 auth.onAuthStateChanged(async user => {
   if(user) {
     currentUser = user;
     // Get role + display name from Firestore
     try {
       const snap = await db.collection("usuarios").doc(user.uid).get();
+      // Sin registro en `usuarios` no se entra. Aquí antes se creaba uno al vuelo como
+      // "operativo" para re-vincular a quien hubiera sido borrado del panel. La comodidad
+      // salía carísima: el alta por correo de Firebase es un endpoint PÚBLICO de Google y
+      // la llave del proyecto va en este mismo archivo, que se sirve abierto — así que
+      // cualquiera podía registrarse solo, entrar, y llevarse un perfil de operativo con
+      // acceso de lectura y escritura a todo el dinero. No hay forma de cerrar esa alta
+      // desde la consola de Firebase, así que se cierra aquí y en las reglas.
+      // El dueño se exceptúa por UID: es el único que debe poder recrear su propio registro
+      // (ensureAdminRecord, más abajo), porque si no nadie podría dar de alta a nadie.
+      if(!puedeEntrar(snap.exists, user.uid)){
+        await auth.signOut();
+        const _err = document.getElementById("loginError");
+        if(_err) _err.textContent = "Esta cuenta no está dada de alta en CICSA Egresos. Pídele al administrador que te agregue.";
+        return;
+      }
       currentRole = snap.exists ? (snap.data().rol || "operativo") : "operativo";
       currentNombre = (snap.exists && snap.data().nombre) ? snap.data().nombre : (user.email||"").split("@")[0];
-      // Auto-revinculación: si la cuenta existe en Auth pero no tiene registro en el panel
-      // (ej. fue eliminada del panel y volvió a entrar), se recrea como Operativo con el
-      // prefijo del correo como nombre — el admin ajusta rol/nombre en Gestión de usuarios.
-      if(!snap.exists){
-        // El dueño se recrea como ADMIN, no como operativo: si volviera como operativo, su
-        // propio registro quedaría mal y el panel lo mostraría con el rol equivocado.
-        const rolRecreado = user.uid === ADMIN_UID ? "admin" : "operativo";
-        try{ await db.collection("usuarios").doc(user.uid).set({ email:user.email||"", nombre:currentNombre, rol:rolRecreado, fechaCreacion:new Date().toISOString(), revinculado:true }); }catch(e2){}
-      }
       // If admin UID, ensure role is admin
       if(user.uid === ADMIN_UID){ currentRole = "admin"; ensureAdminRecord(); }
     } catch(e) {
-      currentRole = user.uid === ADMIN_UID ? "admin" : "operativo";
+      // Antes, si la lectura fallaba se asumía "operativo" y se dejaba entrar. Con las reglas
+      // nuevas esa persona queda dentro de una app donde TODO falla con permiso denegado y sin
+      // decirle por qué. Mejor decirlo y que reintente. El dueño entra igual —se identifica por
+      // UID, no por su registro— para que un fallo de red no lo deje fuera de su propia app.
+      if(user.uid !== ADMIN_UID){
+        console.warn("onAuthStateChanged: no se pudo leer usuarios/", e);
+        await auth.signOut();
+        const _err = document.getElementById("loginError");
+        if(_err) _err.textContent = "No pudimos verificar tu acceso. Revisa tu conexión e intenta de nuevo.";
+        return;
+      }
+      currentRole = "admin";
       currentNombre = (user.email||"").split("@")[0];
     }
 
@@ -9835,7 +9861,7 @@ async function cargarUsuarios() {
         : `<div style="background:#FFF8E1;border:1px solid #E6A700;border-radius:10px;padding:14px;font-size:13px;color:var(--txt)">
             <strong style="color:#B8860B">No hay usuarios en el panel.</strong>
             <div style="margin-top:6px;color:var(--txt2);line-height:1.5">Las cuentas de acceso <strong>no se perdieron</strong>: viven en Firebase Authentication y este panel solo guarda el nombre y el rol.
-            Pide a cada persona que <strong>inicie sesión</strong> con su correo y contraseña de siempre — su registro reaparece aquí automáticamente como <em>Operativo</em>, y tú le pones el nombre y el rol que le toca.</div>
+            Dale de alta a cada persona con el formulario de arriba. Si su cuenta de acceso ya existe, el sistema te lo dirá y te ofrecerá vincularla — para eso necesitas su <strong>UID</strong>, que sale en Firebase Console → Authentication → Users.</div>
             <button onclick="cargarUsuarios()" style="margin-top:10px;padding:6px 14px;background:var(--vd);color:white;border:none;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif">🔄 Reintentar</button>
           </div>`;
       return;
@@ -9905,12 +9931,35 @@ async function crearUsuario() {
     cargarUsuarios();
   } catch(e) {
     if(String(e.message||"").includes("EMAIL_EXISTS")){
-      // La cuenta de acceso sigue viva en Firebase Auth aunque se haya eliminado del panel.
-      // No se recrea: al iniciar sesión se re-vincula sola (ver onAuthStateChanged). Lo único
-      // que puede faltar es la contraseña — se ofrece el restablecimiento aquí mismo.
+      // La cuenta de acceso existe en Firebase Auth pero no tiene registro en el panel.
+      // Antes daba igual: al iniciar sesión se creaba uno solo. Ya no —esa puerta era la que
+      // dejaba entrar a cualquiera que se registrara por su cuenta— así que sin este camino
+      // la persona quedaría atrapada: con contraseña válida y sin acceso, y el admin sin forma
+      // de dárselo. Se vincula a mano con su UID, que el admin ve en Firebase Console.
       setStatus("adminStatus",
-        `⚠ ${email} ya tiene cuenta de acceso — no hace falta recrearla. En cuanto esa persona inicie sesión, reaparece en este panel (como Operativo; ajusta rol y nombre aquí).`, "warn");
-      if(confirm(`${email} ya tiene cuenta de acceso en Firebase.\n\n¿Le enviamos un correo para RESTABLECER su contraseña y que pueda entrar?`)){
+        `⚠ ${email} ya tiene cuenta de acceso, pero no está dada de alta en el panel. Vincúlala con su UID.`, "warn");
+      const uid = (prompt(
+        `${email} ya tiene cuenta de acceso en Firebase, pero no aparece en este panel.\n\n`+
+        `Para darle acceso pega su UID de usuario.\n`+
+        `Lo encuentras en Firebase Console → Authentication → Users, en la columna "UID del usuario".\n\n`+
+        `Déjalo vacío si prefieres cancelar.`) || "").trim();
+      if(!uid){
+        setStatus("adminStatus", `Cancelado. ${email} sigue sin acceso.`, "warn");
+      } else if(!/^[A-Za-z0-9_-]{20,128}$/.test(uid)){
+        setStatus("adminStatus", `❌ Ese UID no tiene forma de UID de Firebase. Cópialo completo desde la consola.`, "error");
+      } else {
+        try{
+          await db.collection("usuarios").doc(uid).set({ email, nombre, rol, creadoPor: currentUser.uid, fechaCreacion: new Date().toISOString(), vinculado: true });
+          setStatus("adminStatus", `✅ ${nombre} (${email}) vinculado como ${rol}. Ya puede entrar con su contraseña de siempre.`, "ok");
+          document.getElementById("newUserNombre").value = "";
+          document.getElementById("newUserEmail").value = "";
+          document.getElementById("newUserPass").value = "";
+          cargarUsuarios();
+        }catch(e3){
+          setStatus("adminStatus", `❌ No se pudo vincular: ${e3.message||e3}`, "error");
+        }
+      }
+      if(confirm(`¿Le enviamos también a ${email} un correo para RESTABLECER su contraseña?`)){
         try{ await auth.sendPasswordResetEmail(email); setStatus("adminStatus", `✅ Correo de restablecimiento enviado a ${email}.`, "ok"); }
         catch(e2){ setStatus("adminStatus", `❌ No se pudo enviar el restablecimiento: ${e2.message||e2}`, "error"); }
       }
@@ -9957,7 +10006,7 @@ async function cambiarRol(uid, nuevoRol) {
 }
 
 async function eliminarUsuario(uid, email) {
-  if(!confirm(`¿Quitar a ${email} del panel?\n\nNota: su cuenta de acceso sigue existiendo en Firebase — si vuelve a iniciar sesión, reaparece como Operativo. Para bloquear el acceso de verdad: Firebase Console → Authentication → inhabilitar usuario.`)) return;
+  if(!confirm(`¿Quitar a ${email} del panel?\n\nA partir de ahora esto SÍ le corta el acceso: sin registro aquí no puede leer ni escribir nada, aunque su contraseña siga sirviendo.\n\nSu cuenta de acceso sigue existiendo en Firebase. Para borrarla del todo: Firebase Console → Authentication → eliminar usuario.\n\nSi lo quitas por error, vuelves a darlo de alta con el formulario (te va a pedir su UID).`)) return;
   try {
     await db.collection("usuarios").doc(uid).delete();
     setStatus("adminStatus", `✅ ${email} eliminado.`, "ok");

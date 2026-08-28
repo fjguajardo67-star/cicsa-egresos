@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX"];
+const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA"];
 
 
@@ -105,6 +105,7 @@ const FUNCS = [
   "planIdentificacion", "_identSugerida", "_indiceNombresCatalogo", "decidirDestinoIdent",
   "resumenGmail", "_firmaEstado", "textoSync", "avisoGastoFueraDeVista",
   "cortesManualesSospechosos", "egresosExcluidos", "folioDeIgnorado", "_unirIgnorados",
+  "puedeEntrar",
   "todosLosCortesNoContables",
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
@@ -1816,6 +1817,31 @@ t("excluir los siete deja el ingreso en los $430,054 de los cortes importados", 
   close(S.todosLosCortes().reduce((t, c) => t + c.monto, 0), 430054, 0.01);
   close(S.todosLosCortesNoContables().reduce((t, c) => t + c.monto, 0), 446647, 0.01);
   assert.equal(S.state.weeks[0].cortes.length, 140, "no se borro ni uno: 133 + 7");
+});
+
+console.log("\n== acceso: tener sesion no es estar dado de alta ==");
+// El alta por correo de Firebase es un endpoint PUBLICO de Google y la llave del proyecto va
+// en index.html, que se sirve abierto: cualquiera puede crearse una cuenta sin invitacion.
+// Antes, al entrar sin registro se le creaba uno como "operativo" — y con el, lectura y
+// escritura de estado/cicsa, o sea de todo el dinero. Ahora sin registro no se entra.
+t("una cuenta dada de alta entra", () => {
+  assert.equal(S.puedeEntrar(true, "cualquierUid"), true);
+});
+t("una cuenta SIN registro no entra, aunque su contrasena sea valida", () => {
+  assert.equal(S.puedeEntrar(false, "uidDeAlguienQueSeRegistroSolo"), false);
+});
+// ADMIN_UID se declara con const, y un const de vm.runInContext queda en el ambito lexico
+// del contexto, NO como propiedad del sandbox: S.ADMIN_UID seria undefined. Las funciones si
+// aparecen (function es var-scoped), por eso S.puedeEntrar si existe. Se lee desde dentro.
+const ADMIN = vm.runInContext("ADMIN_UID", sandbox);
+t("el dueno entra por UID aunque le falte su registro: si no, nadie podria dar de alta a nadie", () => {
+  assert.ok(typeof ADMIN === "string" && ADMIN.length > 20, "ADMIN_UID salio de index.html");
+  assert.equal(S.puedeEntrar(false, ADMIN), true);
+});
+t("un uid parecido al del dueno NO pasa: la comparacion es exacta", () => {
+  assert.equal(S.puedeEntrar(false, ADMIN + "x"), false);
+  assert.equal(S.puedeEntrar(false, ADMIN.slice(0, -1)), false);
+  assert.equal(S.puedeEntrar(false, ADMIN.toLowerCase()), false);
 });
 
 console.log("\n== auditoría de caja: doble conteo de ingresos y egresos excluidos ==");
