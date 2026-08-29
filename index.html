@@ -1232,6 +1232,20 @@ body.snav-min .side-theme span { display:none; }
     <div class="card-title">🧹 Limpieza de datos — qué le falta al balance para ser real</div>
     <div id="limpiezaBody"></div>
   </div>
+  <div class="card" id="cardRepetidos" style="display:none;margin-bottom:16px;border:2px solid var(--red)">
+    <div class="card-title" style="color:var(--red)">👯 El mismo registro guardado en dos semanas<span id="repCount" class="dup-badge" style="background:#FFEBEE;color:var(--red);margin-left:8px"></span></div>
+    <div style="font-size:12.5px;color:var(--txt2);margin-bottom:12px">
+      No son dos capturas parecidas: es <strong>el mismo registro</strong>, con el mismo id, guardado
+      en más de una semana. Cuenta doble en todo —presupuesto, saldo, conciliación— y hasta ahora era
+      invisible, porque ninguna pantalla mostraba en qué semana vive cada renglón: en la lista se ven
+      dos filas idénticas y parecen dos capturas distintas.
+      <strong>Ábrelo en Gastos y borra la copia sobrante</strong>; queda una sola.
+    </div>
+    <div class="tbl-wrap"><table><thead><tr>
+      <th>Fecha</th><th>Proveedor</th><th>No. Factura</th><th>Semanas donde está</th>
+      <th style="text-align:right">Importe</th><th style="text-align:right">De más</th><th></th>
+    </tr></thead><tbody id="repBody"></tbody></table></div>
+  </div>
   <div class="card" id="cardImportes" style="display:none;margin-bottom:16px">
     <div class="card-title" style="color:var(--naranja)">💲 Importes que no cuadran con el CFDI<span id="imCount" class="dup-badge" style="background:#FFF3E0;margin-left:8px"></span></div>
     <div style="font-size:12.5px;color:var(--txt2);margin-bottom:12px">
@@ -1957,7 +1971,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-29-a";
+const APP_BUILD = "2026-08-29-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5905,6 +5919,24 @@ async function renderLimpieza(){
   const imp   = gastosConImporteDistinto(gastos, cfdis);
   const fech  = gastosConFechaDudosa(gastos, _gmailRevisados||[], todayStr(), cfdis);
   const dups  = (typeof duplicadosSospechosos==="function") ? (duplicadosSospechosos(gastos)||[]) : [];
+  // El mismo id en dos semanas. Va aquí y no en la lista de duplicados normales porque no es una
+  // captura repetida que haya que juzgar: es un solo registro contado dos veces, y la única
+  // salida es quitar la copia.
+  const reps  = (typeof gastosRepetidosPorId==="function") ? (gastosRepetidosPorId(gastos)||[]) : [];
+  const cardR = document.getElementById("cardRepetidos"), bodyR = document.getElementById("repBody");
+  if(cardR && bodyR){
+    cardR.style.display = reps.length ? "block" : "none";
+    const cR = document.getElementById("repCount"); if(cR) cR.textContent = reps.length;
+    bodyR.innerHTML = reps.map(r=>`<tr style="background:#FFF6F5">
+      <td style="white-space:nowrap">${esc(fmtDate(r.fecha)||"—")}</td>
+      <td><strong>${esc(r.proveedor||"—")}</strong></td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(r.factura||"(sin folio)")}</td>
+      <td style="font-size:11px;color:var(--txt2)">${r.semanas.map(s=>esc(s)).join(" · ")}</td>
+      <td class="amount-cell">${fmt(r.importe)}</td>
+      <td class="amount-cell" style="color:var(--red);font-weight:700">+${fmt(r.deMas)}</td>
+      <td style="text-align:right"><button class="btn btn-light" style="padding:4px 10px;font-size:11px;white-space:nowrap" onclick="verEnGastos('${escAttrJs(r.id)}')">✏️ Abrir en Gastos</button></td>
+    </tr>`).join("");
+  }
   const mComp = comp.reduce((s,x)=>s+(parseFloat(x.gasto.importe)||0),0);
   const mImp  = imp.reduce((s,x)=>s+x.diferencia,0);
   const total = comp.length+imp.length+fech.length+dups.length;
@@ -7434,13 +7466,20 @@ function renderConciliacion(r){
   // Contados de más: van aparte y CON el folio. Sin el folio a la vista, "Monto CICSA al doble"
   // se lee como un problema del comprobante y manda a revisar lo que está bien.
   const dups = r.duplicados||[];
+  // "2 registros" sin decir CUÁLES manda a buscarlos a mano por toda la app, y si uno de los dos
+  // está en otra semana o con la fecha tecleada distinta, no se encuentra. El panel tiene que
+  // poder enseñar su propia evidencia.
+  window._toggleSatDup = (i)=>{
+    const el = document.getElementById("satDupDet"+i);
+    if(el) el.style.display = (el.style.display === "none" ? "table-row" : "none");
+  };
   document.getElementById("satDuplicadosCard").style.display=dups.length>0?"block":"none";
   document.getElementById("satDupCount").textContent=dups.length;
   document.getElementById("satDuplicadosBody").innerHTML=dups.map(d=>{
     const c = d.clase||{};
     const accion = c.uniforme
       ? `<button class="btn btn-light" style="padding:4px 10px;font-size:11px" onclick="consolidarFacturaDividida('${escAttrJs(c.proveedor||"")}','${escAttrJs(c.folio||"")}')">🔗 Consolidar</button>`
-      : `<button class="btn btn-light" style="padding:4px 10px;font-size:11px" title="El folio se tecleó distinto en cada registro, así que hay que revisarlos a mano" onclick="showPage('reportes')">🔍 Revisar</button>`;
+      : `<button class="btn btn-light" style="padding:4px 10px;font-size:11px" title="Ver exactamente qué registros se contaron" onclick="_toggleSatDup(${i})">🔍 Ver los ${(d.gastos||[]).length} registros</button>`;
     return `<tr style="background:#FFF6F5">
       <td><strong>${esc(d.cfdi.proveedor||"—")}</strong></td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.folio||"—")}<div style="font-size:10px;color:var(--txt2)">${c.nGastos||0} registros</div></td>
@@ -7449,7 +7488,22 @@ function renderConciliacion(r){
       <td class="amount-cell">${fmt(d.capturado)}</td>
       <td class="amount-cell" style="color:var(--red);font-weight:700">+${fmt(c.excedente||0)}</td>
       <td style="font-size:11px;color:var(--txt2);max-width:280px">${esc(c.motivo||"")}</td>
-      <td style="white-space:nowrap">${accion}</td></tr>`;
+      <td style="white-space:nowrap">${accion}</td></tr>
+    <tr id="satDupDet${i}" style="display:none;background:#FFFDF7"><td colspan="8" style="padding:10px 14px">
+      <div style="font-size:11.5px;color:var(--txt2);margin-bottom:6px">Estos son los <strong>${(d.gastos||[]).length} registro(s)</strong> que se sumaron para llegar a ${fmt(d.capturado)}. Si alguno no debería estar, ábrelo en Gastos y corrígelo ahí.</div>
+      <table style="width:100%;font-size:11.5px"><thead><tr>
+        <th>Fecha</th><th>Proveedor</th><th>Categoría</th><th>Folio capturado</th><th>Semana</th><th style="text-align:right">Importe</th><th></th>
+      </tr></thead><tbody>
+      ${(d.gastos||[]).map(g=>`<tr>
+        <td style="white-space:nowrap">${esc(fmtDate(g.fecha)||"—")}</td>
+        <td>${esc(g.proveedor||"—")}</td>
+        <td>${esc(g._dividida?`🔀 Dividida (${(g._partidas||[]).length})`:(g.categoria||"—"))}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:10.5px">${esc(g.factura||"(sin folio)")}</td>
+        <td style="font-size:10.5px;color:var(--txt2)">${esc(g._weekLabel||"—")}</td>
+        <td class="amount-cell">${fmt(g.importe)}</td>
+        <td style="text-align:right"><button class="btn btn-light" style="padding:3px 8px;font-size:10.5px;white-space:nowrap" onclick="verEnGastos('${escAttrJs(g.id)}')">✏️ Abrir</button></td>
+      </tr>`).join("")}
+      </tbody></table></div></td></tr>`;
   }).join("");
   document.getElementById("satDiferenciasCard").style.display=r.diferencias.length>0?"block":"none";
   document.getElementById("satDifCount").textContent=r.diferencias.length;
@@ -7898,6 +7952,37 @@ function clasificarDiferenciaSAT(d){
       : `${gs.length} registros del mismo proveedor apuntan a este comprobante y suman más que él.`;
   return { tipo:"duplicado", motivo, uniforme, veces, exacto, nGastos: gs.length,
            proveedor: gs[0].proveedor || "", folio: gs[0].factura || "", excedente: Math.round((cap-total)*100)/100 };
+}
+
+// ¿El mismo registro está guardado en DOS semanas a la vez?
+// allGastosAllWeeks() es state.weeks.flatMap(...) sin deduplicar por id: la fusión entre
+// dispositivos (_unionPorId) deduplica DENTRO de cada semana, pero nada impide que el mismo id
+// acabe en dos. Cuando pasa, ese gasto se cuenta dos veces en TODO —presupuesto, saldo,
+// conciliación— y es invisible: ninguna pantalla mostraba en qué semana vive cada renglón, así
+// que en la lista se ven dos filas idénticas y parecen dos capturas distintas.
+// Es el candidato natural cuando la conciliación acusa un duplicado que a mano no aparece.
+function gastosRepetidosPorId(gastos){
+  const porId = new Map();
+  (gastos||[]).forEach(g=>{
+    if(!g || g.id == null) return;
+    const k = String(g.id);
+    if(!porId.has(k)) porId.set(k, []);
+    porId.get(k).push(g);
+  });
+  return [...porId.entries()]
+    .filter(([,gs])=>gs.length > 1)
+    .map(([id,gs])=>({
+      id,
+      veces: gs.length,
+      proveedor: gs[0].proveedor || "",
+      fecha: gs[0].fecha || "",
+      factura: gs[0].factura || "",
+      importe: parseFloat(gs[0].importe) || 0,
+      // De más = lo que sobra por estar repetido: n copias cuentan n veces, sobra (n-1).
+      deMas: (parseFloat(gs[0].importe)||0) * (gs.length - 1),
+      semanas: gs.map(x=>x._weekLabel || "(sin nombre)"),
+    }))
+    .sort((a,b)=>b.deMas - a.deMas);
 }
 
 function duplicadosSospechosos(gastos){

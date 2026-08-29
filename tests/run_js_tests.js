@@ -97,7 +97,7 @@ const FUNCS = [
   "normalizarParaComparar", "posibleMismoIngrediente", "esGastoEfectivo",
   "montoEfectivoGasto", "difImporteCaja", "_yaVinculadoAOtroFolio",
   "permisosDetalle", "claveFormaPago", "filtrarGastosPanel", "totalesPorFormaPago", "folioDuplicado",
-  "filasDetalleGastos",
+  "filasDetalleGastos", "gastosRepetidosPorId",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
@@ -2279,6 +2279,51 @@ t("un gasto nuevo de caja nace con montoCaja igual al importe", () => {
     _previosVacios(), "Diana", 1000);
   close(r.gastos[0].importe, 250.5, 0.01);
   close(r.gastos[0].montoCaja, 250.5, 0.01, "para el flujo de caja no hay que adivinar");
+});
+
+console.log("\n== el mismo registro guardado en dos semanas ==");
+// allGastosAllWeeks() es state.weeks.flatMap(...) SIN deduplicar por id. La fusion entre
+// dispositivos deduplica DENTRO de cada semana, pero nada impide que el mismo id acabe en dos.
+// Cuando pasa, ese gasto cuenta doble en todo y es invisible: ninguna pantalla mostraba en que
+// semana vive cada renglon, asi que se ven dos filas identicas y parecen dos capturas distintas.
+t("el mismo id en dos semanas se detecta, con las dos semanas nombradas", () => {
+  const g = { id:"g1", proveedor:"NUEVA WAL MART", factura:"ICAJG468220", fecha:"2026-07-24", importe:2456 };
+  const r = S.gastosRepetidosPorId([{...g, _weekLabel:"20 al 26 jul"}, {...g, _weekLabel:"27 jul al 02 ago"}]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].veces, 2);
+  close(r[0].deMas, 2456, 0.01, "una copia de mas cuenta una vez de mas");
+  assert.deepEqual(r[0].semanas, ["20 al 26 jul", "27 jul al 02 ago"], "hay que decir DONDE estan");
+});
+t("tres copias sobran dos", () => {
+  const g = { id:"g1", proveedor:"X", importe:100 };
+  const r = S.gastosRepetidosPorId([g,g,g]);
+  assert.equal(r[0].veces, 3);
+  close(r[0].deMas, 200, 0.01);
+});
+t("dos gastos distintos con el mismo folio NO son esto", () => {
+  // Eso es un duplicado de captura, que ya lo caza duplicadosSospechosos. Aqui solo entra el
+  // MISMO registro: mismo id. Confundirlos mandaria a borrar una captura legitima.
+  const r = S.gastosRepetidosPorId([
+    { id:"a", factura:"F-1", importe:100 },
+    { id:"b", factura:"F-1", importe:100 },
+  ]);
+  assert.deepEqual(r, []);
+});
+t("sin repetidos devuelve vacio, y no truena con basura", () => {
+  assert.deepEqual(S.gastosRepetidosPorId([{id:"a"},{id:"b"}]), []);
+  assert.deepEqual(S.gastosRepetidosPorId([null, undefined, {}]), []);
+  assert.deepEqual(S.gastosRepetidosPorId([]), []);
+  assert.deepEqual(S.gastosRepetidosPorId(null), []);
+});
+t("sale primero lo que mas dinero mete de mas", () => {
+  const a = { id:"a", importe:100 }, b = { id:"b", importe:9000 };
+  const r = S.gastosRepetidosPorId([a,a,b,b]);
+  assert.equal(r[0].id, "b", "lo caro primero: es lo que mas mueve el saldo");
+});
+t("una semana sin nombre se dice, no se calla", () => {
+  const g = { id:"g1", importe:10 };
+  const r = S.gastosRepetidosPorId([g, {...g}]);
+  assert.deepEqual(r[0].semanas, ["(sin nombre)", "(sin nombre)"]);
 });
 
 console.log("\n== un solo reporte: la forma en un lugar, el contenido en cada uno ==");
