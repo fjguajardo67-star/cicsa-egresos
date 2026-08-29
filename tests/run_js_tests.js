@@ -89,12 +89,13 @@ function extractConst(name) {
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
 const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS"];
-const CONSTS_OBJ = ["ORIGEN_ETIQUETA"];
+const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
 
 
 const FUNCS = [
   "normalizarParaComparar", "posibleMismoIngrediente", "esGastoEfectivo",
   "montoEfectivoGasto", "difImporteCaja", "_yaVinculadoAOtroFolio",
+  "permisosDetalle", "claveFormaPago", "filtrarGastosPanel", "totalesPorFormaPago", "folioDuplicado",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
@@ -2272,6 +2273,122 @@ t("un gasto nuevo de caja nace con montoCaja igual al importe", () => {
     _previosVacios(), "Diana", 1000);
   close(r.gastos[0].importe, 250.5, 0.01);
   close(r.gastos[0].montoCaja, 250.5, 0.01, "para el flujo de caja no hay que adivinar");
+});
+
+console.log("\n== la tabla de detalle: permisos como dato, no como HTML repetido ==");
+// La misma lista de gastos se pinta en tres pantallas, y cada una tenia su tabla escrita a mano.
+// Por eso los permisos quedaron repartidos al azar: categoria editable en dos, importe en una,
+// forma de pago en otra, y borrar —lo unico irreversible— en las tres.
+
+t("el modo edicion permite todo; el de lectura, nada que escriba", () => {
+  const e = S.permisosDetalle("edicion"), l = S.permisosDetalle("lectura");
+  ["proveedor","categoria","importe","folio","formaPago","borrar"].forEach(k=>{
+    assert.equal(e[k], true, "edicion deberia permitir "+k);
+    assert.equal(l[k], false, "lectura NO deberia permitir "+k);
+  });
+  assert.equal(l.verFactura, true, "ver la factura no escribe nada: se conserva en lectura");
+});
+t("un modo desconocido cae en lectura, no en edicion", () => {
+  // Si algun dia se teclea mal el modo, el error tiene que ser no poder editar — nunca poder
+  // borrar sin querer.
+  assert.equal(S.permisosDetalle("modo-que-no-existe").borrar, false);
+  assert.equal(S.permisosDetalle().borrar, false);
+});
+t("los permisos se devuelven como COPIA", () => {
+  const a = S.permisosDetalle("lectura");
+  a.borrar = true;
+  assert.equal(S.permisosDetalle("lectura").borrar, false, "tocar una copia no puede abrir permisos a las demas pantallas");
+});
+
+console.log("\n== forma de pago: filtrar y sumar por via ==");
+t("caja_cortes y efectivo son la misma via", () => {
+  // Es el mismo dinero saliendo del mismo cajon. Si el filtro los separara, buscar "efectivo"
+  // escondería la mitad.
+  assert.equal(S.claveFormaPago({ formaPago:"efectivo" }), "efectivo");
+  assert.equal(S.claveFormaPago({ formaPago:"caja_cortes" }), "efectivo");
+});
+t("formaPagoFinal gana sobre formaPago", () => {
+  // Es lo que quedo al liquidarlo, no lo que se penso al capturarlo.
+  assert.equal(S.claveFormaPago({ formaPago:"credito", formaPagoFinal:"efectivo" }), "efectivo");
+});
+t("un gasto sin forma de pago se puede buscar como tal", () => {
+  assert.equal(S.claveFormaPago({}), "sin");
+  const r = S.filtrarGastosPanel([{ id:"a", importe:10 }, { id:"b", importe:10, formaPago:"efectivo" }], { formaPago:"sin" });
+  assert.equal(r.length, 1); assert.equal(r[0].id, "a");
+});
+
+t("filtrar por efectivo trae tambien los de caja_cortes", () => {
+  const gs = [
+    { id:"a", importe:100, formaPago:"efectivo", categoria:"Gas" },
+    { id:"b", importe:200, formaPago:"caja_cortes", categoria:"Gas" },
+    { id:"c", importe:300, formaPago:"transferencia", categoria:"Gas" },
+  ];
+  assert.deepEqual(S.filtrarGastosPanel(gs, { formaPago:"efectivo" }).map(g=>g.id), ["a","b"]);
+  assert.deepEqual(S.filtrarGastosPanel(gs, { formaPago:"transferencia" }).map(g=>g.id), ["c"]);
+  assert.equal(S.filtrarGastosPanel(gs, {}).length, 3, "sin filtro no se esconde nada");
+});
+
+t("una factura DIVIDIDA aparece si el filtro casa con alguna de sus partidas", () => {
+  // Si no, filtrar por "Carnicos" esconderia facturas que si traen carnicos adentro.
+  const gs = [{ id:"d", importe:1000, categoria:"Dividida", formaPago:"efectivo",
+                _partidas:[{categoria:"Carnicos",importe:600},{categoria:"Abarrotes",importe:400}] }];
+  assert.equal(S.filtrarGastosPanel(gs, { categoria:"Carnicos" }).length, 1);
+  assert.equal(S.filtrarGastosPanel(gs, { categoria:"Tortilla" }).length, 0);
+});
+
+t("los dos filtros se combinan", () => {
+  const gs = [
+    { id:"a", importe:100, formaPago:"efectivo", categoria:"Gas" },
+    { id:"b", importe:100, formaPago:"transferencia", categoria:"Gas" },
+    { id:"c", importe:100, formaPago:"efectivo", categoria:"Hielo" },
+  ];
+  assert.deepEqual(S.filtrarGastosPanel(gs, { categoria:"Gas", formaPago:"efectivo" }).map(g=>g.id), ["a"]);
+});
+
+t("el total de efectivo usa lo que salio de la CAJA, no el importe fiscal", () => {
+  // El ticket del SAMS salio por 5,124 y su factura dice 5,073.99. En la columna de efectivo
+  // tiene que ir el dinero, o el total no cuadra contra el conteo fisico.
+  const t2 = S.totalesPorFormaPago([
+    { importe:5073.99, montoCaja:5124, formaPago:"caja_cortes" },
+    { importe:1000, formaPago:"transferencia" },
+  ]);
+  close(t2.efectivo, 5124, 0.01);
+  close(t2.transferencia, 1000, 0.01);
+  close(t2.total, 6124, 0.01);
+});
+t("totalesPorFormaPago no truena con una lista vacia o con basura", () => {
+  const t3 = S.totalesPorFormaPago([null, undefined]);
+  close(t3.total, 0, 0.01);
+  close(S.totalesPorFormaPago([]).total, 0, 0.01);
+});
+
+console.log("\n== editar el folio a mano: la puerta por la que entra un duplicado ==");
+t("teclear el folio de otra factura del mismo proveedor se detecta", () => {
+  const gs = [
+    { id:"1", proveedor:"NUEVA WAL MART DE MEXICO", factura:"ICAJG468220", fecha:"2026-07-24", importe:2456 },
+    { id:"2", proveedor:"NUEVA WAL MART", factura:"", fecha:"2026-07-24", importe:2476 },
+  ];
+  const d = S.folioDuplicado(gs, "2", "NUEVA WAL MART", "ICAJG468220");
+  assert.ok(d && d.id === "1");
+});
+t("el propio gasto no cuenta como duplicado de si mismo", () => {
+  const gs = [{ id:"1", proveedor:"X", factura:"F-1", importe:100 }];
+  assert.equal(S.folioDuplicado(gs, "1", "X", "F-1"), null);
+});
+t("el mismo folio de OTRO proveedor no es duplicado", () => {
+  // Dos proveedores distintos numeran sus facturas por su cuenta: el 001 de uno no tiene nada
+  // que ver con el 001 del otro.
+  const gs = [{ id:"1", proveedor:"POLLO BAL", factura:"00025", importe:100 }];
+  assert.equal(S.folioDuplicado(gs, "2", "OFFICE DEPOT", "00025"), null);
+});
+t("dejar el folio vacio no dispara la alerta", () => {
+  const gs = [{ id:"1", proveedor:"X", factura:"F-1", importe:100 }];
+  assert.equal(S.folioDuplicado(gs, "2", "X", ""), null);
+  assert.equal(S.folioDuplicado(gs, "2", "X", "   "), null);
+});
+t("la comparacion ignora guiones y mayusculas", () => {
+  const gs = [{ id:"1", proveedor:"POLLO BAL", factura:"PBAL-32078", importe:100 }];
+  assert.ok(S.folioDuplicado(gs, "2", "POLLO BAL", "pbal32078"));
 });
 
 console.log("\n== importe fiscal vs. efectivo que salio de la caja ==");

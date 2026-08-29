@@ -1040,10 +1040,19 @@ body.snav-min .side-theme span { display:none; }
     </div>
     <div class="status" id="importStatus"></div>
     <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+      <select id="filtroformapago" onchange="renderGastos()" title="Revisar solo lo pagado por una vía" style="padding:7px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;margin-right:8px">
+        <option value="">Todas las formas de pago</option>
+        <option value="efectivo">💵 Efectivo Caja</option>
+        <option value="transferencia">🏦 Transferencia</option>
+        <option value="credito">📋 Crédito</option>
+        <option value="cheque">📝 Cheque</option>
+        <option value="sin">— Sin forma de pago</option>
+      </select>
       <select id="filtrocat" onchange="renderGastos()" style="padding:7px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit">
         <option value="">Todas las categorías</option>
       </select>
       <div style="margin-left:auto;font-size:13px;color:var(--txt2);display:flex;align-items:center;gap:16px">
+        <span id="desgloseFormaPago" style="font-size:12px;color:var(--txt2)"></span>
         <span>💵 Total efectivo: <strong id="totalEfectivoSemana" style="font-family:'JetBrains Mono',monospace;color:var(--vd)">$0.00</strong></span>
         <span>Total semana: <strong id="totalSemana" style="font-family:'JetBrains Mono',monospace;color:var(--vd);font-size:16px">$0.00</strong></span>
       </div>
@@ -1052,7 +1061,7 @@ body.snav-min .side-theme span { display:none; }
       <table>
         <thead><tr>
           <th style="width:50px">Respaldo</th><th style="width:90px">Fecha</th><th>Proveedor</th><th style="width:150px">Categoría</th>
-          <th style="width:100px">No. Factura</th><th style="width:110px;text-align:right">Importe</th>
+          <th style="width:100px">No. Factura</th><th style="width:120px">Forma de pago</th><th style="width:110px;text-align:right">Importe</th>
           <th style="width:70px"></th>
         </tr></thead>
         <tbody id="gastosBody"></tbody>
@@ -1948,7 +1957,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-l";
+const APP_BUILD = "2026-08-28-m";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4161,16 +4170,27 @@ function renderGastos(){
     fcatEl.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${esc(c)}" ${c===prev?"selected":""}>${esc(c)}</option>`).join("");
   }
   const filtroValFinal=document.getElementById("filtrocat")?.value||"";
-  // Una factura dividida no tiene una sola categoría — si el filtro coincide con alguna de sus
-  // partidas, la fila completa (con su importe total) sigue apareciendo bajo ese filtro.
-  const filtrados=filtroValFinal?gastos.filter(g=>g.categoria===filtroValFinal||(g._partidas||[]).some(p=>p.categoria===filtroValFinal)):gastos;
+  const filtroFP=document.getElementById("filtroformapago")?.value||"";
+  const filtrados=filtrarGastosPanel(gastos, { categoria:filtroValFinal, formaPago:filtroFP });
   const total=filtrados.reduce((s,g)=>s+g.importe,0);
   document.getElementById("totalSemana").textContent=fmt(total);
   document.getElementById("totalEfectivoSemana").textContent=fmt(filtrados.reduce((s,g)=>s+montoEfectivoGasto(g),0));
+  // El desglose por vía es el número que se busca de verdad al revisar pagos: cuánto salió en
+  // efectivo y cuánto por banco. Tenerlo que sacar sumando renglones a mano es lo que hacía que
+  // nadie lo revisara.
+  const desgEl=document.getElementById("desgloseFormaPago");
+  if(desgEl){
+    const tfp=totalesPorFormaPago(filtrados);
+    const partes=["efectivo","transferencia","credito","cheque","sin"]
+      .filter(k=>Math.abs(tfp[k])>0.005)
+      .map(k=>`${FORMA_PAGO_ETIQUETA[k]||k} ${fmt(tfp[k])}`);
+    desgEl.textContent = partes.length>1 ? partes.join("  ·  ") : "";
+  }
   const tbody=document.getElementById("gastosBody");
   tbody.innerHTML="";
   document.getElementById("gastosEmpty").style.display=filtrados.length===0?"block":"none";
   const pendientesThumb=[];
+  const P = permisosDetalle("edicion");
   filtrados.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{
     const tr=document.createElement("tr");
     if(g.respaldo){ window._thumbMap=window._thumbMap||{}; window._thumbMap[g.id]={src:g.respaldo,info:`${g.proveedor}  ·  ${fmt(g.importe)}  ·  ${fmtDate(g.fecha)}`}; }
@@ -4189,20 +4209,17 @@ function renderGastos(){
       // Sin respaldo el recuadro no tenía onclick: el clic no hacía NADA y parecía que el
       // visor estaba roto. Ahora explica por qué esa factura no tiene imagen.
       :`<div class="thumb-wrap" style="cursor:pointer" title="Sin factura adjunta — clic para saber por qué" onclick="verFactura('${safeId}')"><span class="thumb-none">📄</span></div>`;
-    const catOpts=catsActuales().map(c=>`<option value="${esc(c)}" ${c===g.categoria?"selected":""}>${esc(c)}</option>`).join("");
-    const catCell=g._dividida
-      ?`<span class="cat-badge" style="cursor:pointer" title="Editar división por categoría" onclick="abrirEditPartidas('${safeId}')">🔀 Dividida (${(g._partidas||[]).length}) ✏️</span>`
-      :`<select style="border:none;background:transparent;font-size:12px;color:var(--vd);font-weight:600;cursor:pointer;width:100%" onchange="editarGasto('${g.id}','categoria',this.value)">${catOpts}</select>`;
+    // Gastos es la pantalla de corrección: permisos completos. Auditoría usará las MISMAS celdas
+    // con permisosDetalle("lectura") y ahí se caen solas, sin tener que quitar botones a mano.
     tr.innerHTML=`
       <td>${thumbHtml}</td>
       <td>${fmtDate(g.fecha)}</td>
-      <td><input style="border:none;background:transparent;font-size:13px;font-weight:600;color:var(--txt);width:100%" value="${esc(g.proveedor)}" title="${esc(g.proveedor)}${g.notas?' — '+esc(g.notas):''}" onchange="editarGasto('${g.id}','proveedor',this.value)"></td>
-      <td>${catCell}</td>
-      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${esc(g.factura||"—")}</td>
-      <td class="amount-cell"><input style="border:none;background:transparent;font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--vm);text-align:right;width:90px" type="number" step="0.01" value="${g.importe}" onchange="editarGasto('${g.id}','importe',parseFloat(this.value)||0)" title="Editar importe"></td>
-      <td style="display:flex;gap:4px;align-items:center;padding:6px 8px">
-        <button class="del-btn" onclick="eliminarGasto('${g.id}')" title="Eliminar gasto">🗑️</button>
-      </td>`;
+      <td>${celdaProveedor(g, P)}</td>
+      <td>${celdaCategoria(g, P)}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${celdaFolio(g, P)}</td>
+      <td>${celdaFormaPago(g, P)}</td>
+      <td class="amount-cell">${celdaImporte(g, P)}</td>
+      <td style="display:flex;gap:4px;align-items:center;padding:6px 8px">${celdaAcciones(g, P)}</td>`;
     tbody.appendChild(tr);
   });
   pendientesThumb.forEach(p=>cargarThumbReal(p.id, p.url, p.elId));
@@ -10677,6 +10694,143 @@ const FORMA_PAGO_COLORES = {
   transferencia: { bg:"#E3F2FD", border:"#42A5F5", color:"#0D47A1" },
   credito:       { bg:"#FFF3E0", border:"#FB8C00", color:"#8A5300" }
 };
+// ═══════════════════════════════════════════════════════════════════════════
+// LA TABLA DE DETALLE — una sola, con los permisos como DATO
+// ═══════════════════════════════════════════════════════════════════════════
+// La misma lista de gastos se pinta en Gastos, en Seguimiento y en Auditoría, y hasta ahora cada
+// una tenía su tabla escrita a mano. De ahí que los permisos quedaran repartidos al azar: la
+// categoría se editaba en dos pantallas, el importe en una, la forma de pago en otra, y borrar
+// —la única acción irreversible— en las tres. Nadie lo decidió así; cada botón se agregó donde
+// estaba parada la persona que lo necesitó.
+// Con los permisos como dato, la pantalla DECLARA qué deja hacer y no hay que ir quitando botones
+// de tres HTML distintos ni acordarse de cuál era cuál.
+const PERMISOS_DETALLE = {
+  // Gastos: la única que edita y la única que borra. Es también la única que enseña la factura,
+  // y eso no es casualidad — corregir un importe sin ver el comprobante es adivinar.
+  edicion: { proveedor:true,  categoria:true,  importe:true,  folio:true,  formaPago:true,  borrar:true,  verFactura:true,  divididas:true  },
+  // Auditoría: revisión del estado. Ve todo, no toca nada.
+  lectura: { proveedor:false, categoria:false, importe:false, folio:false, formaPago:false, borrar:false, verFactura:true,  divididas:false },
+};
+function permisosDetalle(modo){ return { ...(PERMISOS_DETALLE[modo] || PERMISOS_DETALLE.lectura) }; }
+
+// La forma de pago EFECTIVA de un gasto, normalizada a una sola clave.
+// formaPagoFinal gana sobre formaPago: es lo que quedó al liquidarlo, no lo que se pensó al
+// capturarlo. Y "caja_cortes" y "efectivo" son el mismo dinero saliendo del mismo cajón, así que
+// filtrar por "efectivo" tiene que traer los dos o el filtro miente por omisión.
+function claveFormaPago(g){
+  const fp = (g && (g.formaPagoFinal || g.formaPago)) || "";
+  if(fp === "efectivo" || fp === "caja_cortes") return "efectivo";
+  return fp || "sin";
+}
+const FORMA_PAGO_ETIQUETA = { efectivo:"💵 Efectivo Caja", transferencia:"🏦 Transferencia",
+                              credito:"📋 Crédito", cheque:"📝 Cheque", sin:"— Sin forma de pago" };
+
+// Filtro del detalle. Puro: la pantalla solo le pasa lo que el usuario eligió.
+// Una factura dividida no tiene UNA categoría — si el filtro coincide con alguna de sus partidas,
+// la fila completa sigue apareciendo. Si no, filtrar por "Cárnicos" escondería facturas que sí
+// tienen cárnicos dentro.
+function filtrarGastosPanel(gastos, f){
+  const cat = (f && f.categoria) || "";
+  const fp  = (f && f.formaPago) || "";
+  return (gastos||[]).filter(g=>{
+    if(!g) return false;
+    if(cat && !(g.categoria === cat || (g._partidas||[]).some(p=>p.categoria === cat))) return false;
+    if(fp && claveFormaPago(g) !== fp) return false;
+    return true;
+  });
+}
+
+// Cuánto se pagó por cada vía. Para efectivo se usa montoEfectivoGasto —lo que de verdad salió de
+// la caja, que puede diferir del importe de la factura—; para el resto, el importe del
+// comprobante. Sumar el importe fiscal en la columna de efectivo daría un total que no cuadra
+// contra el conteo físico, que es justo para lo que sirve esta cifra.
+function totalesPorFormaPago(gastos){
+  const t = { efectivo:0, transferencia:0, credito:0, cheque:0, sin:0, total:0 };
+  (gastos||[]).forEach(g=>{
+    if(!g) return;
+    const k = claveFormaPago(g);
+    const m = (k === "efectivo") ? montoEfectivoGasto(g) : (parseFloat(g.importe)||0);
+    if(t[k] === undefined) t[k] = 0;
+    t[k] += m; t.total += m;
+  });
+  return t;
+}
+
+// ¿Ese folio ya lo tiene otra factura del mismo proveedor? Es la defensa al editar el folio a
+// mano: teclear el de otra factura crea exactamente el duplicado que la conciliación tarda días
+// en cazar, y lo crea sin dejar rastro de que fue un dedo.
+function folioDuplicado(gastos, id, proveedor, folio){
+  const f = _dupFolioCanon(folio);
+  if(!f) return null;
+  return (gastos||[]).find(g => g && String(g.id) !== String(id)
+    && _dupProvParecidos(g.proveedor, proveedor)
+    && _dupFolioCanon(g.factura) === f) || null;
+}
+
+// ── Celdas del detalle. Cada una decide sola si es editable o no ───────────
+function celdaProveedor(g, p){
+  const t = `${esc(g.proveedor||"")}${g.notas?" — "+esc(g.notas):""}`;
+  return p.proveedor
+    ? `<input style="border:none;background:transparent;font-size:13px;font-weight:600;color:var(--txt);width:100%" value="${esc(g.proveedor)}" title="${t}" onchange="editarGasto('${escAttrJs(g.id)}','proveedor',this.value)">`
+    : `<strong title="${t}">${esc(g.proveedor||"—")}</strong>`;
+}
+function celdaCategoria(g, p){
+  if(g._dividida){
+    // Una dividida no tiene UNA categoría: su desglose se edita en su propio editor, no aquí.
+    return p.divididas
+      ? `<span class="cat-badge" style="cursor:pointer" title="Editar división por categoría" onclick="abrirEditPartidas('${escAttrJs(g.id)}')">🔀 Dividida (${(g._partidas||[]).length}) ✏️</span>`
+      : `<span class="cat-badge">🔀 Dividida (${(g._partidas||[]).length})</span>`;
+  }
+  if(!p.categoria) return `<span class="cat-badge">${esc(g.categoria||"—")}</span>`;
+  const opts = catsActuales().map(c=>`<option value="${esc(c)}" ${c===g.categoria?"selected":""}>${esc(c)}</option>`).join("");
+  return `<select style="border:none;background:transparent;font-size:12px;color:var(--vd);font-weight:600;cursor:pointer;width:100%" onchange="editarGasto('${escAttrJs(g.id)}','categoria',this.value)">${opts}</select>`;
+}
+function celdaFolio(g, p){
+  // Editar el folio no existía en ninguna pantalla, y sin eso no había forma de arreglar un
+  // gasto capturado desde la conciliación SAT: ese botón guardaba el UUID en el campo Factura,
+  // así que la factura y su duplicado no se parecían en nada y nada los cruzaba.
+  return p.folio
+    ? `<input style="border:none;background:transparent;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2);width:100%" value="${esc(g.factura||"")}" placeholder="sin folio" title="Editar el No. de factura" onchange="editarFolioGasto('${escAttrJs(g.id)}',this.value)">`
+    : `${esc(g.factura||"—")}`;
+}
+function celdaImporte(g, p){
+  const dif = (typeof difImporteCaja==="function") ? difImporteCaja(g) : 0;
+  const nota = dif ? `<div style="font-size:10px;color:var(--txt2);font-weight:400">caja ${fmt(montoEfectivoGasto(g))}</div>` : "";
+  return p.importe
+    ? `<input style="border:none;background:transparent;font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--vm);text-align:right;width:90px" type="number" step="0.01" value="${g.importe}" onchange="editarGasto('${escAttrJs(g.id)}','importe',parseFloat(this.value)||0)" title="Editar importe">${nota}`
+    : `${fmt(g.importe)}${nota}`;
+}
+function celdaFormaPago(g, p){
+  if(p.formaPago) return formaPagoSelectHtml(g);
+  return `<span style="font-size:12px;color:var(--txt2)">${esc(formaPagoLabel(g))}</span>`;
+}
+function celdaAcciones(g, p){
+  return p.borrar
+    ? `<button class="del-btn" onclick="eliminarGasto('${escAttrJs(g.id)}')" title="Eliminar gasto">🗑️</button>`
+    : "";
+}
+
+// Cambiar el folio a mano, con la única defensa que tiene sentido aquí: avisar si ese folio ya lo
+// trae otra factura del mismo proveedor. No se bloquea —hay notas de crédito y refacturaciones
+// que legítimamente comparten folio— pero no puede pasar de noche.
+function editarFolioGasto(id, valor){
+  const v = String(valor||"").trim();
+  let actual = null;
+  (state.weeks||[]).forEach(w=>(w.gastos||[]).forEach(g=>{ if(String(g.id)===String(id)) actual = g; }));
+  if(!actual) return;
+  if(v === String(actual.factura||"").trim()) return;   // no cambió nada
+  if(v){
+    const dup = folioDuplicado(allGastosAllWeeks(), id, actual.proveedor, v);
+    if(dup && !confirm(`Ese folio ya lo tiene otra factura de ${dup.proveedor}:\n\n`+
+        `${fmtDate(dup.fecha)} · ${fmt(dup.importe)}\n\n`+
+        `Si es la misma factura, con esto quedan dos registros del mismo comprobante y el gasto `+
+        `se cuenta dos veces. ¿Guardarlo de todos modos?`)){
+      renderGastos(); return;
+    }
+  }
+  editarGasto(id, "factura", v);
+}
+
 function formaPagoSelectHtml(g){
   const fp=g.formaPagoFinal||g.formaPago, esEfectivoSel=fp==="efectivo"||fp==="caja_cortes";
   const key=esEfectivoSel?"efectivo":(fp==="transferencia"?"transferencia":(fp==="credito"?"credito":null));
@@ -10691,7 +10845,22 @@ function cambiarFormaPagoReporte(id, valor){
   let gg=null;
   state.weeks.forEach(w=>{ const g=(w.gastos||[]).find(x=>x.id===id); if(g) gg=g; });
   if(!gg) return;
+  // Si el gasto viene de un egreso del concentrado, cambiarle la forma de pago a mano contradice
+  // lo que dice Manejo de Cortes: ahí ese dinero SÍ salió de la caja. Se avisa antes de tocarlo.
+  if(gg._folioEgreso && !confirm(
+      `Este gasto está vinculado al folio ${gg._folioEgreso} de Manejo de Cortes, que dice que salió `+
+      `de la caja en efectivo.\n\nCambiarle la forma de pago va a descuadrar la conciliación de Caja `+
+      `por ${fmt(montoEfectivoGasto(gg))}.\n\n¿Continuar?`)){
+    if(document.getElementById("gastosBody")) renderGastos();
+    if(document.getElementById("reporteContent")) renderReporteActual();
+    return;
+  }
   gg.formaPago=valor;
+  // formaPagoFinal GANA sobre formaPago en todo lo que lee el efectivo (esGastoEfectivo,
+  // formaPagoLabel, claveFormaPago). Si no se actualiza, el desplegable parecía no servir en los
+  // gastos que ya traían un final —los vinculados y los liquidados desde Pagos—: se elegía otra
+  // cosa y la pantalla seguía mostrando lo mismo.
+  if(gg.formaPagoFinal) gg.formaPagoFinal = valor;
   if(valor==="credito"){
     gg.estadoPago="pendiente";
     if(!gg.vencimiento){ const d=new Date(); d.setDate(d.getDate()+30); gg.vencimiento=fechaLocalStr(d); }
@@ -10699,7 +10868,8 @@ function cambiarFormaPagoReporte(id, valor){
     gg.estadoPago="pagado";
   }
   save();
-  renderReporteActual();
+  if(document.getElementById("gastosBody")) renderGastos();
+  if(document.getElementById("reporteContent")) renderReporteActual();
 }
 
 function guardarCorte() {
