@@ -1298,7 +1298,7 @@ body.snav-min .side-theme span { display:none; }
       <div class="card-title" style="font-size:14px">📋 Detalle completo</div>
       <div class="tbl-wrap">
         <table>
-          <thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th>No. Factura</th><th>Forma de pago</th><th style="text-align:right">Importe</th><th style="text-align:center">Acción</th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th>No. Factura</th><th>Forma de pago</th><th style="text-align:right">Importe</th><th style="text-align:center">Ir a corregir</th></tr></thead>
           <tbody id="rBodyDetalle"></tbody>
         </table>
       </div>
@@ -1957,7 +1957,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-m";
+const APP_BUILD = "2026-08-29-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4169,6 +4169,20 @@ function renderGastos(){
     const prev=fcatEl.value;
     fcatEl.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option value="${esc(c)}" ${c===prev?"selected":""}>${esc(c)}</option>`).join("");
   }
+  // Un filtro pedido desde otra pantalla se aplica AQUÍ, ya con las opciones armadas.
+  if(_gastosFiltroPendiente){
+    const _fp = _gastosFiltroPendiente; _gastosFiltroPendiente = null;
+    if(fcatEl && _fp.categoria !== undefined){
+      // Si la categoría pedida no está entre las del periodo, se agrega: sin la opción el
+      // navegador cae a "todas" y la pantalla muestra TODO, justo lo contrario de lo que se pidió.
+      if(_fp.categoria && !cats.includes(_fp.categoria)){
+        fcatEl.innerHTML += `<option value="${esc(_fp.categoria)}">${esc(_fp.categoria)}</option>`;
+      }
+      fcatEl.value = _fp.categoria || "";
+    }
+    const _fpEl = document.getElementById("filtroformapago");
+    if(_fpEl && _fp.formaPago !== undefined) _fpEl.value = _fp.formaPago || "";
+  }
   const filtroValFinal=document.getElementById("filtrocat")?.value||"";
   const filtroFP=document.getElementById("filtroformapago")?.value||"";
   const filtrados=filtrarGastosPanel(gastos, { categoria:filtroValFinal, formaPago:filtroFP });
@@ -4193,6 +4207,12 @@ function renderGastos(){
   const P = permisosDetalle("edicion");
   filtrados.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{
     const tr=document.createElement("tr");
+    // El gasto al que se saltó desde otra pantalla se marca: en una lista de un día son pocos
+    // renglones, pero saber cuál es evita corregir el de al lado.
+    if(_gastosResaltar && String(g.id) === _gastosResaltar){
+      tr.style.background = "#FFF8E1";
+      tr.style.outline = "2px solid var(--do)";
+    }
     if(g.respaldo){ window._thumbMap=window._thumbMap||{}; window._thumbMap[g.id]={src:g.respaldo,info:`${g.proveedor}  ·  ${fmt(g.importe)}  ·  ${fmtDate(g.fecha)}`}; }
     const safeId=g.id.replace(/'/g,"\\'");
     const esImg=g._respaldoUrl && esImagenRespaldo(g._respaldoUrl);
@@ -5384,11 +5404,37 @@ function renderSeguimientoVista(gastos, label){
 // EXPORTS  — usan el MISMO periodo compartido que la pantalla de Seguimiento (por fecha real),
 // para que el Excel/PDF nunca muestre datos distintos a los que ves en la vista.
 // ═══════════════════════════════════════════════════════════════════════════
+// ── La hoja de detalle de los Excel ─────────────────────────────────────────
+// Los dos Excel traían su propia hoja "Detalle" de los mismos gastos, y por escribirla dos veces
+// acabaron con columnas distintas: el del periodo no llevaba la forma de pago y el de Auditoría
+// no llevaba las notas. Quien comparaba los dos archivos veía dos verdades del mismo mes.
+// Una sola hoja, con todas las columnas, para los dos.
+const COLS_DETALLE_GASTOS   = ["Fecha","Proveedor","Categoría","No. Factura","Forma de pago","Importe","Notas"];
+const ANCHOS_DETALLE_GASTOS = [{wch:12},{wch:34},{wch:26},{wch:16},{wch:20},{wch:14},{wch:30}];
+
+// Las filas, en orden cronológico. Pura y probada: es lo que se entrega a contabilidad, y el
+// orden importa tanto como las cifras — un detalle que salta en el tiempo no se puede seguir.
+function filasDetalleGastos(gastos){
+  return (gastos||[]).filter(Boolean).slice()
+    .sort((a,b)=> (a.fecha||"") < (b.fecha||"") ? -1 : (a.fecha||"") > (b.fecha||"") ? 1 : 0)
+    .map(g=>[ g.fecha||"", g.proveedor||"", g.categoria||"", g.factura||"—",
+              (typeof formaPagoLabel==="function" ? formaPagoLabel(g) : ""),
+              parseFloat(g.importe)||0, g.notas||"" ]);
+}
+function hojaDetalleGastos(wb, gastos, titulo, subtitulo){
+  const filas = filasDetalleGastos(gastos);
+  const total = filas.reduce((s,f)=>s+(parseFloat(f[5])||0),0);
+  const ws = XLSX.utils.aoa_to_sheet([[titulo||"CICSA — Egresos"],[subtitulo||""],[],
+    COLS_DETALLE_GASTOS, ...filas, [], ["","","","","TOTAL",total]]);
+  ws["!cols"] = ANCHOS_DETALLE_GASTOS;
+  XLSX.utils.book_append_sheet(wb, ws, "Detalle");
+  return ws;
+}
+
 function exportarExcel(){
   const p=getPeriodoSP(), gastos=gastosDelPeriodoSP(), totals=totalesPorCatPeriodo(), wb=XLSX.utils.book_new();
   const _fPresup=factorPresupuestoPeriodo(p).factor;
-  const det=[["CICSA — Control de Egresos"],[`Periodo: ${p.label}`],[],["Fecha","Proveedor","Categoría","No. Factura","Importe","Notas"],...gastos.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).map(g=>[g.fecha,g.proveedor,g.categoria,g.factura,g.importe,g.notas]),[],["","","","TOTAL",gastos.reduce((s,g)=>s+g.importe,0)]];
-  const ws1=XLSX.utils.aoa_to_sheet(det); ws1["!cols"]=[{wch:12},{wch:30},{wch:26},{wch:14},{wch:14},{wch:30}]; XLSX.utils.book_append_sheet(wb,ws1,"Detalle");
+  hojaDetalleGastos(wb, gastos, "CICSA — Control de Egresos", `Periodo: ${p.label}`);
   const totalPresup=Object.values(state.budget).reduce((s,v)=>s+(parseFloat(v)||0),0)*_fPresup, totalGast=gastos.reduce((s,g)=>s+g.importe,0);
   const sum=[["CICSA — Resumen"],[`Periodo: ${p.label}`],[],["Categoría","Presupuesto","Gasto Real","Diferencia","Estado"],...[...new Set([...Object.keys(totals),...catsActuales()])].map(cat=>{const pr=presupCatPeriodo(cat,_fPresup),g=totals[cat]||0;return[cat,pr,g,pr-g,pr>0&&g>pr?"EXCEDIDO":"OK"];}),[], ["","TOTAL",totalPresup,totalGast,totalPresup-totalGast]];
   const ws2=XLSX.utils.aoa_to_sheet(sum); ws2["!cols"]=[{wch:28},{wch:14},{wch:14},{wch:14},{wch:12}]; XLSX.utils.book_append_sheet(wb,ws2,"Resumen");
@@ -5396,78 +5442,170 @@ function exportarExcel(){
 }
 
 // CAMBIO 1: PDF con semáforo de colores
-function exportarPDF(){
-  const {jsPDF}=window.jspdf, p=getPeriodoSP(), gastos=gastosDelPeriodoSP(), totals=totalesPorCatPeriodo();
-  const _fPresupPdf=factorPresupuestoPeriodo(p).factor;   // `p` se re-usa dentro del bucle
-  const wk={label:p.label};
-  const totalGlobal=gastos.reduce((s,g)=>s+g.importe,0), totalPresup=Object.values(state.budget).reduce((s,v)=>s+(parseFloat(v)||0),0)*_fPresupPdf;
-  const doc=new jsPDF({unit:"mm",format:"letter"});
-  const PW=215.9,MAR=15,W=PW-MAR*2; let Y=MAR;
-  const VD=[45,94,30],GO=[212,160,23],ME=[74,140,42],CL=[240,247,236],RED=[192,57,43],GRN=[46,139,87];
-  doc.setFillColor(...VD); doc.rect(0,0,PW,28,"F");
-  doc.setFillColor(...GO); doc.rect(0,28,PW,3,"F");
-  doc.setTextColor(...GO); doc.setFontSize(20); doc.setFont("helvetica","bold");
-  doc.text("CICSA — Control de Egresos",MAR,16);
-  doc.setTextColor(180,230,180); doc.setFontSize(9); doc.setFont("helvetica","normal");
-  doc.text(`Semana: ${wk?.label||""} | Generado: ${new Date().toLocaleDateString("es-MX")}`,MAR,23);
-  Y=40;
-  const cards=[["Total Gastado",fmt(totalGlobal)],["Presupuesto",fmt(totalPresup)],["Diferencia",fmt(totalPresup-totalGlobal)],["Registros",String(gastos.length)]];
-  const cw=W/4;
-  cards.forEach(([lbl,val],i)=>{
-    const x=MAR+i*cw; doc.setFillColor(...CL); doc.roundedRect(x,Y,cw-3,18,2,2,"F");
-    doc.setTextColor(...VD); doc.setFontSize(7); doc.setFont("helvetica","normal"); doc.text(lbl,x+4,Y+6);
-    doc.setFontSize(12); doc.setFont("helvetica","bold"); doc.text(val,x+4,Y+14);
-  });
-  Y+=25;
-  doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
-  doc.setTextColor(...GO); doc.setFontSize(7.5); doc.setFont("helvetica","bold");
-  doc.text("CATEGORÍA",MAR+3,Y+4.5); doc.text("PRESUPUESTO",MAR+90,Y+4.5);
-  doc.text("REAL",MAR+120,Y+4.5); doc.text("DIFERENCIA",MAR+148,Y+4.5);
-  doc.text("ESTADO",MAR+178,Y+4.5); Y+=7;
-  Object.entries(totals).sort((a,b)=>b[1]-a[1]).forEach(([cat,val],i)=>{
-    if(Y>250){ doc.addPage(); Y=MAR; }
-    const p=presupCatPeriodo(cat,_fPresupPdf), over=p>0&&val>p;
-    doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,6.5,"F");
-    doc.setTextColor(...(over?RED:VD)); doc.setFontSize(7); doc.setFont("helvetica",over?"bold":"normal");
-    doc.text(cat,MAR+3,Y+4.5);
-    doc.setTextColor(...VD); doc.setFont("helvetica","normal"); doc.text(fmt(p),MAR+90,Y+4.5);
-    doc.setTextColor(...(over?RED:ME)); doc.text(fmt(val),MAR+120,Y+4.5);
-    doc.setTextColor(...(over?RED:VD)); doc.text(fmt(p-val),MAR+148,Y+4.5);
-    // CAMBIO 1: círculo semáforo
-    doc.setFillColor(...(over?RED:GRN)); doc.circle(MAR+181,Y+3.2,2.8,"F");
-    Y+=6.5;
-  });
-  doc.setFillColor(...VD); doc.rect(MAR,Y,W,7,"F");
-  doc.setTextColor(...GO); doc.setFontSize(8); doc.setFont("helvetica","bold");
-  doc.text("TOTAL",MAR+3,Y+5); doc.text(fmt(totalPresup),MAR+90,Y+5);
-  doc.text(fmt(totalGlobal),MAR+120,Y+5); doc.text(fmt(totalPresup-totalGlobal),MAR+148,Y+5);
-  Y+=15;
-  const gastosExpandidosPdf=partidasExpandidas(gastos);
-  Object.entries(totals).sort((a,b)=>b[1]-a[1]).forEach(([cat,catTotal])=>{
-    if(Y>240){ doc.addPage(); Y=MAR; }
-    doc.setFillColor(...ME); doc.roundedRect(MAR,Y,W,7,1,1,"F");
-    doc.setTextColor(255,255,255); doc.setFontSize(8); doc.setFont("helvetica","bold");
-    doc.text(cat,MAR+3,Y+5); doc.text(fmt(catTotal),PW-MAR-3,Y+5,{align:"right"});
-    Y+=9;
-    gastosExpandidosPdf.filter(g=>g.categoria===cat).sort((a,b)=>a.fecha<b.fecha?1:-1).forEach((g,i)=>{
-      const RH=g.respaldo?22:6;
-      if(Y+RH>260){ doc.addPage(); Y=MAR; }
-      doc.setFillColor(...(i%2===0?CL:[255,255,255])); doc.rect(MAR,Y,W,RH,"F");
-      if(g.respaldo){
-        try{ doc.addImage(g.respaldo,"JPEG",PW-MAR-21,Y+1,20,20); doc.setDrawColor(200,220,200); doc.setLineWidth(0.3); doc.rect(PW-MAR-21,Y+1,20,20); }catch(e){}
-        doc.setTextColor(60,60,60); doc.setFontSize(6.5); doc.setFont("helvetica","bold"); doc.text(g.proveedor,MAR+2,Y+6);
-        doc.setFont("helvetica","normal"); doc.text(fmtDate(g.fecha),MAR+2,Y+11); doc.text(`Factura: ${g.factura||"—"}`,MAR+2,Y+16);
-        doc.setFont("helvetica","bold"); doc.setTextColor(...VD); doc.setFontSize(9); doc.text(fmt(g.importe),PW-MAR-24,Y+11);
-      } else {
-        doc.setTextColor(60,60,60); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
-        doc.text(fmtDate(g.fecha),MAR+2,Y+3.8); doc.text(g.proveedor,MAR+26,Y+3.8); doc.text(g.factura||"—",MAR+100,Y+3.8);
-        doc.setFont("helvetica","bold"); doc.setTextColor(...VD); doc.text(fmt(g.importe),PW-MAR-2,Y+3.8,{align:"right"});
-      }
-      Y+=RH+1;
+// ═══════════════════════════════════════════════════════════════════════════
+// EL LIENZO DE LOS REPORTES EN PDF
+// ═══════════════════════════════════════════════════════════════════════════
+// Los dos reportes de egresos —el del periodo compartido y el de Auditoría— se escribieron por
+// separado y acabaron siendo dos funciones de unos 4,750 caracteres que hacen casi lo mismo:
+// la misma banda verde, las mismas tarjetas, las mismas secciones, los mismos renglones
+// alternados. Cualquier arreglo al reporte había que hacerlo dos veces; y hacerlo en uno solo era
+// peor, porque entonces los dos PDF empezaban a decir cosas distintas de los mismos gastos. Es
+// exactamente el problema que ya se arregló entre la pantalla de Caja y su PDF.
+// Aquí vive la FORMA. El CONTENIDO sigue siendo de cada reporte —uno compara contra el
+// presupuesto, el otro desglosa por proveedor—, porque son dos preguntas distintas y fundirlas
+// obligaría a perder una de las dos.
+function lienzoPDF(opts){
+  const o = opts || {};
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:"mm", format:"letter" });
+  const PW = 215.9, MAR = (o.margen != null ? o.margen : 14), W = PW - MAR*2;
+  const C = { VD:[45,94,30], GO:[212,160,23], ME:[74,140,42], CL:[240,247,236],
+              RED:[192,57,43], GRN:[46,139,87], GRIS:[120,120,120], TXT:[50,50,50] };
+  const L = { doc, PW, MAR, W, C, Y: MAR };
+
+  // Salto de página con margen de seguridad. Cada sección dice cuánto alto necesita: pedirlo
+  // ANTES de dibujar es lo que evita un encabezado al pie de una hoja y su tabla en la siguiente.
+  L.salto = (alto)=>{ if(L.Y + (alto||6) > 272){ doc.addPage(); L.Y = MAR; return true; } return false; };
+
+  L.cabecera = (titulo, sub)=>{
+    const alto = o.cabeceraAlta ? 28 : 26;
+    doc.setFillColor(...C.VD); doc.rect(0,0,PW,alto,"F");
+    doc.setFillColor(...C.GO); doc.rect(0,alto,PW,3,"F");
+    doc.setTextColor(...C.GO); doc.setFontSize(o.cabeceraAlta?20:16); doc.setFont("helvetica","bold");
+    doc.text(String(titulo||""), MAR, o.cabeceraAlta?16:14);
+    doc.setTextColor(180,230,180); doc.setFontSize(8.5); doc.setFont("helvetica","normal");
+    doc.text(String(sub||""), MAR, o.cabeceraAlta?23:22);
+    L.Y = alto + 10;
+    return L;
+  };
+
+  // Fila de tarjetas. El ancho se reparte solo, así que agregar una quinta no descuadra nada.
+  L.tarjetas = (pares)=>{
+    const n = (pares||[]).length; if(!n) return L;
+    const cw = W/n;
+    pares.forEach(([lbl,val],i)=>{
+      const x = MAR + i*cw;
+      doc.setFillColor(...C.CL); doc.roundedRect(x, L.Y, cw-3, 17, 2, 2, "F");
+      doc.setTextColor(...C.VD); doc.setFontSize(7); doc.setFont("helvetica","normal");
+      doc.text(String(lbl), x+4, L.Y+6);
+      doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.text(String(val), x+4, L.Y+13.5);
     });
-    Y+=4;
+    L.Y += 23;
+    return L;
+  };
+
+  // Encabezado de sección: la banda verde con su título y, si hace falta, los rótulos de columna.
+  // `cols` son [texto, x] o [texto, x, "der"] para alinear a la derecha.
+  L.seccion = (titulo, cols)=>{
+    doc.setFillColor(...C.VD); doc.rect(MAR, L.Y, W, 7, "F");
+    doc.setTextColor(...C.GO); doc.setFontSize(7.5); doc.setFont("helvetica","bold");
+    doc.text(String(titulo||""), MAR+3, L.Y+4.6);
+    (cols||[]).forEach(([t,x,al])=>{
+      if(al === "der") doc.text(String(t), PW-MAR-2, L.Y+4.6, {align:"right"});
+      else doc.text(String(t), MAR+x, L.Y+4.6);
+    });
+    L.Y += 7;
+    return L;
+  };
+
+  // Renglón alternado. `celdas` son [texto, x] / [texto, x, "der"], con color y negritas opcionales.
+  L.fila = (celdas, i, est)=>{
+    const e = est || {}, alto = e.alto || 5.5;
+    doc.setFillColor(...((i%2===0) ? C.CL : [255,255,255])); doc.rect(MAR, L.Y, W, alto, "F");
+    doc.setFontSize(e.tam || 7);
+    (celdas||[]).forEach(c=>{
+      if(!c) return;
+      const [t, x, al, col, bold] = c;
+      doc.setTextColor(...(col || C.TXT));
+      doc.setFont("helvetica", bold ? "bold" : "normal");
+      if(al === "der") doc.text(String(t), PW-MAR-2, L.Y+alto-1.7, {align:"right"});
+      else doc.text(String(t), MAR+x, L.Y+alto-1.7);
+    });
+    L.Y += alto;
+    return L;
+  };
+
+  L.total = (etiqueta, celdas)=>{
+    doc.setFillColor(...C.VD); doc.rect(MAR, L.Y, W, 7, "F");
+    doc.setTextColor(...C.GO); doc.setFontSize(8); doc.setFont("helvetica","bold");
+    doc.text(String(etiqueta||"TOTAL"), MAR+3, L.Y+5);
+    (celdas||[]).forEach(([t,x,al])=>{
+      if(al === "der") doc.text(String(t), PW-MAR-2, L.Y+5, {align:"right"});
+      else doc.text(String(t), MAR+x, L.Y+5);
+    });
+    L.Y += 7;
+    return L;
+  };
+
+  L.espacio = (mm)=>{ L.Y += (mm==null?6:mm); return L; };
+  L.guardar = (nombre)=>doc.save(String(nombre||"reporte.pdf").replace(/[^A-Za-z0-9_.-]/g,"_"));
+  return L;
+}
+
+function exportarPDF(){
+  // Reporte del periodo COMPARTIDO: lo que se gastó contra lo que estaba presupuestado, con el
+  // detalle agrupado por categoría y la miniatura de cada factura. La forma la pone lienzoPDF();
+  // aquí solo vive lo que este reporte tiene de propio.
+  const p=getPeriodoSP(), gastos=gastosDelPeriodoSP(), totals=totalesPorCatPeriodo();
+  const factor=factorPresupuestoPeriodo(p).factor;
+  const totalGlobal=gastos.reduce((s,g)=>s+g.importe,0);
+  const totalPresup=Object.values(state.budget).reduce((s,v)=>s+(parseFloat(v)||0),0)*factor;
+
+  const L=lienzoPDF({ margen:15, cabeceraAlta:true });
+  const {doc,PW,MAR,W,C}=L;
+  L.cabecera("CICSA — Control de Egresos",
+    `Periodo: ${p.label||""}  |  Generado: ${new Date().toLocaleDateString("es-MX")}`);
+  L.tarjetas([["Total Gastado",fmt(totalGlobal)],["Presupuesto",fmt(totalPresup)],
+              ["Diferencia",fmt(totalPresup-totalGlobal)],["Registros",String(gastos.length)]]);
+
+  L.seccion("CATEGORÍA", [["PRESUPUESTO",90],["REAL",120],["DIFERENCIA",148],["ESTADO",178]]);
+  Object.entries(totals).sort((a,b)=>b[1]-a[1]).forEach(([cat,val],i)=>{
+    L.salto(7);
+    const meta=presupCatPeriodo(cat,factor), over=meta>0&&val>meta;
+    L.fila([[cat,3,null,over?C.RED:C.VD,over],
+            [fmt(meta),90,null,C.VD],
+            [fmt(val),120,null,over?C.RED:C.ME],
+            [fmt(meta-val),148,null,over?C.RED:C.VD]], i, {alto:6.5});
+    // El semáforo se dibuja aparte: es un círculo, no texto, y el lienzo solo pone renglones.
+    doc.setFillColor(...(over?C.RED:C.GRN)); doc.circle(MAR+181,L.Y-3.3,2.8,"F");
   });
-  doc.save(`Reporte_Egresos_${(wk?.label||"semana").replace(/[^A-Za-z0-9]/g,"_")}.pdf`);
+  L.total("TOTAL",[[fmt(totalPresup),90],[fmt(totalGlobal),120],[fmt(totalPresup-totalGlobal),148]]);
+  L.espacio(8);
+
+  // Detalle agrupado por categoría, con la imagen de la factura cuando la hay: este reporte se
+  // imprime y se archiva, y sin el comprobante a la vista deja de servir para eso.
+  const expandidos=partidasExpandidas(gastos);
+  Object.entries(totals).sort((a,b)=>b[1]-a[1]).forEach(([cat,catTotal])=>{
+    L.salto(16);
+    doc.setFillColor(...C.ME); doc.roundedRect(MAR,L.Y,W,7,1,1,"F");
+    doc.setTextColor(255,255,255); doc.setFontSize(8); doc.setFont("helvetica","bold");
+    doc.text(cat,MAR+3,L.Y+5); doc.text(fmt(catTotal),PW-MAR-3,L.Y+5,{align:"right"});
+    L.Y+=9;
+    expandidos.filter(g=>g.categoria===cat).sort((a,b)=>a.fecha<b.fecha?1:-1).forEach((g,i)=>{
+      const RH=g.respaldo?22:6;
+      L.salto(RH+2);
+      if(g.respaldo){
+        doc.setFillColor(...(i%2===0?C.CL:[255,255,255])); doc.rect(MAR,L.Y,W,RH,"F");
+        try{ doc.addImage(g.respaldo,"JPEG",PW-MAR-21,L.Y+1,20,20);
+             doc.setDrawColor(200,220,200); doc.setLineWidth(0.3); doc.rect(PW-MAR-21,L.Y+1,20,20); }catch(e){}
+        doc.setTextColor(60,60,60); doc.setFontSize(6.5); doc.setFont("helvetica","bold");
+        doc.text(g.proveedor||"",MAR+2,L.Y+6);
+        doc.setFont("helvetica","normal");
+        doc.text(fmtDate(g.fecha),MAR+2,L.Y+11); doc.text(`Factura: ${g.factura||"—"}`,MAR+2,L.Y+16);
+        doc.setFont("helvetica","bold"); doc.setTextColor(...C.VD); doc.setFontSize(9);
+        doc.text(fmt(g.importe),PW-MAR-24,L.Y+11);
+        L.Y+=RH+1;
+      } else {
+        L.fila([[fmtDate(g.fecha),2,null,[60,60,60]],
+                [(g.proveedor||"").slice(0,40),26,null,[60,60,60]],
+                [(g.factura||"—").slice(0,18),100,null,[60,60,60]],
+                [fmt(g.importe),0,"der",C.VD,true]], i, {alto:6,tam:6.5});
+        L.Y+=1;
+      }
+    });
+    L.espacio(4);
+  });
+  L.guardar(`Reporte_Egresos_${(p.label||"periodo")}.pdf`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -8923,12 +9061,35 @@ function cambiarCategoriaGasto(id, cat){
 function periodoSPRango(){ return resolverPeriodoSP(getPeriodoSP(), state.weeks); }
 // Salta a Auditoría filtrado por esta categoría y el periodo actual, donde cada factura se puede
 // reclasificar o borrar. Hace "editable" el gastado de una categoría del Presupuesto.
+// ── Ir a corregir ───────────────────────────────────────────────────────────
+// Auditoría revisa, no corrige. Pero un hallazgo sin camino a la corrección obliga a buscar el
+// gasto a mano en Gastos, y buscar a mano es exactamente lo que hace que las correcciones se
+// pospongan. Estos dos puentes llevan de donde se ve el problema a donde se arregla.
+// El filtro no se puede poner de una vez: renderGastos arma las opciones del <select> a partir de
+// los gastos del periodo, así que hay que dejarlo pedido y aplicarlo cuando ya existan.
+let _gastosFiltroPendiente = null;   // {categoria, formaPago} para el próximo render
+let _gastosResaltar = null;          // id del gasto al que se saltó, para poder ubicarlo
+
+function verEnGastos(gastoId){
+  const g = (typeof allGastosAllWeeks==="function" ? allGastosAllWeeks() : []).find(x=>String(x.id)===String(gastoId));
+  if(!g){ alert("Ese gasto ya no está: puede que alguien lo haya borrado o consolidado."); return; }
+  // El periodo se ajusta al DÍA del gasto: la lista queda corta y el renglón se encuentra solo.
+  // Ampliarlo a la semana dejaría cuarenta renglones y el mismo problema de buscar a mano.
+  if(g.fecha) setPeriodoSP({ modo:"rango", ini:g.fecha, fin:g.fecha });
+  _gastosFiltroPendiente = { categoria:"", formaPago:"" };
+  _gastosResaltar = String(g.id);
+  showPage("gastos");
+}
+
+// Desde una categoría del Presupuesto o del Seguimiento. Antes llevaba a Auditoría, que ahora es
+// solo de lectura: el botón decía "editar" y llegabas a una pantalla que no edita.
 function editarGastosCategoria(cat){
-  const r=periodoSPRango();
-  // Cadena vacía en el filtro significa "todas": las facturas sin categoría necesitan el centinela.
-  const filtro = cat ? cat : CAT_SIN;
-  try{ localStorage.setItem(REPORTES_FILTROS_KEY, JSON.stringify({ini:r.ini, fin:r.fin, cat:filtro, prov:""})); }catch(e){}
-  showPage("reportes", document.getElementById("navReportes"));
+  // El periodo compartido ya es el que Gastos usa, así que no hay que moverlo.
+  // CAT_SIN es el centinela de Auditoría para "sin categoría"; en Gastos no existe esa opción,
+  // así que se cae a "todas" en vez de dejar un filtro que no filtra nada.
+  _gastosFiltroPendiente = { categoria: (cat && cat !== CAT_SIN) ? cat : "", formaPago:"" };
+  _gastosResaltar = null;
+  showPage("gastos");
 }
 
 function renderReportes(){
@@ -8947,7 +9108,25 @@ function renderReportes(){
   Object.entries(porProv).sort((a,b)=>b[1].total-a[1].total).forEach(([prov,d],i)=>{const catP=Object.entries(d.cats).sort((a,b)=>b[1]-a[1])[0]?.[0]||"—";const tr=document.createElement("tr");tr.innerHTML=`<td style="font-weight:700;color:var(--vd)">${i+1}</td><td><strong>${esc(prov)}</strong></td><td style="text-align:center">${d.count}</td><td><span class="cat-badge">${esc(catP)}</span></td><td class="amount-cell">${fmt(d.total)}</td>`;tbody.appendChild(tr);});
   const tbody2=document.getElementById("rBodyDetalle");tbody2.innerHTML="";
   document.getElementById("rEmpty").style.display=gastos.length===0?"block":"none";
-  gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{const tr=document.createElement("tr");tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td>${esc(g.proveedor)}</td><td>${categoriaSelectHtml(g)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${esc(g.factura||"—")}</td><td style="font-size:12px;color:var(--txt2)">${formaPagoLabel(g)}</td><td class="amount-cell">${fmt(g.importe)}</td><td style="text-align:center"><button onclick="eliminarGasto('${g.id.replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button></td>`;tbody2.appendChild(tr);});
+  // Auditoría es una REVISIÓN del estado: ve todo y no toca nada. Usa las mismas celdas que
+  // Gastos, en modo lectura, así que los campos editables y el bote de basura se caen solos —
+  // no hay que acordarse de quitarlos aquí cada vez que la tabla cambia.
+  // Las tarjetas de arriba (importes contra el CFDI, complementos, fechas dudosas) sí conservan
+  // sus acciones: no son "borrar un gasto cualquiera", son resolver un hallazgo que el propio
+  // sistema detectó y explicó. La distinción que importa no es leer contra escribir, es borrado
+  // libre contra corrección guiada.
+  const PA = permisosDetalle("lectura");
+  gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${fmtDate(g.fecha)}</td>`+
+      `<td>${celdaProveedor(g, PA)}</td>`+
+      `<td>${celdaCategoria(g, PA)}</td>`+
+      `<td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${celdaFolio(g, PA)}</td>`+
+      `<td>${celdaFormaPago(g, PA)}</td>`+
+      `<td class="amount-cell">${celdaImporte(g, PA)}</td>`+
+      `<td style="text-align:center"><button onclick="verEnGastos('${escAttrJs(g.id)}')" title="Abrir este gasto en Gastos, que es donde se corrige" style="padding:4px 10px;background:var(--claro);color:var(--vd);border:1px solid var(--vd);border-radius:6px;cursor:pointer;font-size:11px;white-space:nowrap">✏️ Corregir</button></td>`;
+    tbody2.appendChild(tr);
+  });
 }
 // El <select> de categorías de Auditoría era una lista FIJA escrita a mano en el HTML: no traía
 // las categorías que el equipo agregó después (IMSS, agua purificada, renta depto…) ni una
@@ -9002,35 +9181,70 @@ function initReporteDates(){
 }
 
 function exportarReportePDF(){
-  const{jsPDF}=window.jspdf,gastos=gastosFiltradosReporte(),ini=document.getElementById("rFechaIni")?.value||"",fin=document.getElementById("rFechaFin")?.value||"",total=gastos.reduce((s,g)=>s+g.importe,0);
-  const doc=new jsPDF({unit:"mm",format:"letter"}),PW=215.9,MAR=14,W=PW-MAR*2,VD=[45,94,30],GO=[212,160,23],ME=[74,140,42],CL=[240,247,236];let Y=MAR;
-  doc.setFillColor(...VD);doc.rect(0,0,PW,26,"F");doc.setFillColor(...GO);doc.rect(0,26,PW,3,"F");
-  doc.setTextColor(...GO);doc.setFontSize(16);doc.setFont("helvetica","bold");doc.text("CICSA — Reporte de Egresos",MAR,14);
-  doc.setTextColor(180,230,180);doc.setFontSize(8.5);doc.setFont("helvetica","normal");doc.text(`Período: ${fmtDate(ini)} al ${fmtDate(fin)}  |  Generado: ${new Date().toLocaleDateString("es-MX")}`,MAR,22);Y=36;
-  const kpis=[["Total",fmt(total)],["Facturas",String(gastos.length)],["Proveedores",String(new Set(gastos.map(g=>g.proveedor)).size)]];
-  const kw=W/3;kpis.forEach(([l,v],i)=>{const x=MAR+i*kw;doc.setFillColor(...CL);doc.roundedRect(x,Y,kw-3,16,2,2,"F");doc.setTextColor(...VD);doc.setFontSize(7);doc.setFont("helvetica","normal");doc.text(l,x+4,Y+6);doc.setFontSize(11);doc.setFont("helvetica","bold");doc.text(v,x+4,Y+13);});Y+=22;
-  const porCat={};partidasExpandidas(gastos).forEach(g=>{porCat[g.categoria]=(porCat[g.categoria]||0)+g.importe;});
-  doc.setFillColor(...VD);doc.rect(MAR,Y,W,7,"F");doc.setTextColor(...GO);doc.setFontSize(7.5);doc.setFont("helvetica","bold");doc.text("POR CATEGORÍA",MAR+3,Y+4.5);Y+=7;
-  Object.entries(porCat).sort((a,b)=>b[1]-a[1]).forEach(([cat,val],i)=>{if(Y>255){doc.addPage();Y=MAR;}doc.setFillColor(...(i%2===0?CL:[255,255,255]));doc.rect(MAR,Y,W,5.5,"F");doc.setTextColor(50,50,50);doc.setFontSize(7);doc.setFont("helvetica","normal");doc.text(cat,MAR+3,Y+3.8);doc.setFont("helvetica","bold");doc.setTextColor(...VD);doc.text(fmt(val),PW-MAR-2,Y+3.8,{align:"right"});doc.setTextColor(120,120,120);doc.setFont("helvetica","normal");doc.text(`${((val/total)*100).toFixed(1)}%`,PW-MAR-22,Y+3.8,{align:"right"});Y+=5.5;});Y+=6;
-  const porProv={};gastos.forEach(g=>{if(!porProv[g.proveedor])porProv[g.proveedor]={total:0,count:0};porProv[g.proveedor].total+=g.importe;porProv[g.proveedor].count++;});
-  if(Y>230){doc.addPage();Y=MAR;}
-  doc.setFillColor(...VD);doc.rect(MAR,Y,W,7,"F");doc.setTextColor(...GO);doc.setFontSize(7.5);doc.setFont("helvetica","bold");doc.text("POR PROVEEDOR",MAR+3,Y+4.5);doc.text("FACTURAS",MAR+100,Y+4.5);doc.text("TOTAL",PW-MAR-2,Y+4.5,{align:"right"});Y+=7;
-  Object.entries(porProv).sort((a,b)=>b[1].total-a[1].total).forEach(([prov,d],i)=>{if(Y>255){doc.addPage();Y=MAR;}doc.setFillColor(...(i%2===0?CL:[255,255,255]));doc.rect(MAR,Y,W,5.5,"F");doc.setTextColor(50,50,50);doc.setFontSize(7);doc.setFont("helvetica","normal");doc.text(prov.slice(0,45),MAR+3,Y+3.8);doc.text(String(d.count),MAR+100,Y+3.8);doc.setFont("helvetica","bold");doc.setTextColor(...VD);doc.text(fmt(d.total),PW-MAR-2,Y+3.8,{align:"right"});Y+=5.5;});Y+=6;
-  // DETALLE DE FACTURAS — factura por factura (mismo detalle que la pantalla y el Excel).
-  const fpPlain=g=>formaPagoLabel(g).replace(/^\S+\s/,"");   // quita el emoji (jsPDF no lo dibuja)
-  const detHdr=()=>{doc.setFillColor(...VD);doc.rect(MAR,Y,W,7,"F");doc.setTextColor(...GO);doc.setFontSize(7);doc.setFont("helvetica","bold");doc.text("DETALLE DE FACTURAS",MAR+3,Y+4.6);doc.text("IMPORTE",PW-MAR-2,Y+4.6,{align:"right"});Y+=7;doc.setFillColor(230,235,226);doc.rect(MAR,Y,W,5,"F");doc.setTextColor(90,90,90);doc.setFontSize(6);doc.text("FECHA",MAR+3,Y+3.4);doc.text("PROVEEDOR",MAR+22,Y+3.4);doc.text("CATEGORÍA",MAR+74,Y+3.4);doc.text("FACTURA",MAR+108,Y+3.4);doc.text("PAGO",MAR+134,Y+3.4);Y+=5;};
-  if(Y>235){doc.addPage();Y=MAR;}
-  detHdr();
-  gastos.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).forEach((g,i)=>{if(Y>272){doc.addPage();Y=MAR;detHdr();}doc.setFillColor(...(i%2===0?CL:[255,255,255]));doc.rect(MAR,Y,W,5.2,"F");doc.setTextColor(50,50,50);doc.setFontSize(6.5);doc.setFont("helvetica","normal");doc.text(fmtDate(g.fecha),MAR+3,Y+3.6);doc.text((g.proveedor||"").slice(0,30),MAR+22,Y+3.6);doc.text((g.categoria||"").slice(0,20),MAR+74,Y+3.6);doc.text((g.factura||"—").slice(0,15),MAR+108,Y+3.6);doc.text(fpPlain(g).slice(0,13),MAR+134,Y+3.6);doc.setFont("helvetica","bold");doc.setTextColor(...VD);doc.text(fmt(g.importe),PW-MAR-2,Y+3.6,{align:"right"});Y+=5.2;});Y+=6;
-  if(Y>262){doc.addPage();Y=MAR;}
-  doc.setFillColor(...VD);doc.rect(MAR,Y,W,7,"F");doc.setTextColor(...GO);doc.setFontSize(8);doc.setFont("helvetica","bold");doc.text("TOTAL PERÍODO",MAR+3,Y+5);doc.text(fmt(total),PW-MAR-2,Y+5,{align:"right"});
-  doc.save(`Reporte_Egresos_${ini}_${fin}.pdf`.replace(/-/g,""));
+  // Reporte de AUDITORÍA: rango libre y filtros propios, con el desglose por proveedor. Comparte
+  // la forma con el del periodo (lienzoPDF) pero no el contenido: responden preguntas distintas y
+  // fundirlos obligaría a perder el presupuesto de uno o el ranking del otro.
+  const gastos=gastosFiltradosReporte();
+  const ini=document.getElementById("rFechaIni")?.value||"", fin=document.getElementById("rFechaFin")?.value||"";
+  const total=gastos.reduce((s,g)=>s+g.importe,0);
+
+  const L=lienzoPDF({ margen:14 });
+  const {C}=L;
+  L.cabecera("CICSA — Reporte de Egresos",
+    `Período: ${fmtDate(ini)} al ${fmtDate(fin)}  |  Generado: ${new Date().toLocaleDateString("es-MX")}`);
+  L.tarjetas([["Total",fmt(total)],["Facturas",String(gastos.length)],
+              ["Proveedores",String(new Set(gastos.map(g=>g.proveedor)).size)]]);
+
+  const porCat={}; partidasExpandidas(gastos).forEach(g=>{ porCat[g.categoria]=(porCat[g.categoria]||0)+g.importe; });
+  L.seccion("POR CATEGORÍA");
+  Object.entries(porCat).sort((a,b)=>b[1]-a[1]).forEach(([cat,val],i)=>{
+    L.salto(6);
+    L.fila([[cat,3],
+            [`${total?((val/total)*100).toFixed(1):"0.0"}%`,L.W-24,null,C.GRIS],
+            [fmt(val),0,"der",C.VD,true]], i);
+  });
+  L.espacio(6);
+
+  const porProv={};
+  gastos.forEach(g=>{ if(!porProv[g.proveedor]) porProv[g.proveedor]={total:0,count:0};
+                      porProv[g.proveedor].total+=g.importe; porProv[g.proveedor].count++; });
+  L.salto(20);
+  L.seccion("POR PROVEEDOR", [["FACTURAS",100],["TOTAL",0,"der"]]);
+  Object.entries(porProv).sort((a,b)=>b[1].total-a[1].total).forEach(([prov,d],i)=>{
+    L.salto(6);
+    L.fila([[(prov||"").slice(0,45),3],[String(d.count),100],[fmt(d.total),0,"der",C.VD,true]], i);
+  });
+  L.espacio(6);
+
+  // El emoji se quita: jsPDF no lo dibuja y deja un cuadro vacío donde debería ir la forma de pago.
+  const fpPlain=g=>formaPagoLabel(g).replace(/^\S+\s/,"");
+  const encDetalle=()=>{
+    L.seccion("DETALLE DE FACTURAS", [["IMPORTE",0,"der"]]);
+    L.doc.setFillColor(230,235,226); L.doc.rect(L.MAR,L.Y,L.W,5,"F");
+    L.doc.setTextColor(90,90,90); L.doc.setFontSize(6); L.doc.setFont("helvetica","normal");
+    [["FECHA",3],["PROVEEDOR",22],["CATEGORÍA",74],["FACTURA",108],["PAGO",134]]
+      .forEach(([t,x])=>L.doc.text(t,L.MAR+x,L.Y+3.4));
+    L.Y+=5;
+  };
+  L.salto(40); encDetalle();
+  gastos.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).forEach((g,i)=>{
+    if(L.salto(6)) encDetalle();
+    L.fila([[fmtDate(g.fecha),3],
+            [(g.proveedor||"").slice(0,30),22],
+            [(g.categoria||"").slice(0,20),74],
+            [(g.factura||"—").slice(0,15),108],
+            [fpPlain(g).slice(0,13),134],
+            [fmt(g.importe),0,"der",C.VD,true]], i, {alto:5.2,tam:6.5});
+  });
+  L.espacio(6);
+  L.salto(10);
+  L.total("TOTAL PERÍODO",[[fmt(total),0,"der"]]);
+  L.guardar(`Reporte_Egresos_${ini}_${fin}.pdf`);
 }
 
 function exportarReporteExcel(){
   const gastos=gastosFiltradosReporte(),ini=document.getElementById("rFechaIni")?.value||"",fin=document.getElementById("rFechaFin")?.value||"",total=gastos.reduce((s,g)=>s+g.importe,0),wb=XLSX.utils.book_new();
-  const ws1=XLSX.utils.aoa_to_sheet([["CICSA — Reporte de Egresos"],[`Período: ${ini} al ${fin}`],[],["Fecha","Proveedor","Categoría","No. Factura","Forma de pago","Importe"],...gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).map(g=>[g.fecha,g.proveedor,g.categoria,g.factura||"—",formaPagoLabel(g),g.importe]),[],[" ","","","","TOTAL",total]]);
-  ws1["!cols"]=[{wch:12},{wch:34},{wch:24},{wch:14},{wch:20},{wch:14}];XLSX.utils.book_append_sheet(wb,ws1,"Detalle");
+  hojaDetalleGastos(wb, gastos, "CICSA — Reporte de Egresos", `Período: ${fmtDate(ini)} al ${fmtDate(fin)}`);
   const gastosExpXls=partidasExpandidas(gastos);
   const porProv={};gastos.forEach(g=>{if(!porProv[g.proveedor])porProv[g.proveedor]={total:0,count:0,cats:{}};porProv[g.proveedor].total+=g.importe;porProv[g.proveedor].count++;});
   gastosExpXls.forEach(g=>{if(!porProv[g.proveedor])porProv[g.proveedor]={total:0,count:0,cats:{}};porProv[g.proveedor].cats[g.categoria]=(porProv[g.proveedor].cats[g.categoria]||0)+g.importe;});

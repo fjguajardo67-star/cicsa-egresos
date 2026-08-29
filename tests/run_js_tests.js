@@ -90,12 +90,14 @@ function extractConst(name) {
 // ninguna prueba lo notara.
 const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
+const CONSTS_ARR = ["COLS_DETALLE_GASTOS"];
 
 
 const FUNCS = [
   "normalizarParaComparar", "posibleMismoIngrediente", "esGastoEfectivo",
   "montoEfectivoGasto", "difImporteCaja", "_yaVinculadoAOtroFolio",
   "permisosDetalle", "claveFormaPago", "filtrarGastosPanel", "totalesPorFormaPago", "folioDuplicado",
+  "filasDetalleGastos",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
@@ -165,6 +167,10 @@ const sandbox = {
 vm.createContext(sandbox);
 for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
 // Constantes objeto (const X = { ... };) — mismo principio: se extraen, no se copian.
+for (const c of (typeof CONSTS_ARR !== "undefined" ? CONSTS_ARR : [])) {
+  vm.runInContext(extractConst(c), sandbox);
+  sandbox[c] = vm.runInContext(c, sandbox);
+}
 for (const c of CONSTS_OBJ) {
   const m = script.match(new RegExp("const\\s+" + c + "\\s*=\\s*\\{[\\s\\S]*?\\};"));
   if (!m) throw new Error("No encontré la constante objeto: " + c);
@@ -2273,6 +2279,112 @@ t("un gasto nuevo de caja nace con montoCaja igual al importe", () => {
     _previosVacios(), "Diana", 1000);
   close(r.gastos[0].importe, 250.5, 0.01);
   close(r.gastos[0].montoCaja, 250.5, 0.01, "para el flujo de caja no hay que adivinar");
+});
+
+console.log("\n== un solo reporte: la forma en un lugar, el contenido en cada uno ==");
+// Los dos exportadores a PDF eran dos funciones de ~4,750 caracteres que hacian casi lo mismo, y
+// los dos Excel traian su propia hoja "Detalle" de los mismos gastos — con columnas distintas.
+// Quien comparaba los dos archivos veia dos verdades del mismo mes.
+
+t("la hoja de detalle sale en orden cronologico", () => {
+  // Un detalle que salta en el tiempo no se puede seguir, y es lo que se entrega a contabilidad.
+  const f = S.filasDetalleGastos([
+    { fecha:"2026-08-20", proveedor:"C", importe:3 },
+    { fecha:"2026-08-01", proveedor:"A", importe:1 },
+    { fecha:"2026-08-10", proveedor:"B", importe:2 },
+  ]);
+  assert.deepEqual(f.map(x=>x[1]), ["A","B","C"]);
+});
+t("lleva TODAS las columnas: folio, forma de pago, importe y notas", () => {
+  // El Excel del periodo no traia la forma de pago y el de Auditoria no traia las notas.
+  const f = S.filasDetalleGastos([
+    { fecha:"2026-08-01", proveedor:"POLLO BAL", categoria:"Carnicos", factura:"PBAL-1",
+      formaPago:"transferencia", importe:1234.5, notas:"pedido especial" },
+  ])[0];
+  assert.equal(f.length, S.COLS_DETALLE_GASTOS.length, "una celda por columna declarada");
+  assert.equal(f[3], "PBAL-1");
+  assert.ok(/Transferencia/.test(f[4]), "la forma de pago va en el detalle");
+  close(f[5], 1234.5, 0.01);
+  assert.equal(f[6], "pedido especial");
+});
+t("un gasto sin folio ni notas no deja huecos que corran las columnas", () => {
+  const f = S.filasDetalleGastos([{ fecha:"2026-08-01", proveedor:"X", importe:10 }])[0];
+  assert.equal(f.length, S.COLS_DETALLE_GASTOS.length);
+  assert.equal(f[3], "\u2014");
+  assert.equal(f[6], "");
+});
+t("no truena con una lista vacia ni con basura", () => {
+  assert.deepEqual(S.filasDetalleGastos([]), []);
+  assert.deepEqual(S.filasDetalleGastos([null, undefined]), []);
+  assert.deepEqual(S.filasDetalleGastos(null), []);
+});
+t("no muta la lista que recibe", () => {
+  // Ordena una COPIA: ordenar la original le cambiaria el orden a la pantalla que la paso.
+  const gs = [{ fecha:"2026-08-20", proveedor:"C", importe:3 }, { fecha:"2026-08-01", proveedor:"A", importe:1 }];
+  S.filasDetalleGastos(gs);
+  assert.equal(gs[0].proveedor, "C", "la lista original queda como estaba");
+});
+
+t("los dos PDF salen del mismo lienzo: ninguno dibuja su propia cabecera", () => {
+  // Guardia sobre el codigo fuente. Un PDF no se puede ejecutar en las pruebas, pero el error a
+  // evitar es textual: que alguien vuelva a escribir la banda verde a mano en uno de los dos y
+  // los reportes empiecen a verse distintos.
+  const cuerpo = (n) => {
+    const i = script.indexOf("function " + n + "(");
+    assert.ok(i > -1, "no encontre " + n);
+    let j = script.indexOf("{", i), d = 0;
+    for (let k = j; k < script.length; k++) {
+      if (script[k] === "{") d++;
+      else if (script[k] === "}") { d--; if (!d) return script.slice(i, k + 1); }
+    }
+    return "";
+  };
+  ["exportarPDF", "exportarReportePDF"].forEach(n => {
+    const b = cuerpo(n);
+    assert.ok(b.includes("lienzoPDF("), n + " tiene que salir del lienzo compartido");
+    assert.ok(!/doc\.rect\(0,\s*0,\s*PW/.test(b), n + " volvio a dibujar su propia cabecera");
+    assert.ok(!b.includes("new jsPDF("), n + " volvio a crear su propio documento");
+  });
+});
+t("los dos Excel usan la misma hoja de detalle", () => {
+  const cuerpo = (n) => {
+    const i = script.indexOf("function " + n + "(");
+    let j = script.indexOf("{", i), d = 0;
+    for (let k = j; k < script.length; k++) {
+      if (script[k] === "{") d++;
+      else if (script[k] === "}") { d--; if (!d) return script.slice(i, k + 1); }
+    }
+    return "";
+  };
+  ["exportarExcel", "exportarReporteExcel"].forEach(n => {
+    const b = cuerpo(n);
+    assert.ok(b.includes("hojaDetalleGastos("), n + " tiene que usar la hoja compartida");
+    assert.ok(!/book_append_sheet\([^)]*"Detalle"\)/.test(b), n + " volvio a armar su propia hoja Detalle");
+  });
+});
+
+t("Auditoria pinta su detalle en modo LECTURA", () => {
+  // Guardia sobre el cableado: la regla es que Auditoria revisa y no toca. Si alguien le vuelve a
+  // poner permisos de edicion, el bote de basura reaparece en la pantalla que no debe borrar.
+  const i = script.indexOf("function renderReportes(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/permisosDetalle\("lectura"\)/.test(b), "Auditoria tiene que pedir permisos de lectura");
+  assert.ok(!b.includes("eliminarGasto("), "Auditoria no borra: el 🗑️ vive solo en Gastos");
+  assert.ok(b.includes("verEnGastos("), "pero si tiene que llevar a donde se corrige");
+});
+t("Gastos sigue siendo la unica que borra", () => {
+  const i = script.indexOf("function renderGastos(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/permisosDetalle\("edicion"\)/.test(b));
 });
 
 console.log("\n== la tabla de detalle: permisos como dato, no como HTML repetido ==");
