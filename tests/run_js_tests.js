@@ -1758,12 +1758,26 @@ t("dos fechas distintas NO impiden reconocerlo: el folio ya identifica el docume
   assert.equal(c.tipo, "duplicado");
   close(c.excedente, 1020, 0.01, "importes distintos entre las dos capturas, y aun asi es la misma");
 });
-t("si el PROVEEDOR no se parece, tampoco", () => {
+t("con el folio IDENTICO, el nombre del proveedor ya no hace falta que empate", () => {
+  // Es la otra forma en que se duplica: la misma factura capturada una vez con el nombre fiscal
+  // ("NUEVA WAL-MART DE MEXICO") y otra con el del ticket ("COMPRA SAMS"). Exigir que los nombres
+  // se parecieran dejaba fuera justo eso. El folio de una factura ya identifica el documento.
+  const c = S.clasificarDiferenciaSAT(_dif(2456, [
+    { id:"a", proveedor:"NUEVA WAL MART DE MEXICO", factura:"ICAJG468220", fecha:"2026-07-24", importe:2456 },
+    { id:"b", proveedor:"COMPRA SAMS", factura:"ICAJG468220", fecha:"2026-07-25", importe:2476 },
+  ], { folioComp:"ICAJG468220", proveedor:"NUEVA WAL MART DE MEXICO" }));
+  assert.equal(c.tipo, "duplicado");
+  close(c.excedente, 2476, 0.01);
+});
+t("pero si el folio solo coincide por TERMINACION, el proveedor sigue pesando", () => {
+  // "7213" contra "POSM13847213" es una coincidencia debil: un folio corto puede casar de
+  // casualidad entre proveedores distintos, y ahi si hay que pedir mas senias.
   const c = S.clasificarDiferenciaSAT(_dif(1000, [
-    { id:"a", proveedor:"ONUS COMERCIAL", factura:"F-1", fecha:"2026-07-06", importe:1000 },
-    { id:"b", proveedor:"OFFICE DEPOT", factura:"F-1", fecha:"2026-07-06", importe:1000 },
-  ]));
+    { id:"a", proveedor:"OFFICE DEPOT DE MEXICO", factura:"POSM13847213", fecha:"2026-07-15", importe:1000 },
+    { id:"b", proveedor:"UN PROVEEDOR SIN RELACION", factura:"7213", fecha:"2026-07-15", importe:1000 },
+  ], { folioComp:"POSM13847213", proveedor:"OFFICE DEPOT DE MEXICO" }));
   assert.equal(c.tipo, "diferencia");
+  assert.ok(/terminaci/i.test(c.motivo), "y se dice por que no se agrupo");
 });
 t("un renglon sin folio nunca se agrupa como duplicado", () => {
   // Sin folio no hay con que afirmar que sean la misma factura.
@@ -1795,9 +1809,9 @@ t("folio equivalente pero tecleado distinto: es duplicado, pero NO consolidable 
   // consolidarFacturaDividida() fusiona por proveedor y folio EXACTOS; con folios equivalentes
   // no encontraria el grupo y diria "ya no hay duplicados". Ofrecer el boton seria mentir.
   const c = S.clasificarDiferenciaSAT(_dif(5000, [
-    { id:"a", proveedor:"X", factura:"PBAL31598", fecha:"2026-07-06", importe:5000 },
-    { id:"b", proveedor:"X", factura:"31598", fecha:"2026-07-06", importe:5000 },
-  ], { folioComp:"PBAL31598" }));
+    { id:"a", proveedor:"POLLO BAL", factura:"PBAL31598", fecha:"2026-07-06", importe:5000 },
+    { id:"b", proveedor:"POLLO BAL", factura:"31598", fecha:"2026-07-06", importe:5000 },
+  ], { folioComp:"PBAL31598", proveedor:"POLLO BAL" }));
   assert.equal(c.tipo, "duplicado");
   assert.equal(c.uniforme, false);
 });
@@ -1820,6 +1834,34 @@ t("un registro ligado por cfdiUuid cuenta aunque no tenga folio", () => {
     { id:"b", proveedor:"X", factura:"", cfdiUuid:"UUID-1", fecha:"2026-07-06", importe:1000 },
   ]));
   assert.equal(c.tipo, "duplicado");
+});
+
+t("cuando NO se agrupa, se dice por que", () => {
+  // Tres renglones con el folio identico en pantalla seguian saliendo como diferencia de monto y
+  // no habia forma de saber que los separaba sin abrir los datos a mano. Ahora el motivo viaja
+  // con el resultado y se imprime en la tabla.
+  const sinFolio = S.clasificarDiferenciaSAT(_dif(2456, [
+    { id:"a", proveedor:"NUEVA WAL MART", factura:"ICAJG468220", fecha:"2026-07-24", importe:2456 },
+    { id:"b", proveedor:"NUEVA WAL MART", factura:"", fecha:"2026-07-24", importe:2476 },
+  ], { folioComp:"ICAJG468220" }));
+  assert.equal(sinFolio.tipo, "diferencia");
+  assert.ok(/no trae folio ni UUID/.test(sinFolio.motivo));
+  assert.equal(sinFolio.nGastos, 2);
+
+  const otroFolio = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"NADA-QUE-VER", fecha:"2026-07-06", importe:1000 },
+  ]));
+  assert.ok(/no corresponde al del comprobante/.test(otroFolio.motivo));
+});
+
+t("varios registros del mismo comprobante que suman DE MENOS: falta capturar una parte", () => {
+  const c = S.clasificarDiferenciaSAT(_dif(10000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:4000, categoria:"Carnicos" },
+    { id:"b", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:3000, categoria:"Abarrotes" },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+  assert.ok(/falta capturar una parte/.test(c.motivo), "no es contado de mas: es contado de menos");
 });
 
 t("un grupo pegado solo por el MONTO no se declara duplicado", () => {

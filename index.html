@@ -1948,7 +1948,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-k";
+const APP_BUILD = "2026-08-28-l";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -7301,10 +7301,15 @@ function renderConciliacion(r){
   document.getElementById("satDiferenciasBody").innerHTML=r.diferencias.map(d=>{
     const fSat = _folioDeCfdi(d.cfdi) || (d.cfdi.serie||"")+(d.cfdi.folioComp||"");
     const fCicsa = [...new Set((d.gastos||[d.gastoCICSA]).map(g=>String((g&&g.factura)||"").trim()).filter(Boolean))];
+    const nG = (d.gastos||[]).length;
+    // Cuando hay varios registros y aun así no se reconocieron como el mismo comprobante, hay que
+    // decir por qué. Si no, la tabla enseña dos folios que se ven iguales y no explica nada.
+    const nota = (d.clase && d.clase.motivo)
+      ? `<div style="font-size:10px;color:var(--do);margin-top:3px">ℹ ${esc(d.clase.motivo)}</div>` : "";
     return `<tr style="background:#FFFBEB">
     <td><strong>${esc(d.cfdi.proveedor||"—")}</strong></td>
     <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(fSat||"—")}
-      <div style="font-size:10px;color:var(--txt2)">CICSA: ${esc(fCicsa.join(" · ")||"sin folio")}</div></td>
+      <div style="font-size:10px;color:var(--txt2)">CICSA: ${esc(fCicsa.join(" · ")||"sin folio")}${nG>1?` · ${nG} registros`:""}</div>${nota}</td>
     <td>${fmtDate(d.cfdi.fecha)||"—"}</td>
     <td class="amount-cell">${fmt(d.cfdi.total)}</td><td class="amount-cell">${fmt(d.capturado!=null?d.capturado:d.gastoCICSA.importe)}</td>
     <td class="amount-cell" style="color:${d.diferencia>0?'var(--red)':'var(--vm)'}">${d.diferencia>0?'+':''}${fmt(d.diferencia)}</td></tr>`;
@@ -7684,26 +7689,42 @@ function clasificarDiferenciaSAT(d){
   const _u = String(cfdi.uuid || cfdi.folio || "").trim();
   const uCanon = _dupFolioCanon(_u);
   const folioCfdi = _folioDeCfdi(cfdi);
-  const mismoComprobante = g => {
-    if(_u && g.cfdiUuid && String(g.cfdiUuid) === _u) return true;
+  const provCfdi = cfdi.proveedor || "";
+  // Cada registro se liga al comprobante por su cuenta, y cuando NO se liga se devuelve el motivo.
+  // Sin ese motivo, la única forma de saber por qué un grupo no se reconoció es abrir los datos a
+  // mano — que es exactamente lo que pasó con tres renglones cuyo folio se veía idéntico en
+  // pantalla y aun así seguían saliendo como diferencia de monto.
+  const liga = g => {
+    if(_u && g.cfdiUuid && String(g.cfdiUuid) === _u) return { ok:true };
     const f = _dupFolioCanon(g.factura);
-    if(!f) return false;
-    if(uCanon && f === uCanon) return true;                          // el UUID tecleado como folio
-    return !!folioCfdi && _dupFoliosEquivalentes(f, folioCfdi);
+    if(!f) return { ok:false, por:`Uno de los registros (${g.proveedor||"sin proveedor"}, ${fmt(parseFloat(g.importe)||0)}) no trae folio ni UUID: no hay con qué ligarlo a este comprobante.` };
+    if(uCanon && f === uCanon) return { ok:true };                   // el UUID tecleado como folio
+    if(!folioCfdi) return { ok:false, por:`El CFDI solo trae UUID, así que su folio no se puede comparar contra «${g.factura}».` };
+    if(f === folioCfdi) return { ok:true };                          // folio idéntico: no hacen falta más señas
+    if(_dupFoliosEquivalentes(f, folioCfdi)){
+      // Equivalencia por terminación ("7213" ≡ "POSM13847213"): más débil que la igualdad, y un
+      // folio corto puede coincidir de casualidad entre proveedores distintos. SOLO aquí se pide
+      // además que el proveedor se parezca.
+      if(_dupProvParecidos(g.proveedor, provCfdi)) return { ok:true };
+      return { ok:false, por:`El folio «${g.factura}» solo coincide por terminación y el proveedor no empata («${g.proveedor||"?"}» contra «${provCfdi}»).` };
+    }
+    return { ok:false, por:`El folio «${g.factura}» no corresponde al del comprobante («${cfdi.serie||""}${cfdi.folioComp||""}»).` };
   };
-  const mismoProv = gs.every(g=>_dupProvParecidos(g.proveedor, gs[0].proveedor));
-  // Y TODOS tienen que estar ligados al comprobante, no solo parecerse en el monto: un grupo que
-  // solo casó por importe y fecha cercana puede ser dos compras distintas del mismo día.
-  const todosLigados = gs.every(mismoComprobante);
-  // La fecha ya NO se exige igual. La misma factura capturada dos veces suele traer dos fechas
-  // (una tecleada mal, o la del ticket contra la del timbrado), y exigirla dejaba fuera
-  // exactamente los casos que hay que cazar. El folio de una factura ya identifica el documento;
-  // con proveedor y folio no hacen falta más señas.
-  if(!(mismoProv && todosLigados)) return { tipo:"diferencia" };
+  // El proveedor ya NO se compara entre registros. Un folio de factura identifica el documento por
+  // sí solo, y exigir además que los nombres se parecieran dejaba fuera la misma factura capturada
+  // una vez con el nombre fiscal («NUEVA WAL-MART DE MEXICO») y otra con el del ticket («SAMS»),
+  // que es justo la forma en que se duplica. Igual que con la fecha: seña de más, no de menos.
+  // TODOS tienen que estar ligados al comprobante, eso sí: un grupo que solo casó por importe y
+  // fecha cercana puede ser dos compras distintas del mismo día.
+  const sueltos = gs.map(liga).filter(x=>!x.ok);
+  if(sueltos.length) return { tipo:"diferencia", motivo: sueltos[0].por, nGastos: gs.length };
   // Con las tres llaves iguales y capturado POR ENCIMA del comprobante, es contado de más. Si
   // quedara por debajo es una captura incompleta —falta un pedazo—, que no es lo mismo y sigue
   // mereciendo salir en diferencias: ahí el reporte está corto, no inflado.
-  if(cap - total <= 1) return { tipo:"diferencia" };
+  // Por debajo del comprobante no es contado de más: falta un pedazo por capturar. El reporte
+  // está corto, no inflado, y esconderlo dejaría dinero sin registrar.
+  if(cap - total <= 1) return { tipo:"diferencia", nGastos: gs.length,
+    motivo:`${gs.length} registros de este mismo comprobante suman ${fmt(cap)}, menos que el comprobante: falta capturar una parte.` };
   const esPadre = g => g.categoria === "Dividida" || g._dividida === true;
   const padres = gs.filter(esPadre), hijos = gs.filter(g=>!esPadre(g));
   const norm = s => String(s||"").trim().toUpperCase();
