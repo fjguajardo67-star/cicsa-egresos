@@ -1088,6 +1088,7 @@ body.snav-min .side-theme span { display:none; }
        (presupTotalBar) es la de editar y solo la ve un admin; esto es de solo lectura y es lo
        que Seguimiento le enseñaba al operativo. -->
   <div class="summary-grid" id="presupResumen" style="margin-bottom:16px"></div>
+  <div id="presupDescuadre" style="display:none;border:1.5px solid var(--do);border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:12.5px;color:var(--txt);line-height:1.55"></div>
   <div class="card">
     <div class="card-title">🎯 Presupuesto semanal por categoría <span id="presupPeriodoLabel" style="font-family:'DM Serif Display',serif;font-weight:400;color:var(--txt2);font-size:16px"></span></div>
     <p style="font-size:13px;color:var(--txt2);margin-bottom:14px">
@@ -1969,7 +1970,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-29-d";
+const APP_BUILD = "2026-08-29-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3155,6 +3156,30 @@ function factorPresupuestoPeriodo(p){
   if(isNaN(ini) || isNaN(fin)) return { factor:1, dias:7, esRango:false };
   const dias=Math.max(1, Math.round((fin-ini)/86400000)+1);   // ambos extremos incluidos
   return { factor: dias/7, dias, esRango:true };
+}
+// ¿Contra qué se compara el gasto? Hay DOS cifras y no son la misma:
+//   · el objetivo asignado — el tope que puso el admin, una sola cifra semanal;
+//   · la suma de las metas por categoría — lo que se repartió entre ellas.
+// Deberían coincidir y nada obliga a que coincidan. Cuando no coinciden, la pantalla podía
+// contestar dos cosas opuestas con los mismos datos: contra la suma de categorías el gasto salía
+// por debajo y en verde, contra el objetivo salía por encima y en rojo. Las dos cuentas estaban
+// bien; lo que faltaba era decir cuál manda.
+// Manda el objetivo asignado: es el tope que alguien decidió. La suma de categorías es un reparto,
+// y un reparto que se pasa del tope no lo sube — solo significa que el reparto está descuadrado,
+// que es justo lo que `descuadre` deja dicho para poder avisarlo.
+// Sin objetivo asignado no hay tope, y entonces lo único que queda es la suma de categorías.
+function basePresupuestoPeriodo(objetivoSemanal, sumaCategoriasSemanal, factor){
+  const f = (typeof factor === "number" && isFinite(factor) && factor > 0) ? factor : 1;
+  const objetivo = (parseFloat(objetivoSemanal) || 0) * f;
+  const suma     = (parseFloat(sumaCategoriasSemanal) || 0) * f;
+  const hayObjetivo = objetivo > 0;
+  return {
+    factor: f, objetivo, suma,
+    base: hayObjetivo ? objetivo : suma,
+    fuente: hayObjetivo ? "asignado" : "categorias",
+    // >0: las categorías reparten MÁS de lo que el tope permite. <0: queda por asignar.
+    descuadre: hayObjetivo ? suma - objetivo : 0,
+  };
 }
 // Meta de una categoría YA prorrateada al periodo que se está viendo.
 function presupCatPeriodo(cat, factor){
@@ -5300,9 +5325,11 @@ function actualizarTotalPresupuesto(){
   } else {
     sumaSemanal = Object.values(state.budget||{}).reduce((s,v)=>s+(parseFloat(v)||0),0);
   }
-  const suma=sumaSemanal*F.factor;
-  const objetivo=(parseFloat(document.getElementById("presupObjetivo")?.value)||0)*F.factor;
-  const dif=objetivo-suma;
+  // El mismo cálculo que usa la tarjeta de arriba: si cada uno hace su cuenta, las dos vuelven a
+  // poder contradecirse. Aquí el objetivo se lee del input y no del estado, porque esta barra se
+  // actualiza mientras se teclea, antes de guardar.
+  const B=basePresupuestoPeriodo(document.getElementById("presupObjetivo")?.value, sumaSemanal, F.factor);
+  const suma=B.suma, objetivo=B.objetivo, dif=-B.descuadre;
   sumaEl.textContent=fmt(suma);
   if(Math.abs(dif) < 0.005){
     lblEl.textContent="✓ Cuadrado"; difEl.textContent=fmt(0);
@@ -5362,15 +5389,37 @@ function renderDetallePresupuesto(){
   const F = factorPresupuestoPeriodo(p);
   const totals = totalesPorCatPeriodo();
   const allCats = [...new Set([...catsActuales(), ...Object.keys(totals)])];
-  const totalPres = allCats.reduce((s,c)=>s+presupCatPeriodo(c, F.factor), 0);
+  const sumaSemanal = allCats.reduce((s,c)=>s+(parseFloat((state.budget||{})[c])||0), 0);
+  const B = basePresupuestoPeriodo(state.budgetObjetivo, sumaSemanal, F.factor);
+  const totalPres = B.base;
   // "Excedida" exige tener meta: sin presupuesto asignado no hay nada que exceder.
   const sobre = allCats.filter(c=>{ const m = presupCatPeriodo(c, F.factor); return m > 0 && (totals[c]||0) > m; });
   if(res){
     res.innerHTML = `
       <div class="scard"><div class="scard-label">Total gastado</div><div class="scard-val">${fmt(totalGastado)}</div><div class="scard-sub">${gastos.length} factura${gastos.length===1?"":"s"} · ${esc(label)}</div></div>
-      <div class="scard"><div class="scard-label">Presupuesto del periodo</div><div class="scard-val">${fmt(totalPres)}</div>${(F.esRango && Math.abs(F.factor-1)>0.001)?`<div class="scard-sub">semanal × ${F.factor.toFixed(2)}</div>`:""}</div>
+      <div class="scard"><div class="scard-label">${B.fuente==="asignado"?"Presupuesto asignado":"Suma de categorías"}</div><div class="scard-val">${fmt(totalPres)}</div><div class="scard-sub">${B.fuente==="asignado"?`las categorías reparten ${fmt(B.suma)}`:"no hay un objetivo asignado"}${(F.esRango && Math.abs(F.factor-1)>0.001)?` · semanal × ${F.factor.toFixed(2)}`:""}</div></div>
       <div class="scard ${totalGastado>totalPres?'alert':''}"><div class="scard-label">Diferencia</div><div class="scard-val" style="color:${totalGastado>totalPres?'var(--red)':'var(--vm)'}">${totalGastado>totalPres?'−':'+'} ${fmt(Math.abs(totalPres-totalGastado))}</div></div>
       <div class="scard ${sobre.length>0?'alert':''}"><div class="scard-label">Categorías excedidas</div><div class="scard-val">${sobre.length}</div></div>`;
+  }
+  // El aviso que faltaba. Mientras las dos cifras no cuadren, cualquier lectura de "voy bien" o
+  // "voy mal" depende de contra cuál se mire, y eso no es una opinión: es un presupuesto sin
+  // cerrar. Vive fuera de presupTotalBar a propósito, porque esa barra solo la ve un admin.
+  const av = document.getElementById("presupDescuadre");
+  if(av){
+    if(Math.abs(B.descuadre) < 0.005){ av.style.display = "none"; }
+    else {
+      const sobra = B.descuadre > 0;
+      av.style.display = "block";
+      av.style.background = sobra ? "#FFF4F4" : "#FFF8E1";
+      av.style.borderColor = sobra ? "var(--red)" : "var(--do)";
+      av.innerHTML = sobra
+        ? `⚠️ <strong>El presupuesto no cuadra.</strong> Las metas por categoría reparten
+           <strong>${fmt(B.suma)}</strong>, que es <strong>${fmt(B.descuadre)}</strong> más que el
+           objetivo asignado de <strong>${fmt(B.objetivo)}</strong>. Lo gastado se compara contra el
+           objetivo, que es el tope; si el tope correcto es el otro, súbelo arriba.`
+        : `📌 Quedan <strong>${fmt(-B.descuadre)}</strong> del objetivo sin repartir entre las
+           categorías (asignado ${fmt(B.objetivo)}, repartido ${fmt(B.suma)}).`;
+    }
   }
   if(!cont) return;
   const perm = permisosDetalle("pago");

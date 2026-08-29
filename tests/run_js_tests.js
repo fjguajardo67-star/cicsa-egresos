@@ -99,6 +99,7 @@ const FUNCS = [
   "permisosDetalle", "claveFormaPago", "filtrarGastosPanel", "totalesPorFormaPago", "folioDuplicado",
   "filasDetalleGastos", "gastosRepetidosPorId",
   "mapaUuidAFolio", "_folioIdentidad", "facturaEnteraYSusPartes",
+  "basePresupuestoPeriodo",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
@@ -689,6 +690,89 @@ t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
     { id: "b", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
   ]);
   assert.equal(r.length, 0);
+});
+
+console.log("\n== contra QUE se compara el gasto del periodo ==");
+// Caso real del 03 al 31 de agosto de 2026: objetivo asignado 350,000/semana, pero las metas por
+// categoria sumaban 547,000/semana. Con 29 dias (factor 4.142857) la pantalla contestaba dos cosas
+// opuestas con los mismos datos: contra la suma de categorias el gasto salia POR DEBAJO y en verde
+// (+805,968.96), contra el objetivo salia POR ENCIMA y en rojo (-10,173.90). Las dos cuentas
+// estaban bien. Lo que faltaba era decir cual manda.
+
+const F29 = 29 / 7;
+
+t("manda el objetivo asignado, no la suma de categorias", () => {
+  const B = S.basePresupuestoPeriodo(350000, 547000, F29);
+  close(B.objetivo, 1450000, 0.01);
+  close(B.suma, 2266142.86, 0.01);
+  close(B.base, 1450000, 0.01, "el tope es el que alguien asigno");
+  assert.equal(B.fuente, "asignado");
+});
+t("el descuadre queda dicho, no escondido", () => {
+  // Es la cifra que explica por que las dos lecturas se contradecian.
+  const B = S.basePresupuestoPeriodo(350000, 547000, F29);
+  close(B.descuadre, 816142.86, 0.01, "las categorias reparten de mas");
+  assert.ok(B.descuadre > 0);
+});
+t("repartir de menos tambien es descuadre, con el signo al reves", () => {
+  const B = S.basePresupuestoPeriodo(350000, 300000, 1);
+  close(B.descuadre, -50000, 0.01);
+  close(B.base, 350000, 0.01, "el tope no baja porque se reparta de menos");
+});
+t("cuadrado es descuadre cero", () => {
+  const B = S.basePresupuestoPeriodo(350000, 350000, F29);
+  close(B.descuadre, 0, 0.005);
+  close(B.base, B.suma, 0.01);
+});
+t("sin objetivo asignado el tope es la suma de categorias", () => {
+  // Es el unico numero que queda; comparar contra cero pintaria TODO en rojo.
+  const B = S.basePresupuestoPeriodo(0, 547000, F29);
+  close(B.base, 2266142.86, 0.01);
+  assert.equal(B.fuente, "categorias");
+  assert.equal(B.descuadre, 0, "sin tope no hay nada que descuadre");
+});
+t("el objetivo tambien se prorratea, no se compara semanal contra un mes", () => {
+  // El error que ya se corrigio una vez en Seguimiento: un mes de gasto contra la meta de UNA
+  // semana hace que todo salga excedido.
+  const B = S.basePresupuestoPeriodo(350000, 350000, F29);
+  close(B.objetivo, 1450000, 0.01);
+  assert.ok(B.objetivo > 350000, "sin prorratear, el tope de 29 dias seria el de 7");
+});
+t("factor invalido o ausente vale 1, no cero", () => {
+  // Con factor 0 el tope seria 0 y toda la pantalla saldria excedida.
+  [undefined, null, 0, -3, NaN, "cuatro"].forEach(f => {
+    const B = S.basePresupuestoPeriodo(350000, 350000, f);
+    close(B.objetivo, 350000, 0.01, "factor " + String(f));
+  });
+});
+t("no truena con basura en las cifras", () => {
+  const B = S.basePresupuestoPeriodo(undefined, null, 1);
+  assert.equal(B.objetivo, 0);
+  assert.equal(B.suma, 0);
+  assert.equal(B.base, 0);
+  assert.equal(B.fuente, "categorias");
+});
+
+t("la barra del admin y la tarjeta hacen la MISMA cuenta", () => {
+  // Guardia sobre el fuente: si cada una vuelve a calcular su tope por su cuenta, vuelven a poder
+  // contradecirse — que es exactamente el reporte que origino esto.
+  const cuerpo = (n) => {
+    const i = script.indexOf("function " + n + "(");
+    assert.ok(i > -1, "no encontre " + n);
+    let j = script.indexOf("{", i), d = 0;
+    for (let k = j; k < script.length; k++) {
+      if (script[k] === "{") d++;
+      else if (script[k] === "}") { d--; if (!d) return script.slice(i, k + 1); }
+    }
+    return "";
+  };
+  ["actualizarTotalPresupuesto", "renderDetallePresupuesto"].forEach(n => {
+    const b = cuerpo(n).replace(/\/\/[^\n]*/g, "");
+    assert.ok(b.includes("basePresupuestoPeriodo("), n + " tiene que salir del calculo compartido");
+    // Y tiene que USAR lo que devuelve. Llamarla y despues recalcular por tu cuenta deja el
+    // nombre puesto y la contradiccion intacta, que es lo que hay que impedir.
+    assert.ok(!/\*\s*F\.factor/.test(b), n + " volvio a prorratear por su cuenta");
+  });
 });
 
 console.log("\n== Seguimiento se fusiono en Presupuesto ==");
