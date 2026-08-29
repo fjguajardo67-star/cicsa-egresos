@@ -1948,7 +1948,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-28-j";
+const APP_BUILD = "2026-08-28-k";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -7274,7 +7274,7 @@ function renderConciliacion(r){
     <td style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--txt2)">${c.folio?.slice(0,18)||"—"}…</td>
     <td><strong>${esc(c.proveedor||"—")}</strong></td><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.rfc||"—")}</td>
     <td>${fmtDate(c.fecha)||"—"}</td><td class="amount-cell" style="color:var(--red)">${fmt(c.total)}</td>
-    <td style="white-space:nowrap"><button class="btn btn-light" style="padding:4px 10px;font-size:11px" onclick="preLlenarCaptura('${escAttrJs(c.proveedor||"")}','${escAttrJs(c.fecha||"")}','${escAttrJs(c.folio||"")}',${c.total||0},'${escAttrJs(c.uuid||c.folio||"")}')">➕ Capturar</button>
+    <td style="white-space:nowrap"><button class="btn btn-light" style="padding:4px 10px;font-size:11px" onclick="preLlenarCaptura('${escAttrJs(c.proveedor||"")}','${escAttrJs(c.fecha||"")}','${escAttrJs(folioCapturableCfdi(c))}',${c.total||0},'${escAttrJs(c.uuid||c.folio||"")}')">➕ Capturar</button>
     <button class="btn btn-light" style="padding:4px 8px;font-size:11px;margin-left:4px;color:var(--red)" title="No es un gasto: quítalo de la conciliación para siempre" onclick="descartarCfdi('${escAttrJs(c.uuid||c.folio||"")}','${escAttrJs(c.rfc||"")}','${escAttrJs(c.proveedor||"")}')">🚫 No es gasto</button></td></tr>`).join("");
   // Contados de más: van aparte y CON el folio. Sin el folio a la vista, "Monto CICSA al doble"
   // se lee como un problema del comprobante y manda a revisar lo que está bien.
@@ -7625,6 +7625,19 @@ function _folioDeCfdi(c){
   if(/^[0-9A-F]{8}-[0-9A-F]{4}-/i.test(bruto)) return "";
   return _dupFolioCanon(bruto);
 }
+// El folio que va al campo "Factura" cuando se captura desde la conciliación SAT. Tiene que ser
+// el de la FACTURA (serie+folio), NUNCA el UUID: el UUID ya viaja aparte en cfdiUuid, y meterlo
+// aquí deja al gasto con un "folio" que no se parece al de ningún otro registro del mismo
+// comprobante. Ése es el motivo de que cuatro facturas capturadas dos veces se vieran como
+// "diferencia de monto" en vez de como lo que eran: un registro traía el folio de la factura y el
+// otro el UUID, así que nada los cruzaba. Cuando el CFDI solo trae UUID se devuelve vacío — mejor
+// el campo en blanco que un identificador que no es el que la gente lee en el papel.
+function folioCapturableCfdi(c){
+  const sf = (String((c&&c.serie)||"") + String((c&&c.folioComp)||"")).trim();
+  if(sf) return sf;
+  const bruto = String((c&&c.folio)||"").trim();
+  return /^[0-9A-F]{8}-[0-9A-F]{4}-/i.test(bruto) ? "" : bruto;
+}
 function _dupFoliosEquivalentes(a,b){
   if(!a||!b) return false;
   if(a===b) return true;
@@ -7656,17 +7669,37 @@ function _dupProvParecidos(a,b){
 // los reportes, solo que el trabajo que pide es consolidar la captura, no revisar el CFDI.
 function clasificarDiferenciaSAT(d){
   const gs = (d && d.gastos) || [];
-  const total = parseFloat(d && d.cfdi && d.cfdi.total) || 0;
+  const cfdi = (d && d.cfdi) || {};
+  const total = parseFloat(cfdi.total) || 0;
   const cap = parseFloat(d && d.capturado);
-  const normF = s => _dupFolioCanon(s);
   if(gs.length < 2 || !(total > 0) || !isFinite(cap)) return { tipo:"diferencia" };
   // Un solo renglón con importe distinto SÍ es una diferencia real (un dedo en el monto). Aquí
   // solo entran los grupos, que es donde el doble conteo puede esconderse.
-  const mismoProv  = gs.every(g=>_dupProvParecidos(g.proveedor, gs[0].proveedor));
-  const mismaFecha = gs.every(g=>String(g.fecha||"") === String(gs[0].fecha||"") && !!g.fecha);
-  const f0 = normF(gs[0].factura);
-  const mismoFolio = !!f0 && gs.every(g=>{ const f = normF(g.factura); return !!f && _dupFoliosEquivalentes(f, f0); });
-  if(!(mismoProv && mismaFecha && mismoFolio)) return { tipo:"diferencia" };
+  //
+  // "Mismo comprobante" tiene que significar lo MISMO que cuando se armó el grupo, o el
+  // clasificador es más estricto que el agrupador y descarta lo que él mismo juntó. La primera
+  // versión exigía que todos compartieran el folio, y con eso se le escapaban las capturadas
+  // desde esta misma pantalla: llevaban el UUID en el campo Factura, así que el registro del
+  // folio y el del UUID no se parecían en nada aunque fueran la misma factura.
+  const _u = String(cfdi.uuid || cfdi.folio || "").trim();
+  const uCanon = _dupFolioCanon(_u);
+  const folioCfdi = _folioDeCfdi(cfdi);
+  const mismoComprobante = g => {
+    if(_u && g.cfdiUuid && String(g.cfdiUuid) === _u) return true;
+    const f = _dupFolioCanon(g.factura);
+    if(!f) return false;
+    if(uCanon && f === uCanon) return true;                          // el UUID tecleado como folio
+    return !!folioCfdi && _dupFoliosEquivalentes(f, folioCfdi);
+  };
+  const mismoProv = gs.every(g=>_dupProvParecidos(g.proveedor, gs[0].proveedor));
+  // Y TODOS tienen que estar ligados al comprobante, no solo parecerse en el monto: un grupo que
+  // solo casó por importe y fecha cercana puede ser dos compras distintas del mismo día.
+  const todosLigados = gs.every(mismoComprobante);
+  // La fecha ya NO se exige igual. La misma factura capturada dos veces suele traer dos fechas
+  // (una tecleada mal, o la del ticket contra la del timbrado), y exigirla dejaba fuera
+  // exactamente los casos que hay que cazar. El folio de una factura ya identifica el documento;
+  // con proveedor y folio no hacen falta más señas.
+  if(!(mismoProv && todosLigados)) return { tipo:"diferencia" };
   // Con las tres llaves iguales y capturado POR ENCIMA del comprobante, es contado de más. Si
   // quedara por debajo es una captura incompleta —falta un pedazo—, que no es lo mismo y sigue
   // mereciendo salir en diferencias: ahí el reporte está corto, no inflado.
@@ -7675,16 +7708,18 @@ function clasificarDiferenciaSAT(d){
   const padres = gs.filter(esPadre), hijos = gs.filter(g=>!esPadre(g));
   const norm = s => String(s||"").trim().toUpperCase();
   // consolidarFacturaDividida() fusiona por proveedor y folio EXACTOS. Si el grupo llegó por
-  // equivalencia de folio ("PBAL31598" ≡ "31598") esa función no lo encontraría y diría que ya
-  // no hay duplicados. Solo se ofrece el botón cuando de verdad va a funcionar.
-  const uniforme = gs.every(g=>norm(g.proveedor)===norm(gs[0].proveedor) && norm(g.factura)===norm(gs[0].factura));
+  // equivalencia de folio ("PBAL31598" ≡ "31598"), o porque uno de los registros trae el UUID en
+  // el campo Factura, esa función no lo encontraría y diría que ya no hay duplicados. Solo se
+  // ofrece el botón cuando de verdad va a funcionar.
+  const uniforme = gs.every(g=>norm(g.proveedor)===norm(gs[0].proveedor) && norm(g.factura)===norm(gs[0].factura))
+    && !!norm(gs[0].factura);
   const veces = total > 0 ? cap/total : 0;
   const exacto = Math.abs(veces - Math.round(veces)) * total <= Math.max(1, total*0.002);
   const motivo = (padres.length && hijos.length)
     ? `Factura dividida: el registro "Dividida" (${padres.length}) y sus categorías sueltas (${hijos.length}) están guardados los dos, así que la misma compra se cuenta dos veces.`
     : exacto && Math.round(veces) > 1
-      ? `El mismo comprobante está capturado ${Math.round(veces)} veces (mismo proveedor, fecha y folio).`
-      : `${gs.length} registros con el mismo proveedor, fecha y folio suman más que el comprobante.`;
+      ? `El mismo comprobante está capturado ${Math.round(veces)} veces (mismo proveedor y mismo folio).`
+      : `${gs.length} registros del mismo proveedor apuntan a este comprobante y suman más que él.`;
   return { tipo:"duplicado", motivo, uniforme, veces, exacto, nGastos: gs.length,
            proveedor: gs[0].proveedor || "", folio: gs[0].factura || "", excedente: Math.round((cap-total)*100)/100 };
 }
