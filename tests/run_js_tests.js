@@ -98,6 +98,7 @@ const FUNCS = [
   "montoEfectivoGasto", "difImporteCaja", "_yaVinculadoAOtroFolio",
   "permisosDetalle", "claveFormaPago", "filtrarGastosPanel", "totalesPorFormaPago", "folioDuplicado",
   "filasDetalleGastos", "gastosRepetidosPorId",
+  "mapaUuidAFolio", "_folioIdentidad", "facturaEnteraYSusPartes",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
@@ -687,6 +688,130 @@ t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
     { id: "a", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
     { id: "b", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
   ]);
+  assert.equal(r.length, 0);
+});
+
+console.log("\n== el UUID y el folio son el mismo comprobante ==");
+// El boton «Capturar» de la conciliacion SAT escribia el UUID en el campo Factura. El registro con
+// el folio real y el registro con el UUID son dos cadenas que no se parecen en nada, asi que nunca
+// caian en el mismo grupo: la conciliacion acusaba un duplicado que «Revisar duplicados» no
+// encontraba, y que a mano tampoco aparecia.
+
+t("el mapa traduce el UUID al folio real del CFDI", () => {
+  const m = S.mapaUuidAFolio([
+    { uuid: "FAB5A405-B677-44E4-9689-83C1228B3088", folio: "FAB5A405-B677-44E4-9689-83C1228B3088", serie: "FCPF", folioComp: "4010508626" },
+  ]);
+  assert.equal(m[S._dupFolioCanon("FAB5A405-B677-44E4-9689-83C1228B3088")], S._dupFolioCanon("FCPF4010508626"));
+});
+t("un CFDI sin folio no ensucia el mapa", () => {
+  const m = S.mapaUuidAFolio([{ uuid: "AAAA-BBBB", serie: "", folio: "" }, null]);
+  assert.deepEqual(Object.keys(m).filter(k => k), Object.keys(m).filter(k => k && m[k]));
+  assert.equal(Object.keys(m).length, 0);
+});
+t("no truena sin CFDIs", () => {
+  assert.deepEqual(S.mapaUuidAFolio(null), {});
+  assert.deepEqual(S.mapaUuidAFolio([]), {});
+});
+t("la identidad resuelve el UUID capturado en el campo Factura", () => {
+  const m = S.mapaUuidAFolio([{ uuid: "FAB5A405-B677-44E4-9689-83C1228B3088", folio: "FAB5A405-B677-44E4-9689-83C1228B3088", serie: "FCPF", folioComp: "4010508626" }]);
+  const conUuid  = { factura: "FAB5A405-B677-44E4-9689-83C1228B3088" };
+  const conFolio = { factura: "FCPF4010508626" };
+  assert.equal(S._folioIdentidad(conUuid, m), S._folioIdentidad(conFolio, m),
+    "los dos registros tienen que quedar con la MISMA identidad");
+});
+t("sin folio capturado, el cfdiUuid sigue identificando el gasto", () => {
+  const m = S.mapaUuidAFolio([{ uuid: "FAB5A405-B677-44E4-9689-83C1228B3088", folio: "FAB5A405-B677-44E4-9689-83C1228B3088", serie: "FCPF", folioComp: "4010508626" }]);
+  assert.equal(S._folioIdentidad({ factura: "", cfdiUuid: "FAB5A405-B677-44E4-9689-83C1228B3088" }, m),
+               S._dupFolioCanon("FCPF4010508626"));
+});
+t("sin folio y sin uuid, no hay identidad (no agrupa a ciegas)", () => {
+  assert.equal(S._folioIdentidad({ proveedor: "X", importe: 100 }, {}), "");
+  assert.equal(S._folioIdentidad(null, null), "");
+});
+t("sin mapa, la identidad es el folio tal cual (no rompe lo que ya funcionaba)", () => {
+  assert.equal(S._folioIdentidad({ factura: "PBAL-31598" }, null), S._dupFolioCanon("PBAL-31598"));
+});
+
+console.log("\n== la factura entera Y sus partes, las dos guardadas ==");
+// La forma mas comun de duplicar: se divide una factura por categorias y despues se vuelve a subir
+// la original completa. Por importe no salta —ninguno de los tres coincide con otro; lo que coincide
+// es la SUMA— y el detector viejo solo buscaba esa suma cuando existia un registro marcado
+// "Dividida", que aqui no existe.
+
+t("ONUS 06 jul: 29,038.36 + 4,996.00 = 34,034.36 → sobra la completa", () => {
+  const r = S.facturaEnteraYSusPartes([
+    { id: "a", categoria: "Cárnicos",           importe: 29038.36 },
+    { id: "b", categoria: "Frutas y Verduras",  importe: 4996.00  },
+    { id: "c", categoria: "Cárnicos",           importe: 34034.36 },
+  ]);
+  assert.ok(r, "tiene que detectarlo");
+  assert.equal(r.completo.id, "c", "la que sobra es la completa, no una de las partes");
+  assert.deepEqual(r.partes.map(x => x.id).sort(), ["a", "b"]);
+});
+t("el reparto redondeado a centavos sigue cuadrando", () => {
+  const r = S.facturaEnteraYSusPartes([
+    { id: "a", importe: 33.33 }, { id: "b", importe: 33.33 }, { id: "c", importe: 33.34 },
+    { id: "d", importe: 100.00 },
+  ]);
+  assert.ok(r); assert.equal(r.completo.id, "d");
+});
+t("una sola parte NO basta: eso ya es el duplicado exacto de siempre", () => {
+  // Con dos registros iguales no hay "reparto" que conservar; de eso se encarga la regla de
+  // captura repetida, que sabe cual borrar (la mas reciente).
+  assert.equal(S.facturaEnteraYSusPartes([{ id: "a", importe: 100 }, { id: "b", importe: 100 }]), null);
+});
+t("divisiones legitimas sin la factura completa NO se marcan", () => {
+  // Tres categorias de la misma factura, sin que nadie haya subido el entero: es captura correcta.
+  assert.equal(S.facturaEnteraYSusPartes([
+    { id: "a", importe: 100 }, { id: "b", importe: 200 }, { id: "c", importe: 350 },
+  ]), null);
+});
+t("importes en cero o negativos no inventan una suma que cuadre", () => {
+  assert.equal(S.facturaEnteraYSusPartes([
+    { id: "a", importe: 0 }, { id: "b", importe: 100 }, { id: "c", importe: 100 },
+  ]), null, "descontando el cero quedan dos, y dos iguales no son entero+partes");
+});
+t("no truena con basura", () => {
+  assert.equal(S.facturaEnteraYSusPartes(null), null);
+  assert.equal(S.facturaEnteraYSusPartes([null, undefined, { id: "a", importe: 1 }]), null);
+});
+
+t("el caso ONUS completo, de punta a punta, con el UUID en el campo Factura", () => {
+  // La reproduccion exacta de lo que el usuario tenia en pantalla: dos categorias con el folio real
+  // y una tercera captura, del total, con el UUID. Sin el mapa son dos grupos distintos y no se
+  // detecta nada.
+  const cfdis = [{ uuid: "FAB5A405-B677-44E4-9689-83C1228B3088", folio: "FAB5A405-B677-44E4-9689-83C1228B3088",
+                   serie: "FCPF", folioComp: "4010508626", proveedor: "ONUS COMERCIAL", total: 34034.36, fecha: "2026-07-06" }];
+  const gastos = [
+    { id: "1", proveedor: "ONUS COMERCIAL", factura: "FCPF4010508626", fecha: "2026-07-06",
+      categoria: "Cárnicos", importe: 29038.36 },
+    { id: "2", proveedor: "ONUS COMERCIAL", factura: "FCPF4010508626", fecha: "2026-07-06",
+      categoria: "Frutas y Verduras", importe: 4996.00 },
+    { id: "3", proveedor: "ONUS COMERCIAL", factura: "FAB5A405-B677-44E4-9689-83C1228B3088",
+      fecha: "2026-07-06", categoria: "Cárnicos", importe: 34034.36 },
+  ];
+  const r = S.duplicadosSospechosos(gastos, S.mapaUuidAFolio(cfdis));
+  assert.equal(r.length, 1, "los tres tienen que caer en UN grupo");
+  assert.deepEqual(r[0].sugeridos, ["3"], "se borra la completa; el reparto por categoria se conserva");
+  close(r[0].exceso, 34034.36);
+});
+t("sin el mapa, ese mismo caso no se detecta (es justo el bug que se corrigio)", () => {
+  const gastos = [
+    { id: "1", proveedor: "ONUS COMERCIAL", factura: "FCPF4010508626", fecha: "2026-07-06", importe: 29038.36 },
+    { id: "2", proveedor: "ONUS COMERCIAL", factura: "FCPF4010508626", fecha: "2026-07-06", importe: 4996.00 },
+    { id: "3", proveedor: "ONUS COMERCIAL", factura: "FAB5A405-B677-44E4-9689-83C1228B3088", fecha: "2026-07-06", importe: 34034.36 },
+  ];
+  const r = S.duplicadosSospechosos(gastos, {});
+  assert.ok(!r.some(g => (g.sugeridos || []).includes("3")),
+    "sin el puente uuid→folio son dos grupos y el entero pasa desapercibido");
+});
+t("las partes de una factura dividida, solas, siguen sin marcarse", () => {
+  // Guardia contra el falso positivo caro: si la regla nueva se pasara de lista, borraria capturas
+  // buenas. Dos categorias del mismo folio, sin el entero, son captura correcta.
+  const r = S.duplicadosSospechosos([
+    { id: "1", proveedor: "ONUS COMERCIAL", factura: "FCPF4010508626", fecha: "2026-07-06", importe: 29038.36 },
+    { id: "2", proveedor: "ONUS COMERCIAL", factura: "FCPF4010508626", fecha: "2026-07-06", importe: 4996.00 },
+  ], {});
   assert.equal(r.length, 0);
 });
 

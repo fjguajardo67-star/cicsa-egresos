@@ -1052,7 +1052,7 @@ body.snav-min .side-theme span { display:none; }
         <option value="">Todas las categorías</option>
       </select>
       <div style="margin-left:auto;font-size:13px;color:var(--txt2);display:flex;align-items:center;gap:16px">
-        <span id="desgloseFormaPago" style="font-size:12px;color:var(--txt2)"></span>
+        <span id="desgloseFormaPago" style="font-size:12px;color:var(--txt2)"></span>
         <span>💵 Total efectivo: <strong id="totalEfectivoSemana" style="font-family:'JetBrains Mono',monospace;color:var(--vd)">$0.00</strong></span>
         <span>Total semana: <strong id="totalSemana" style="font-family:'JetBrains Mono',monospace;color:var(--vd);font-size:16px">$0.00</strong></span>
       </div>
@@ -1971,7 +1971,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-29-b";
+const APP_BUILD = "2026-08-29-c";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5918,7 +5918,10 @@ async function renderLimpieza(){
   const comp  = gastosQueSonComplemento(gastos, cfdis);
   const imp   = gastosConImporteDistinto(gastos, cfdis);
   const fech  = gastosConFechaDudosa(gastos, _gmailRevisados||[], todayStr(), cfdis);
-  const dups  = (typeof duplicadosSospechosos==="function") ? (duplicadosSospechosos(gastos)||[]) : [];
+  // El mapa uuid→folio es lo que permite cruzar el registro que trae el UUID en el campo Factura
+  // con el que trae el folio real. Sin él, son dos cadenas que no se parecen y nunca se agrupan.
+  const _mapaUF = (typeof mapaUuidAFolio==="function") ? mapaUuidAFolio(cfdis) : {};
+  const dups  = (typeof duplicadosSospechosos==="function") ? (duplicadosSospechosos(gastos, _mapaUF)||[]) : [];
   // El mismo id en dos semanas. Va aquí y no en la lista de duplicados normales porque no es una
   // captura repetida que haya que juzgar: es un solo registro contado dos veces, y la única
   // salida es quitar la copia.
@@ -7961,6 +7964,57 @@ function clasificarDiferenciaSAT(d){
 // conciliación— y es invisible: ninguna pantalla mostraba en qué semana vive cada renglón, así
 // que en la lista se ven dos filas idénticas y parecen dos capturas distintas.
 // Es el candidato natural cuando la conciliación acusa un duplicado que a mano no aparece.
+// ── El UUID y el folio son el MISMO comprobante ─────────────────────────────
+// Un gasto capturado desde la conciliación SAT llevaba el UUID en el campo Factura (el botón
+// «Capturar» pasaba cfdi.folio, que para un CFDI ES el UUID). Así, el registro con el folio real
+// y el registro con el UUID no se parecen en NADA como texto y nunca caen en el mismo grupo —
+// que es exactamente por qué «Revisar duplicados» no encontraba lo que la conciliación sí veía.
+// El CFDI conoce las dos caras: uuid ↔ serie+folio. Con ese mapa se traducen.
+function mapaUuidAFolio(cfdis){
+  const m = {};
+  (cfdis||[]).forEach(c=>{
+    if(!c) return;
+    const folio = _folioDeCfdi(c);
+    if(!folio) return;
+    const u = _dupFolioCanon(c.uuid || c.folio);
+    if(u && u !== folio) m[u] = folio;
+  });
+  return m;
+}
+// La identidad con la que se agrupa un gasto: su folio, resolviendo el UUID cuando se puede.
+function _folioIdentidad(g, mapaUuidFolio){
+  const m = mapaUuidFolio || {};
+  const f = _dupFolioCanon(g && g.factura);
+  if(f) return m[f] || f;                       // el campo Factura traía el UUID: se traduce
+  const u = _dupFolioCanon(g && g.cfdiUuid);    // sin folio, el cfdiUuid sigue identificándolo
+  return u ? (m[u] || u) : "";
+}
+
+// ── La factura entera Y sus partes, las dos guardadas ───────────────────────
+// La forma más común de duplicar aquí: se divide una factura por categorías y después se vuelve a
+// subir la original completa. Quedan las partes Y el entero, sumando el doble.
+// No lo cazaba nadie. El detector buscaba esa suma SOLO cuando existía un registro marcado
+// "Dividida", y en este caso ninguno lo está: son categorías sueltas más una captura completa.
+// Y por importe tampoco salía, porque ninguno de los tres coincide con otro — lo que coincide es
+// la SUMA. Ejemplo real: ONUS 06 jul, 29,038.36 + 4,996.00 = 34,034.36.
+// Se compara "todos los demás" contra el candidato, no cualquier subconjunto: buscar subconjuntos
+// dispara falsos positivos con facturas chicas y crece de forma explosiva. Cubre el caso real.
+// Devuelve { completo, partes } o null.
+function facturaEnteraYSusPartes(regs, tol){
+  const imp = g => parseFloat(g && g.importe) || 0;
+  const lista = (regs||[]).filter(g=>g && imp(g) > 0);
+  if(lista.length < 3) return null;   // hacen falta el entero y AL MENOS dos partes
+  for(const cand of lista){
+    const otros = lista.filter(g=>String(g.id) !== String(cand.id));
+    const suma = otros.reduce((s,g)=>s+imp(g), 0);
+    // Tolerancia de centavos: el reparto por categoría se redondea.
+    if(Math.abs(suma - imp(cand)) <= Math.max(tol==null?0.02:tol, imp(cand)*0.0005)){
+      return { completo: cand, partes: otros };
+    }
+  }
+  return null;
+}
+
 function gastosRepetidosPorId(gastos){
   const porId = new Map();
   (gastos||[]).forEach(g=>{
@@ -7985,8 +8039,9 @@ function gastosRepetidosPorId(gastos){
     .sort((a,b)=>b.deMas - a.deMas);
 }
 
-function duplicadosSospechosos(gastos){
+function duplicadosSospechosos(gastos, mapaUuidFolio){
   gastos = gastos || allGastosAllWeeks();
+  const _mapa = mapaUuidFolio || {};
   const norm = s => String(s||"").trim().toUpperCase();
   const imp = g => parseFloat(g.importe)||0;
   const grupos = [], reportados = new Set();
@@ -7996,7 +8051,7 @@ function duplicadosSospechosos(gastos){
   //    agrupar con confianza.
   const gruposFolio = [], grupoDe = new Map();      // id → índice de grupo (para el pase 3)
   gastos.forEach(g=>{
-    const canon=_dupFolioCanon(g.factura);
+    const canon=_folioIdentidad(g, _mapa);
     if(!canon) return;
     let gr=gruposFolio.find(x=>_dupFoliosEquivalentes(x.canon,canon)
       && x.regs.some(r=>_dupProvParecidos(r.proveedor,g.proveedor)));
@@ -8068,6 +8123,18 @@ function duplicadosSospechosos(gastos){
       }
     }
     if(!sugeridos.length){
+      // La factura entera Y sus partes, sin que ninguna esté marcada "Dividida". Se sugiere
+      // borrar el ENTERO y conservar las partes: son las que traen el reparto por categoría, y
+      // ese reparto es lo que alimenta el presupuesto. Borrar las partes lo perdería.
+      const ep = facturaEnteraYSusPartes(regs);
+      if(ep){
+        sugeridos = [ep.completo.id];
+        motivo = `La factura está capturada DOS veces: completa (${fmt(imp(ep.completo))}) y `+
+                 `repartida en ${ep.partes.length} categorías que suman lo mismo. Se sugiere borrar `+
+                 `la completa y conservar el reparto, que es el que alimenta el presupuesto.`;
+      }
+    }
+    if(!sugeridos.length){
       // Capturas repetidas exactas: misma fecha y mismo importe (ej. la misma factura de hielo
       // guardada dos veces). Se sugiere borrar la copia capturada después (id más reciente).
       const vistos = {};
@@ -8095,7 +8162,7 @@ function duplicadosSospechosos(gastos){
   //    marca: dos compras reales iguales el mismo día (p. ej. tortillas) no son duplicado.
   const porDiaImp = {};
   gastos.forEach(g=>{
-    if(reportados.has(g.id) || imp(g)<=0 || !_dupFolioCanon(g.factura)) return;
+    if(reportados.has(g.id) || imp(g)<=0 || !_folioIdentidad(g, _mapa)) return;
     const k = (g.fecha||"")+"|"+imp(g).toFixed(2);
     (porDiaImp[k] = porDiaImp[k]||[]).push(g);
   });
