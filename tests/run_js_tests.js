@@ -691,6 +691,84 @@ t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
   assert.equal(r.length, 0);
 });
 
+console.log("\n== Seguimiento se fusiono en Presupuesto ==");
+// Seguimiento dibujaba por tercera vez la comparacion gasto-vs-presupuesto por categoria que
+// budgetGrid ya pinta con los mismos numeros, y su tabla de detalle ya solo aportaba la forma de
+// pago — que Gastos tambien edita desde el paso 1. Lo que quedaba propio eran los exportadores y
+// el resumen que veia quien no es admin. Todo eso vive ahora en Presupuesto.
+
+t("hay un modo que ve todo y solo cambia la forma de pago", () => {
+  const p = S.permisosDetalle("pago");
+  assert.equal(p.formaPago, true, "es lo unico que esta pantalla toca");
+  assert.equal(p.borrar, false, "borrar vive SOLO en Gastos");
+  assert.equal(p.importe, false);
+  assert.equal(p.categoria, false);
+  assert.equal(p.proveedor, false);
+  assert.equal(p.folio, false);
+  assert.equal(p.verFactura, true, "revisar un pago sin poder ver el comprobante no sirve");
+});
+t("un modo que no existe cae en lectura, no en edicion", () => {
+  // Si alguien teclea mal el nombre del modo, el peor default posible seria dejar editar.
+  const p = S.permisosDetalle("pagos");   // el plural, un dedazo natural
+  assert.equal(p.formaPago, false);
+  assert.equal(p.borrar, false);
+});
+
+t("no quedo ni un cable suelto de Seguimiento", () => {
+  // Guardia sobre el fuente. Al quitar una pantalla lo que truena no es lo que se borra, es lo que
+  // se queda apuntando a lo borrado: un boton en la barra sin pagina detras, o un repintado que
+  // llama a una funcion que ya no existe. Eso falla en silencio y solo se ve usandola.
+  // Ojo con las subcadenas: "page-reporte" vive dentro de "page-reportes", que es Auditoria y
+  // sigue existiendo. Por eso el id se busca con sus comillas y no suelto.
+  assert.ok(!html.includes('id="page-reporte"'), "quedo la pagina de Seguimiento");
+  ["reporteContent", "reportePeriodoSel", "renderReporteActual",
+   "renderSeguimientoVista"].forEach(x => {
+    assert.ok(!html.includes(x), "quedo una referencia viva a " + x);
+  });
+});
+t("cada showPage() apunta a una pagina que existe", () => {
+  // La guardia general, no solo para este cambio: un boton que lleva a una pagina inexistente
+  // deja la pantalla en blanco sin decir nada.
+  const destinos = [...html.matchAll(/showPage\(\s*['"]([\w-]+)['"]/g)].map(m => m[1]);
+  assert.ok(destinos.length > 5, "esperaba encontrar la navegacion");
+  [...new Set(destinos)].forEach(d => {
+    assert.ok(html.includes('id="page-' + d + '"'), 'showPage("' + d + '") no tiene pagina');
+  });
+});
+t("Presupuesto revisa y marca pagos, pero no borra", () => {
+  const i = script.indexOf("function renderDetallePresupuesto(");
+  assert.ok(i > -1, "no encontre renderDetallePresupuesto");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/permisosDetalle\("pago"\)/.test(b), "tiene que declarar sus permisos, no armarlos a mano");
+  assert.ok(!b.includes("eliminarGasto("), "el bote de basura vive solo en Gastos");
+  assert.ok(b.includes("verEnGastos("), "pero tiene que llevar a donde SI se corrige");
+});
+t("el detalle y las metas se repintan juntos", () => {
+  // Si renderPresupuesto repinta budgetGrid pero no el detalle, la misma pantalla acaba
+  // enseñando dos periodos distintos a la vez.
+  const i = script.indexOf("function renderPresupuesto(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  // Sin los comentarios: una llamada comentada sigue conteniendo el texto, asi que buscarlo tal
+  // cual daria por buena una pantalla que ya no repinta nada.
+  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  assert.ok(vivo.includes("renderDetallePresupuesto("), "renderPresupuesto tiene que repintar su detalle");
+});
+t("los exportadores siguen colgados de un boton", () => {
+  // Vivian en la barra de Seguimiento. Si la pagina se va y nadie los mueve, el Excel y el PDF
+  // del periodo dejan de existir sin que ninguna prueba se entere.
+  ["exportarExcel()", "exportarPDF()"].forEach(f => {
+    assert.ok(html.includes('onclick="' + f + '"'), "nadie puede llamar a " + f);
+  });
+});
+
 console.log("\n== el UUID y el folio son el mismo comprobante ==");
 // El boton «Capturar» de la conciliacion SAT escribia el UUID en el campo Factura. El registro con
 // el folio real y el registro con el UUID son dos cadenas que no se parecen en nada, asi que nunca

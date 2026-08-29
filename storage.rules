@@ -12,11 +12,30 @@
 //                      de las facturas, y los .json de cortes.
 // Publicar uno no publica el otro, y viven en secciones distintas de la consola.
 //
-// Hasta ahora este archivo no existía: nadie había revisado qué reglas tenía el
-// bucket, y los valores por defecto de Firebase varían según cuándo se creó
-// (unos exigen sesión, otros quedan abiertos y luego se cierran solos). Es decir:
-// las imágenes de las facturas de la empresa podían llevar tiempo siendo
-// descargables por cualquiera que tuviera la URL, sin que nadie lo supiera.
+// ── Qué había antes de esto (verificado en la consola el 2026-08-29) ──────────
+// Este archivo no existía y nadie había mirado el bucket. Lo que había era esto:
+//
+//   match /facturas/{allPaths=**} {
+//     allow read:  if request.auth != null;
+//     allow write: if request.auth != null
+//       && request.resource.size < 10 * 1024 * 1024
+//       && request.resource.contentType.matches('application/pdf|image/.*');
+//   }
+//
+// O sea: el bucket NO estaba abierto — leer y escribir ya exigían sesión. Una
+// versión anterior de este comentario decía lo contrario; era una suposición, no
+// un hecho, y estaba mal. Lo que sí faltaba es lo de abajo:
+//
+//   1. `cortes/` no estaba declarado. En Storage lo no declarado se deniega, así
+//      que subirArchivoCortesAStorage() llevaba fallando desde el primer día, en
+//      silencio, porque su .catch(()=>{}) se traga el error. El respaldo de los
+//      cortes nunca existió. Declararlo aquí es lo que lo hace funcionar.
+//   2. `allow write` es crear + sobrescribir + BORRAR, las tres. Cualquiera con
+//      sesión podía borrar o pisar la factura de un gasto ya capturado, que es
+//      justo el respaldo ante el SAT. Por eso abajo se separan create de
+//      update/delete en vez de usar `write`.
+//   3. Bastaba con tener sesión. No es lo mismo que estar dado de alta — ver la
+//      nota de abajo sobre el alta pública de Firebase.
 //
 // ── Lo que la app hace de verdad contra Storage (verificado en index.html) ──
 //   subirRespaldoAStorage()      POST  facturas/{ts}_{factura}.{pdf|jpg|png}

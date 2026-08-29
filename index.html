@@ -758,7 +758,6 @@ body.snav-min .side-theme span { display:none; }
       <h4>Análisis</h4>
       <button class="nav-btn" onclick="showPage('presupuesto',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/></svg><span class="nb-lbl">Presupuesto</span></button>
       <button class="nav-btn" id="navBalance" style="display:none" onclick="showPage('balance',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 4v16M4 8h16"/><path d="M7 8l-3 6h6zM17 8l-3 6h6z"/></svg><span class="nb-lbl">Balance</span></button>
-      <button class="nav-btn" onclick="showPage('reporte',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 17l6-6 4 4 7-8"/><path d="M17 7h4v4"/></svg><span class="nb-lbl">Seguimiento</span></button>
       <button class="nav-btn" id="navReportes" onclick="showPage('reportes',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><span class="nb-lbl">Auditoría</span></button>
       <button class="nav-btn" id="navSat" onclick="showPage('sat',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 10h16M5 10l7-6 7 6M6 10v9M18 10v9M4 21h16"/></svg><span class="nb-lbl">SAT</span></button>
     </div>
@@ -1077,8 +1076,18 @@ body.snav-min .side-theme span { display:none; }
 <!-- ═══════════════ PAGE: PRESUPUESTO ═══════════════ -->
 <div class="container page" id="page-presupuesto">
   <div class="card" style="margin-bottom:16px">
-    <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap" id="presupPeriodoSel"></div>
+    <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+      <div id="presupPeriodoSel" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap"></div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-green" onclick="exportarExcel()">📊 Excel</button>
+        <button class="btn btn-gold"  onclick="exportarPDF()">🖨️ PDF</button>
+      </div>
+    </div>
   </div>
+  <!-- Lo gastado contra lo presupuestado, para TODOS los roles. La barra de más abajo
+       (presupTotalBar) es la de editar y solo la ve un admin; esto es de solo lectura y es lo
+       que Seguimiento le enseñaba al operativo. -->
+  <div class="summary-grid" id="presupResumen" style="margin-bottom:16px"></div>
   <div class="card">
     <div class="card-title">🎯 Presupuesto semanal por categoría <span id="presupPeriodoLabel" style="font-family:'DM Serif Display',serif;font-weight:400;color:var(--txt2);font-size:16px"></span></div>
     <p style="font-size:13px;color:var(--txt2);margin-bottom:14px">
@@ -1123,6 +1132,7 @@ body.snav-min .side-theme span { display:none; }
       <button class="btn btn-light" onclick="resetPresupuesto()">↺ Restaurar valores</button>
     </div>
   </div>
+  <div id="presupDetalle" style="margin-top:16px"></div>
 </div>
 
 <!-- ═══════════════ PAGE: REPORTE ═══════════════ -->
@@ -1140,18 +1150,6 @@ body.snav-min .side-theme span { display:none; }
   </div>
 </div>
 
-<div class="container page" id="page-reporte">
-  <div class="card" style="margin-bottom:16px">
-    <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-      <div id="reportePeriodoSel" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap"></div>
-      <div style="margin-left:auto;display:flex;gap:8px">
-        <button class="btn btn-green" onclick="exportarExcel()">📊 Excel</button>
-        <button class="btn btn-gold"  onclick="exportarPDF()">🖨️ PDF</button>
-      </div>
-    </div>
-  </div>
-  <div id="reporteContent"></div>
-</div>
 
 <!-- ═══════════════ PAGE: GMAIL ═══════════════ -->
 <div class="container page" id="page-gmail">
@@ -1971,7 +1969,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-29-c";
+const APP_BUILD = "2026-08-29-d";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2841,7 +2839,6 @@ function refrescarVistaActual(forzar){
     if(p==="gastos")            renderGastos();
     else if(p==="presupuesto")  renderPresupuesto();
     else if(p==="balance")      renderBalance();
-    else if(p==="reporte")      renderReporteActual();
     else if(p==="pagos")        renderPagos();
     else if(p==="caja")         renderCaja();
   }catch(e){ console.warn("refrescarVistaActual:", e); }
@@ -3200,16 +3197,16 @@ function quitarFechaCorte(){
 function refrescarTrasCorte(){
   const repinta = [
     ["budgetGrid", "renderPresupuesto"], ["gastosBody", "renderGastos"],
-    ["reporteContent", "renderReporteActual"], ["cajaContenido", "renderCaja"],
+    ["cajaContenido", "renderCaja"],
     ["pagosBody", "renderPagos"], ["resumenKpis", "renderResumen"],
   ];
   repinta.forEach(([id, fn])=>{
     try{ if(document.getElementById(id) && typeof window[fn]==="function") window[fn](); }catch(_){}
   });
-  ["gastosPeriodoSel","presupPeriodoSel","reportePeriodoSel"].forEach(id=>{
+  ["gastosPeriodoSel","presupPeriodoSel"].forEach(id=>{
     const c=document.getElementById(id);
     if(c && c.innerHTML.trim()){
-      const fn = id==="gastosPeriodoSel" ? "renderGastos" : id==="presupPeriodoSel" ? "renderPresupuesto" : "renderReporteActual";
+      const fn = id==="gastosPeriodoSel" ? "renderGastos" : "renderPresupuesto";
       try{ pintarSelectorPeriodoSP(id, fn); }catch(_){}
     }
   });
@@ -3416,7 +3413,6 @@ function showPage(name,btn){
                            // avisar. Se piden frescos cada vez que se entra.
                            if(currentRole==="admin") cargarCfdisStore(true).then(()=>renderBalance())
                              .catch(e=>{ _cfdisError = e.message||"no se pudieron leer los CFDI"; renderBalance(); }); }
-  if(name==="reporte"){    pintarSelectorPeriodoSP("reportePeriodoSel","renderReporteActual"); renderReporteActual(); }
   if(name==="caja"){ try{ initCajaDropzone(); }catch(_){} }
   if(name==="gmail")       checkGmailStatus();
   if(name==="pagos")       { restaurarPagosPeriodo(); renderPagos(); }
@@ -4521,7 +4517,7 @@ function eliminarGasto(id){
   save();
   if(document.getElementById("gastosBody")) renderGastos();
   if(document.getElementById("rBodyDetalle")) renderReportes();
-  if(document.getElementById("reporteContent")) renderReporteActual();
+  if(document.getElementById("budgetGrid")) renderPresupuesto();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5203,6 +5199,9 @@ function exportarBalanceExcel(){
 }
 
 function renderPresupuesto(){
+  // El detalle y el resumen del periodo son parte de esta pantalla desde que Seguimiento se
+  // fusionó aquí: se repintan juntos para que nunca enseñen periodos distintos.
+  try{ renderDetallePresupuesto(); }catch(_){}
   const grid=document.getElementById("budgetGrid"); grid.innerHTML="";
   const esAdmin = (typeof currentRole !== "undefined" && currentRole === "admin");
   const puedeEditar = esAdmin && presupDesbloqueado();
@@ -5348,70 +5347,53 @@ function resetPresupuesto(){ if(!_soloAdminPresup()) return; if(!confirm("¿Rest
 // ═══════════════════════════════════════════════════════════════════════════
 // Seguimiento usa el periodo compartido (getPeriodoSP): la semana guardada elegida o un rango
 // por fecha real. El periodo se persiste solo (localStorage) y se comparte con Presupuesto.
-function renderReporteActual(){
-  const p=getPeriodoSP();
-  renderSeguimientoVista(gastosDelPeriodoSP(), p.label);
-}
-
-function renderSeguimientoVista(gastos, label){
-  const totalGlobal=gastos.reduce((s,g)=>s+g.importe,0), byCat={};
-  // Desglosa las facturas divididas en sus partidas reales (igual que Auditoría y Presupuesto),
-  // para que su parte llegue a cada categoría en vez de amontonarse en una categoría "Dividida".
-  // El total no cambia: las partidas suman el importe de la factura.
-  partidasExpandidas(gastos).forEach(g=>{ if(!byCat[g.categoria]) byCat[g.categoria]=[]; byCat[g.categoria].push(g); });
-  // El presupuesto se captura POR SEMANA. Presupuesto ya lo escalaba al rango elegido, pero aquí
-  // seguía comparándose el gasto de un mes contra la meta de una semana: TODO salía excedido y
-  // las dos pantallas se contradecían con el mismo periodo en el selector. Se usa exactamente el
-  // mismo cálculo (presupCatPeriodo) para que las cifras cuadren.
-  const F=factorPresupuestoPeriodo(getPeriodoSP());
-  const presDe=(c)=>presupCatPeriodo(c, F.factor);
-  const gastadoDe=(c)=>(byCat[c]||[]).reduce((s,g)=>s+g.importe,0);
-  // Misma lista de categorías que Presupuesto (la del negocio, no la de fábrica): si no,
-  // Seguimiento inventaba metas para categorías que ya nadie usa y omitía las nuevas.
-  const allCats=[...new Set([...catsActuales(),...Object.keys(byCat)])];
-  const totalPres=allCats.reduce((s,c)=>s+presDe(c),0);
-  // "Excedida" exige tener meta: sin presupuesto asignado no hay nada que exceder. Antes el
-  // contador incluía esas categorías aunque su barra saliera verde.
-  const sobre=allCats.filter(c=>presDe(c)>0 && gastadoDe(c)>presDe(c));
-  let html=`<div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--vd);margin-bottom:18px">Seguimiento — ${esc(label||"")}</div>
-  <div class="summary-grid" style="margin-bottom:20px">
-    <div class="scard"><div class="scard-label">Total gastado</div><div class="scard-val">${fmt(totalGlobal)}</div><div class="scard-sub">${gastos.length} facturas · ${esc(label||"")}</div></div>
-    <div class="scard"><div class="scard-label">Presupuesto asignado</div><div class="scard-val">${fmt(totalPres)}</div></div>
-    <div class="scard ${totalGlobal>totalPres?'alert':''}"><div class="scard-label">Diferencia</div><div class="scard-val" style="color:${totalGlobal>totalPres?'var(--red)':'var(--vm)'}">
-      ${totalGlobal>totalPres?'−':'+'} ${fmt(Math.abs(totalPres-totalGlobal))}</div></div>
-    <div class="scard ${sobre.length>0?'alert':''}"><div class="scard-label">Categorías excedidas</div><div class="scard-val">${sobre.length}</div></div>
-  </div>
-  ${(F.esRango && Math.abs(F.factor-1)>0.001)?`<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--txt);margin-bottom:16px">
-    📅 Rango de <strong>${F.dias} día${F.dias===1?"":"s"}</strong> = <strong>${F.factor.toFixed(2)} semanas</strong>. Las metas se comparan con tu presupuesto semanal <strong>× ${F.factor.toFixed(2)}</strong>.
-  </div>`:""}`;
-  html+=`<div class="card" style="margin-bottom:16px"><div class="card-title">🎯 Gasto vs Presupuesto por categoría</div><div style="padding:0 4px">`;
-  allCats.sort((a,b)=>gastadoDe(b)-gastadoDe(a)).forEach(cat=>{
-    const gastado=gastadoDe(cat), pres=presDe(cat);
-    const pct=pres>0?Math.min((gastado/pres)*100,100):(gastado>0?100:0), over=gastado>pres&&pres>0;
-    // El renglón lleva al detalle de esas facturas en Auditoría. Sin esto, ver un monto en una
-    // categoría no daba forma de averiguar de qué facturas venía.
-    html+=`<div class="chart-row" style="margin-bottom:10px;cursor:pointer" title="Ver las facturas de esta categoría en Auditoría" onclick="editarGastosCategoria('${escAttrJs(cat)}')">
-      <div style="width:160px;font-size:12px;color:var(--txt2);text-align:right;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(cat)||"(sin categoría)"}">${esc(cat)||`<em style="color:var(--do)">(sin categoría)</em>`}</div>
-      <div style="flex:1;background:#E8F5E1;border-radius:20px;height:24px;overflow:hidden;margin:0 10px">
-        <div style="height:100%;border-radius:20px;width:${pct}%;background:${over?'linear-gradient(90deg,var(--red),#E74C3C)':'linear-gradient(90deg,var(--vm),#5DA832)'};display:flex;align-items:center;padding-left:10px;font-size:11px;font-weight:700;color:white;white-space:nowrap;min-width:${gastado>0?'60px':'0'}">${gastado>0?fmt(gastado):''}</div>
-      </div>
-      <div style="font-size:11px;color:${over?'var(--red)':'var(--txt2)'};width:90px;text-align:right;flex-shrink:0;font-family:'JetBrains Mono',monospace">
-        ${pres>0?fmt(pres):''} ${over?`<span style="color:var(--red);font-weight:700">⚠${((gastado/pres)*100).toFixed(0)}%</span>`:''}
-      </div></div>`;
-  });
-  html+=`</div></div><div class="card"><div class="card-title">📋 Detalle — ${esc(label||"")}</div>
+// Presupuesto pinta DOS cosas con los mismos números: budgetGrid, que compara gasto contra meta
+// por categoría, y este resumen del periodo. La gráfica de barras que vivía en Seguimiento era una
+// tercera versión de lo mismo —mismas categorías, mismos totales, mismo factor de prorrateo— y por
+// eso las dos pantallas se sentían repetidas. No se perdió nada al quitarla: lo que Seguimiento
+// tenía de propio era el resumen para quien no es admin y el detalle del periodo, y los dos están
+// aquí abajo.
+function renderDetallePresupuesto(){
+  const cont = document.getElementById("presupDetalle");
+  const res  = document.getElementById("presupResumen");
+  if(!cont && !res) return;
+  const p = getPeriodoSP(), gastos = gastosDelPeriodoSP(), label = p.label || "";
+  const totalGastado = gastos.reduce((s,g)=>s+(parseFloat(g.importe)||0), 0);
+  const F = factorPresupuestoPeriodo(p);
+  const totals = totalesPorCatPeriodo();
+  const allCats = [...new Set([...catsActuales(), ...Object.keys(totals)])];
+  const totalPres = allCats.reduce((s,c)=>s+presupCatPeriodo(c, F.factor), 0);
+  // "Excedida" exige tener meta: sin presupuesto asignado no hay nada que exceder.
+  const sobre = allCats.filter(c=>{ const m = presupCatPeriodo(c, F.factor); return m > 0 && (totals[c]||0) > m; });
+  if(res){
+    res.innerHTML = `
+      <div class="scard"><div class="scard-label">Total gastado</div><div class="scard-val">${fmt(totalGastado)}</div><div class="scard-sub">${gastos.length} factura${gastos.length===1?"":"s"} · ${esc(label)}</div></div>
+      <div class="scard"><div class="scard-label">Presupuesto del periodo</div><div class="scard-val">${fmt(totalPres)}</div>${(F.esRango && Math.abs(F.factor-1)>0.001)?`<div class="scard-sub">semanal × ${F.factor.toFixed(2)}</div>`:""}</div>
+      <div class="scard ${totalGastado>totalPres?'alert':''}"><div class="scard-label">Diferencia</div><div class="scard-val" style="color:${totalGastado>totalPres?'var(--red)':'var(--vm)'}">${totalGastado>totalPres?'−':'+'} ${fmt(Math.abs(totalPres-totalGastado))}</div></div>
+      <div class="scard ${sobre.length>0?'alert':''}"><div class="scard-label">Categorías excedidas</div><div class="scard-val">${sobre.length}</div></div>`;
+  }
+  if(!cont) return;
+  const perm = permisosDetalle("pago");
+  let html = `<div class="card"><div class="card-title">📋 Detalle — ${esc(label)}</div>
+    <div style="font-size:12.5px;color:var(--txt2);margin-bottom:12px">
+      Aquí se marca <strong>cómo se pagó</strong> cada factura mientras se repasa el periodo.
+      Para corregir proveedor, categoría, folio o importe —o para borrar— usa «✏️ Corregir»: todo
+      eso vive en <strong>Gastos</strong>, que es la única pantalla que edita y la única que borra.
+    </div>
     <div class="tbl-wrap"><table style="width:100%;table-layout:fixed">
-    <colgroup><col style="width:10%"><col style="width:22%"><col style="width:16%"><col style="width:13%"><col style="width:18%"><col style="width:14%"><col style="width:7%"></colgroup>
+    <colgroup><col style="width:10%"><col style="width:22%"><col style="width:15%"><col style="width:14%"><col style="width:17%"><col style="width:13%"><col style="width:9%"></colgroup>
     <thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th>No. Factura</th><th>Forma de pago</th><th style="text-align:right">Importe</th><th style="text-align:center">Acción</th></tr></thead><tbody>`;
-  gastos.sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{
-    html+=`<tr><td>${fmtDate(g.fecha)}</td><td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(g.proveedor)}"><strong>${esc(g.proveedor)}</strong></td><td><span class="cat-badge">${esc(g.categoria)}</span></td>
-      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.factura||"—")}</td>
-      <td>${formaPagoSelectHtml(g)}</td>
-      <td class="amount-cell">${fmt(g.importe)}</td>
-      <td style="text-align:center"><button onclick="eliminarGasto('${g.id.replace(/'/g,"\\'")}')" style="padding:4px 10px;background:#FFEBEE;color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button></td></tr>`;
+  gastos.slice().sort((a,b)=>a.fecha<b.fecha?1:-1).forEach(g=>{
+    html += `<tr><td>${fmtDate(g.fecha)}</td>
+      <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${celdaProveedor(g, perm)}</td>
+      <td>${celdaCategoria(g, perm)}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${celdaFolio(g, perm)}</td>
+      <td>${celdaFormaPago(g, perm)}</td>
+      <td class="amount-cell">${celdaImporte(g, perm)}</td>
+      <td style="text-align:center"><button class="btn btn-light" style="padding:4px 10px;font-size:11px;white-space:nowrap" title="Abrir este gasto en Gastos para corregirlo o borrarlo" onclick="verEnGastos('${escAttrJs(g.id)}')">✏️ Corregir</button></td></tr>`;
   });
-  html+=`</tbody></table></div>${gastos.length===0?'<div class="empty-state"><div class="ei">📊</div><p>No hay gastos en el período.</p></div>':''}</div>`;
-  document.getElementById("reporteContent").innerHTML=html;
+  html += `</tbody></table></div>${gastos.length===0?'<div class="empty-state"><div class="ei">📊</div><p>No hay gastos en el período.</p></div>':''}</div>`;
+  cont.innerHTML = html;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -8266,7 +8248,6 @@ function consolidarFacturaDividida(prov, folio){
   if(document.getElementById("gastosBody")) renderGastos();
   if(document.getElementById("rBodyDetalle")) renderReportes();
   if(document.getElementById("budgetGrid")) renderPresupuesto();
-  if(document.getElementById("reporteContent")) renderReporteActual();
 }
 // Borra DE UN GOLPE todos los registros sugeridos de un grupo. Borrarlos de uno en uno rompe
 // la detección: al quitar el primero, los que quedan ya no suman el total del padre y el
@@ -8284,7 +8265,7 @@ function borrarSugeridosGrupo(idsCsv){
   renderRevisionDuplicados();
   if(document.getElementById("gastosBody")) renderGastos();
   if(document.getElementById("rBodyDetalle")) renderReportes();
-  if(document.getElementById("reporteContent")) renderReporteActual();
+  if(document.getElementById("budgetGrid")) renderPresupuesto();
 }
 function borrarGastoDuplicado(id){
   if(!confirm("¿Eliminar este registro? Se resta de todos los reportes y se sincroniza a todos los dispositivos.")) return;
@@ -8294,7 +8275,7 @@ function borrarGastoDuplicado(id){
   renderRevisionDuplicados();
   if(document.getElementById("gastosBody")) renderGastos();
   if(document.getElementById("rBodyDetalle")) renderReportes();
-  if(document.getElementById("reporteContent")) renderReporteActual();
+  if(document.getElementById("budgetGrid")) renderPresupuesto();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -9082,7 +9063,6 @@ function editarGasto(id,campo,valor){
   save();
   renderGastos();
   if(document.getElementById("budgetGrid")) renderPresupuesto();
-  if(document.getElementById("reporteContent")) renderReporteActual();
 }
 
 // Editor de la división por categoría de una factura ya guardada — reclasificar o reajustar sus
@@ -9169,7 +9149,6 @@ function guardarEditPartidas(){
   if(document.getElementById("gastosBody")) renderGastos();
   if(document.getElementById("rBodyDetalle")) renderReportes();
   if(document.getElementById("budgetGrid")) renderPresupuesto();
-  if(document.getElementById("reporteContent")) renderReporteActual();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -9207,7 +9186,6 @@ function cambiarCategoriaGasto(id, cat){
   save();
   renderReportes();
   if(document.getElementById("budgetGrid")) renderPresupuesto();
-  if(document.getElementById("reporteContent")) renderReporteActual();
 }
 // Rango de fechas del periodo compartido (para drill-down desde Presupuesto a Auditoría).
 function periodoSPRango(){ return resolverPeriodoSP(getPeriodoSP(), state.weeks); }
@@ -9942,7 +9920,7 @@ let _actTimer = null, _actActivo = false, _actPestanaActual = "";
 
 function _actLabelPestana(name){
   const M = { resumen:"Resumen", captura:"Capturar", gastos:"Gastos", caja:"Caja", presupuesto:"Presupuesto",
-    reporte:"Seguimiento", reportes:"Auditoría", pagos:"Pagos", gmail:"Gmail",
+    reportes:"Auditoría", pagos:"Pagos", gmail:"Gmail",
     "catalogo-productos":"Productos", catalogo:"Catálogo", sat:"SAT" };
   return M[name] || (name||"");
 }
@@ -11076,6 +11054,11 @@ const PERMISOS_DETALLE = {
   edicion: { proveedor:true,  categoria:true,  importe:true,  folio:true,  formaPago:true,  borrar:true,  verFactura:true,  divididas:true  },
   // Auditoría: revisión del estado. Ve todo, no toca nada.
   lectura: { proveedor:false, categoria:false, importe:false, folio:false, formaPago:false, borrar:false, verFactura:true,  divididas:false },
+  // Presupuesto: lectura MÁS la forma de pago. Es lo único que Seguimiento hacía y nadie más
+  // hacía en su momento; hoy Gastos también la edita, pero aquí sigue teniendo sentido: es la
+  // pantalla donde se revisa el periodo entero, y marcar qué se pagó en efectivo es justo lo que
+  // se hace repasando la lista, sin querer entrar a corregir importes ni categorías.
+  pago:    { proveedor:false, categoria:false, importe:false, folio:false, formaPago:true,  borrar:false, verFactura:true,  divididas:false },
 };
 function permisosDetalle(modo){ return { ...(PERMISOS_DETALLE[modo] || PERMISOS_DETALLE.lectura) }; }
 
@@ -11218,7 +11201,7 @@ function cambiarFormaPagoReporte(id, valor){
       `de la caja en efectivo.\n\nCambiarle la forma de pago va a descuadrar la conciliación de Caja `+
       `por ${fmt(montoEfectivoGasto(gg))}.\n\n¿Continuar?`)){
     if(document.getElementById("gastosBody")) renderGastos();
-    if(document.getElementById("reporteContent")) renderReporteActual();
+    if(document.getElementById("budgetGrid")) renderPresupuesto();
     return;
   }
   gg.formaPago=valor;
@@ -11235,7 +11218,7 @@ function cambiarFormaPagoReporte(id, valor){
   }
   save();
   if(document.getElementById("gastosBody")) renderGastos();
-  if(document.getElementById("reporteContent")) renderReporteActual();
+  if(document.getElementById("budgetGrid")) renderPresupuesto();
 }
 
 function guardarCorte() {
