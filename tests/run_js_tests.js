@@ -89,12 +89,13 @@ function extractConst(name) {
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
 const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS"];
-const CONSTS_OBJ = ["ORIGEN_ETIQUETA"];
+const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
 
 
 const FUNCS = [
   "normalizarParaComparar", "posibleMismoIngrediente", "esGastoEfectivo",
   "montoEfectivoGasto", "difImporteCaja", "_yaVinculadoAOtroFolio",
+  "permisosDetalle", "claveFormaPago", "filtrarGastosPanel", "totalesPorFormaPago", "folioDuplicado",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
@@ -1758,12 +1759,26 @@ t("dos fechas distintas NO impiden reconocerlo: el folio ya identifica el docume
   assert.equal(c.tipo, "duplicado");
   close(c.excedente, 1020, 0.01, "importes distintos entre las dos capturas, y aun asi es la misma");
 });
-t("si el PROVEEDOR no se parece, tampoco", () => {
+t("con el folio IDENTICO, el nombre del proveedor ya no hace falta que empate", () => {
+  // Es la otra forma en que se duplica: la misma factura capturada una vez con el nombre fiscal
+  // ("NUEVA WAL-MART DE MEXICO") y otra con el del ticket ("COMPRA SAMS"). Exigir que los nombres
+  // se parecieran dejaba fuera justo eso. El folio de una factura ya identifica el documento.
+  const c = S.clasificarDiferenciaSAT(_dif(2456, [
+    { id:"a", proveedor:"NUEVA WAL MART DE MEXICO", factura:"ICAJG468220", fecha:"2026-07-24", importe:2456 },
+    { id:"b", proveedor:"COMPRA SAMS", factura:"ICAJG468220", fecha:"2026-07-25", importe:2476 },
+  ], { folioComp:"ICAJG468220", proveedor:"NUEVA WAL MART DE MEXICO" }));
+  assert.equal(c.tipo, "duplicado");
+  close(c.excedente, 2476, 0.01);
+});
+t("pero si el folio solo coincide por TERMINACION, el proveedor sigue pesando", () => {
+  // "7213" contra "POSM13847213" es una coincidencia debil: un folio corto puede casar de
+  // casualidad entre proveedores distintos, y ahi si hay que pedir mas senias.
   const c = S.clasificarDiferenciaSAT(_dif(1000, [
-    { id:"a", proveedor:"ONUS COMERCIAL", factura:"F-1", fecha:"2026-07-06", importe:1000 },
-    { id:"b", proveedor:"OFFICE DEPOT", factura:"F-1", fecha:"2026-07-06", importe:1000 },
-  ]));
+    { id:"a", proveedor:"OFFICE DEPOT DE MEXICO", factura:"POSM13847213", fecha:"2026-07-15", importe:1000 },
+    { id:"b", proveedor:"UN PROVEEDOR SIN RELACION", factura:"7213", fecha:"2026-07-15", importe:1000 },
+  ], { folioComp:"POSM13847213", proveedor:"OFFICE DEPOT DE MEXICO" }));
   assert.equal(c.tipo, "diferencia");
+  assert.ok(/terminaci/i.test(c.motivo), "y se dice por que no se agrupo");
 });
 t("un renglon sin folio nunca se agrupa como duplicado", () => {
   // Sin folio no hay con que afirmar que sean la misma factura.
@@ -1795,9 +1810,9 @@ t("folio equivalente pero tecleado distinto: es duplicado, pero NO consolidable 
   // consolidarFacturaDividida() fusiona por proveedor y folio EXACTOS; con folios equivalentes
   // no encontraria el grupo y diria "ya no hay duplicados". Ofrecer el boton seria mentir.
   const c = S.clasificarDiferenciaSAT(_dif(5000, [
-    { id:"a", proveedor:"X", factura:"PBAL31598", fecha:"2026-07-06", importe:5000 },
-    { id:"b", proveedor:"X", factura:"31598", fecha:"2026-07-06", importe:5000 },
-  ], { folioComp:"PBAL31598" }));
+    { id:"a", proveedor:"POLLO BAL", factura:"PBAL31598", fecha:"2026-07-06", importe:5000 },
+    { id:"b", proveedor:"POLLO BAL", factura:"31598", fecha:"2026-07-06", importe:5000 },
+  ], { folioComp:"PBAL31598", proveedor:"POLLO BAL" }));
   assert.equal(c.tipo, "duplicado");
   assert.equal(c.uniforme, false);
 });
@@ -1820,6 +1835,34 @@ t("un registro ligado por cfdiUuid cuenta aunque no tenga folio", () => {
     { id:"b", proveedor:"X", factura:"", cfdiUuid:"UUID-1", fecha:"2026-07-06", importe:1000 },
   ]));
   assert.equal(c.tipo, "duplicado");
+});
+
+t("cuando NO se agrupa, se dice por que", () => {
+  // Tres renglones con el folio identico en pantalla seguian saliendo como diferencia de monto y
+  // no habia forma de saber que los separaba sin abrir los datos a mano. Ahora el motivo viaja
+  // con el resultado y se imprime en la tabla.
+  const sinFolio = S.clasificarDiferenciaSAT(_dif(2456, [
+    { id:"a", proveedor:"NUEVA WAL MART", factura:"ICAJG468220", fecha:"2026-07-24", importe:2456 },
+    { id:"b", proveedor:"NUEVA WAL MART", factura:"", fecha:"2026-07-24", importe:2476 },
+  ], { folioComp:"ICAJG468220" }));
+  assert.equal(sinFolio.tipo, "diferencia");
+  assert.ok(/no trae folio ni UUID/.test(sinFolio.motivo));
+  assert.equal(sinFolio.nGastos, 2);
+
+  const otroFolio = S.clasificarDiferenciaSAT(_dif(1000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:1000 },
+    { id:"b", proveedor:"X", factura:"NADA-QUE-VER", fecha:"2026-07-06", importe:1000 },
+  ]));
+  assert.ok(/no corresponde al del comprobante/.test(otroFolio.motivo));
+});
+
+t("varios registros del mismo comprobante que suman DE MENOS: falta capturar una parte", () => {
+  const c = S.clasificarDiferenciaSAT(_dif(10000, [
+    { id:"a", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:4000, categoria:"Carnicos" },
+    { id:"b", proveedor:"X", factura:"F-1", fecha:"2026-07-06", importe:3000, categoria:"Abarrotes" },
+  ]));
+  assert.equal(c.tipo, "diferencia");
+  assert.ok(/falta capturar una parte/.test(c.motivo), "no es contado de mas: es contado de menos");
 });
 
 t("un grupo pegado solo por el MONTO no se declara duplicado", () => {
@@ -2230,6 +2273,122 @@ t("un gasto nuevo de caja nace con montoCaja igual al importe", () => {
     _previosVacios(), "Diana", 1000);
   close(r.gastos[0].importe, 250.5, 0.01);
   close(r.gastos[0].montoCaja, 250.5, 0.01, "para el flujo de caja no hay que adivinar");
+});
+
+console.log("\n== la tabla de detalle: permisos como dato, no como HTML repetido ==");
+// La misma lista de gastos se pinta en tres pantallas, y cada una tenia su tabla escrita a mano.
+// Por eso los permisos quedaron repartidos al azar: categoria editable en dos, importe en una,
+// forma de pago en otra, y borrar —lo unico irreversible— en las tres.
+
+t("el modo edicion permite todo; el de lectura, nada que escriba", () => {
+  const e = S.permisosDetalle("edicion"), l = S.permisosDetalle("lectura");
+  ["proveedor","categoria","importe","folio","formaPago","borrar"].forEach(k=>{
+    assert.equal(e[k], true, "edicion deberia permitir "+k);
+    assert.equal(l[k], false, "lectura NO deberia permitir "+k);
+  });
+  assert.equal(l.verFactura, true, "ver la factura no escribe nada: se conserva en lectura");
+});
+t("un modo desconocido cae en lectura, no en edicion", () => {
+  // Si algun dia se teclea mal el modo, el error tiene que ser no poder editar — nunca poder
+  // borrar sin querer.
+  assert.equal(S.permisosDetalle("modo-que-no-existe").borrar, false);
+  assert.equal(S.permisosDetalle().borrar, false);
+});
+t("los permisos se devuelven como COPIA", () => {
+  const a = S.permisosDetalle("lectura");
+  a.borrar = true;
+  assert.equal(S.permisosDetalle("lectura").borrar, false, "tocar una copia no puede abrir permisos a las demas pantallas");
+});
+
+console.log("\n== forma de pago: filtrar y sumar por via ==");
+t("caja_cortes y efectivo son la misma via", () => {
+  // Es el mismo dinero saliendo del mismo cajon. Si el filtro los separara, buscar "efectivo"
+  // escondería la mitad.
+  assert.equal(S.claveFormaPago({ formaPago:"efectivo" }), "efectivo");
+  assert.equal(S.claveFormaPago({ formaPago:"caja_cortes" }), "efectivo");
+});
+t("formaPagoFinal gana sobre formaPago", () => {
+  // Es lo que quedo al liquidarlo, no lo que se penso al capturarlo.
+  assert.equal(S.claveFormaPago({ formaPago:"credito", formaPagoFinal:"efectivo" }), "efectivo");
+});
+t("un gasto sin forma de pago se puede buscar como tal", () => {
+  assert.equal(S.claveFormaPago({}), "sin");
+  const r = S.filtrarGastosPanel([{ id:"a", importe:10 }, { id:"b", importe:10, formaPago:"efectivo" }], { formaPago:"sin" });
+  assert.equal(r.length, 1); assert.equal(r[0].id, "a");
+});
+
+t("filtrar por efectivo trae tambien los de caja_cortes", () => {
+  const gs = [
+    { id:"a", importe:100, formaPago:"efectivo", categoria:"Gas" },
+    { id:"b", importe:200, formaPago:"caja_cortes", categoria:"Gas" },
+    { id:"c", importe:300, formaPago:"transferencia", categoria:"Gas" },
+  ];
+  assert.deepEqual(S.filtrarGastosPanel(gs, { formaPago:"efectivo" }).map(g=>g.id), ["a","b"]);
+  assert.deepEqual(S.filtrarGastosPanel(gs, { formaPago:"transferencia" }).map(g=>g.id), ["c"]);
+  assert.equal(S.filtrarGastosPanel(gs, {}).length, 3, "sin filtro no se esconde nada");
+});
+
+t("una factura DIVIDIDA aparece si el filtro casa con alguna de sus partidas", () => {
+  // Si no, filtrar por "Carnicos" esconderia facturas que si traen carnicos adentro.
+  const gs = [{ id:"d", importe:1000, categoria:"Dividida", formaPago:"efectivo",
+                _partidas:[{categoria:"Carnicos",importe:600},{categoria:"Abarrotes",importe:400}] }];
+  assert.equal(S.filtrarGastosPanel(gs, { categoria:"Carnicos" }).length, 1);
+  assert.equal(S.filtrarGastosPanel(gs, { categoria:"Tortilla" }).length, 0);
+});
+
+t("los dos filtros se combinan", () => {
+  const gs = [
+    { id:"a", importe:100, formaPago:"efectivo", categoria:"Gas" },
+    { id:"b", importe:100, formaPago:"transferencia", categoria:"Gas" },
+    { id:"c", importe:100, formaPago:"efectivo", categoria:"Hielo" },
+  ];
+  assert.deepEqual(S.filtrarGastosPanel(gs, { categoria:"Gas", formaPago:"efectivo" }).map(g=>g.id), ["a"]);
+});
+
+t("el total de efectivo usa lo que salio de la CAJA, no el importe fiscal", () => {
+  // El ticket del SAMS salio por 5,124 y su factura dice 5,073.99. En la columna de efectivo
+  // tiene que ir el dinero, o el total no cuadra contra el conteo fisico.
+  const t2 = S.totalesPorFormaPago([
+    { importe:5073.99, montoCaja:5124, formaPago:"caja_cortes" },
+    { importe:1000, formaPago:"transferencia" },
+  ]);
+  close(t2.efectivo, 5124, 0.01);
+  close(t2.transferencia, 1000, 0.01);
+  close(t2.total, 6124, 0.01);
+});
+t("totalesPorFormaPago no truena con una lista vacia o con basura", () => {
+  const t3 = S.totalesPorFormaPago([null, undefined]);
+  close(t3.total, 0, 0.01);
+  close(S.totalesPorFormaPago([]).total, 0, 0.01);
+});
+
+console.log("\n== editar el folio a mano: la puerta por la que entra un duplicado ==");
+t("teclear el folio de otra factura del mismo proveedor se detecta", () => {
+  const gs = [
+    { id:"1", proveedor:"NUEVA WAL MART DE MEXICO", factura:"ICAJG468220", fecha:"2026-07-24", importe:2456 },
+    { id:"2", proveedor:"NUEVA WAL MART", factura:"", fecha:"2026-07-24", importe:2476 },
+  ];
+  const d = S.folioDuplicado(gs, "2", "NUEVA WAL MART", "ICAJG468220");
+  assert.ok(d && d.id === "1");
+});
+t("el propio gasto no cuenta como duplicado de si mismo", () => {
+  const gs = [{ id:"1", proveedor:"X", factura:"F-1", importe:100 }];
+  assert.equal(S.folioDuplicado(gs, "1", "X", "F-1"), null);
+});
+t("el mismo folio de OTRO proveedor no es duplicado", () => {
+  // Dos proveedores distintos numeran sus facturas por su cuenta: el 001 de uno no tiene nada
+  // que ver con el 001 del otro.
+  const gs = [{ id:"1", proveedor:"POLLO BAL", factura:"00025", importe:100 }];
+  assert.equal(S.folioDuplicado(gs, "2", "OFFICE DEPOT", "00025"), null);
+});
+t("dejar el folio vacio no dispara la alerta", () => {
+  const gs = [{ id:"1", proveedor:"X", factura:"F-1", importe:100 }];
+  assert.equal(S.folioDuplicado(gs, "2", "X", ""), null);
+  assert.equal(S.folioDuplicado(gs, "2", "X", "   "), null);
+});
+t("la comparacion ignora guiones y mayusculas", () => {
+  const gs = [{ id:"1", proveedor:"POLLO BAL", factura:"PBAL-32078", importe:100 }];
+  assert.ok(S.folioDuplicado(gs, "2", "POLLO BAL", "pbal32078"));
 });
 
 console.log("\n== importe fiscal vs. efectivo que salio de la caja ==");
