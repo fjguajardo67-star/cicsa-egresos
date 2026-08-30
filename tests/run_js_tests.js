@@ -88,9 +88,9 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS"];
+const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
-const CONSTS_ARR = ["COLS_DETALLE_GASTOS"];
+const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS"];
 
 
 const FUNCS = [
@@ -100,8 +100,10 @@ const FUNCS = [
   "filasDetalleGastos", "gastosRepetidosPorId",
   "mapaUuidAFolio", "_folioIdentidad", "facturaEnteraYSusPartes",
   "basePresupuestoPeriodo",
+  "vigenciaPrecio", "aplicarPrecioDeFactura", "puedeValidarse", "motivoNoValidable",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
-  "planAlias", "resumenPlanAlias", "conSinonimoAgregado",
+  "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
+  "pareceMedidaNoIngrediente", "_sepNombres",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
@@ -692,6 +694,344 @@ t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
     { id: "b", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
   ]);
   assert.equal(r.length, 0);
+});
+
+console.log("\n== un sinonimo compuesto tambien se parte ==");
+// separarNombresMenu partia el nombre principal pero NO los elementos del array de sinonimos: si
+// venian como array, un elemento compuesto pasaba entero y se publicaba tal cual. Por eso siguen
+// vivas en Menu "Alitas IQF. Alitas de Pollo", "Tortilla Maiz. Tortilla" y "Filete de pescado.
+// Basa" — llaves que ninguna receta que nombre solo una de sus partes alcanza.
+
+t("un elemento compuesto del ARRAY se parte", () => {
+  const r = S.separarNombresMenu("Alitas", ["Alitas IQF. Alitas de Pollo"]);
+  assert.deepEqual(r.sinonimos, ["Alitas IQF", "Alitas de Pollo"]);
+});
+t("y por lo tanto la llave compuesta ya no se publica", () => {
+  const k = S.llavesMenuDeFila({ nombreSync:"Alitas", sinonimosSync:["Alitas IQF. Alitas de Pollo"] });
+  assert.ok(!k.some(x=>/\.\s/.test(x)), "ninguna llave puede llevar un punto seguido de espacio");
+  assert.ok(k.indexOf("Alitas de Pollo") > -1, "y las partes si tienen que estar");
+});
+t("los tres casos reales del documento publicado", () => {
+  [["Alitas IQF. Alitas de Pollo", "Alitas IQF", "Alitas de Pollo"],
+   ["Tortilla Maiz. Tortilla",     "Tortilla Maiz", "Tortilla"],
+   ["Filete de pescado. Basa",     "Filete de pescado", "Basa"]].forEach(([junto, a, b])=>{
+    const r = S.separarNombresMenu("X", [junto]);
+    assert.deepEqual(r.sinonimos, [a, b], junto);
+  });
+});
+t("las comas dentro del array tambien", () => {
+  assert.deepEqual(S.separarNombresMenu("Queso", ["Oaxaca, Quesillo"]).sinonimos, ["Oaxaca", "Quesillo"]);
+});
+t("los decimales NO se parten", () => {
+  // "3.8lt" no lleva espacio despues del punto, asi que no cuenta como separador.
+  assert.equal(S.separarNombresMenu("Aderezo ranch 3.8lt", []).principal, "Aderezo ranch 3.8lt");
+  assert.deepEqual(S.separarNombresMenu("X", ["Atun 1.8kg"]).sinonimos, ["Atun 1.8kg"]);
+});
+t("hay UN solo separador, no dos escritos aparte", () => {
+  // Cuando el separador vivia escrito dos veces se arreglo en un lado y no en el otro, y ese es
+  // exactamente el bug de arriba. La guardia es textual: que nadie vuelva a escribirlo a mano.
+  const i = script.indexOf("function separarNombresMenu(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(!b.includes("[,;"), "el separador tiene que salir de _sepNombres, no reescribirse aqui");
+});
+t("_sepNombres no truena con nada", () => {
+  assert.deepEqual(S._sepNombres(null), [""]);
+  assert.deepEqual(S._sepNombres("Ajo"), ["Ajo"]);
+});
+
+console.log("\n== la cantidad puede venir con numero delante ==");
+t("2 tazas de agua y 500 ml de crema son medidas", () => {
+  assert.equal(S.pareceMedidaNoIngrediente("2 tazas de agua"), true);
+  assert.equal(S.pareceMedidaNoIngrediente("500 ml de crema"), true);
+  assert.equal(S.pareceMedidaNoIngrediente("250 gr de queso"), true);
+});
+t("pero el numero no convierte en medida lo que no lo es", () => {
+  // "3 dientes de ajo" sigue siendo ajo: lo que decide es la palabra, no el numero.
+  assert.equal(S.pareceMedidaNoIngrediente("3 dientes de ajo"), false);
+  assert.equal(S.pareceMedidaNoIngrediente("2 hojas de laurel"), false);
+});
+t("un producto con su presentacion en el nombre no se marca", () => {
+  // "Espagueti 3kg" y "Aderezo ranch 3.8lt" estan publicados: el tamaño va al FINAL, que es como
+  // se nombra una presentacion, no como se escribe una cantidad de receta.
+  ["Espagueti 3kg", "Aderezo ranch 3.8lt", "Ajo entero congelado 1 kg",
+   "Atun enlatado dorado 1.8kg"].forEach(n=>{
+    assert.equal(S.pareceMedidaNoIngrediente(n), false, n);
+  });
+});
+
+console.log("\n== medidas disfrazadas de ingrediente ==");
+// "Taza de agua", "Cucharadas de manteca de cerdo": la receta metio la cantidad dentro del
+// nombre. No le falta precio a Egresos — se corrige en la receta, en Menu. Ponerle precio aqui
+// taparia el problema del otro lado.
+
+t("los cuatro casos reales del archivo se marcan", () => {
+  ["Taza de agua", "Cucharadas de manteca de cerdo", "Gramos de chicharrón prensado",
+   "Cucharadita de sal con ajo en polvo"].forEach(n=>{
+    assert.equal(S.pareceMedidaNoIngrediente(n), true, n);
+  });
+});
+t("hojas de laurel NO se marca: es el nombre del ingrediente", () => {
+  // La primera version detectaba por forma —"<unidad> de <algo>"— y marcaba esto, que se compra
+  // asi. Lo que separa unas de otras no es la forma, es que palabra es.
+  assert.equal(S.pareceMedidaNoIngrediente("hojas de laurel"), false);
+});
+t("ni dientes de ajo, ni ramas de canela, ni Rebanada de queso", () => {
+  // "Rebanada de queso" esta publicado a $1.93/pz: marcarlo lo sacaria de circulacion.
+  ["dientes de ajo", "ramas de canela", "Rebanada de queso", "manojo de cilantro",
+   "lata de chipotles"].forEach(n=>{
+    assert.equal(S.pareceMedidaNoIngrediente(n), false, n);
+  });
+});
+t("la medida sola no basta: tiene que ser <medida> de <algo>", () => {
+  assert.equal(S.pareceMedidaNoIngrediente("Gramos"), false);
+  assert.equal(S.pareceMedidaNoIngrediente("Taza"), false);
+  assert.equal(S.pareceMedidaNoIngrediente("Cucharadas de"), false, "sin el que, tampoco");
+});
+t("la medida tiene que ir al principio, no en medio", () => {
+  // "Pollo en trozos" o "Queso en rebanadas" son formas de venderlo, no cantidades.
+  assert.equal(S.pareceMedidaNoIngrediente("Pollo en gramos"), false);
+});
+t("los acentos y las mayusculas no cambian nada", () => {
+  assert.equal(S.pareceMedidaNoIngrediente("PUÑADO DE CILANTRO"), true);
+  assert.equal(S.pareceMedidaNoIngrediente("Pizca de sal"), true);
+});
+t("no truena con basura", () => {
+  assert.equal(S.pareceMedidaNoIngrediente(""), false);
+  assert.equal(S.pareceMedidaNoIngrediente(null), false);
+});
+t("la lista de medidas no incluye ninguna que nombre un producto", () => {
+  // Guardia sobre la lista misma: agregarle "hoja" o "rebanada" sacaria de circulacion
+  // ingredientes reales, y el dia que pase nadie va a acordarse de por que.
+  ["hoja","hojas","diente","dientes","rama","ramas","manojo","rebanada","rebanadas",
+   "lata","latas","pieza","piezas"].forEach(p=>{
+    assert.equal(S.MEDIDAS_PURAS.indexOf(p), -1, `"${p}" nombra ingredientes: no puede ser medida pura`);
+  });
+});
+
+t("el plan las separa en su propio monton", () => {
+  const p = S.planAlias([
+    { nombre:"Taza de agua", recetas:1 },
+    { nombre:"hojas de laurel", recetas:3 },
+  ], []);
+  assert.equal(p[0].estado, "medida");
+  assert.equal(p[1].estado, "sin_candidato", "el laurel si necesita precio");
+});
+t("una medida no se cuela entre las que necesitan precio", () => {
+  // Si se colara, alguien le capturaria un precio a "Taza de agua" y quedaria publicado.
+  const r = S.resumenPlanAlias(S.planAlias([
+    { nombre:"Taza de agua", recetas:1 }, { nombre:"Chile morita", recetas:3 },
+  ], []));
+  assert.equal(r.medida, 1);
+  assert.equal(r.sin_candidato, 1);
+  assert.equal(r.recetas.medida, 1);
+});
+
+console.log("\n== dar de alta un faltante ==");
+t("nace SIN precio: importar la lista no inventa cifras", () => {
+  const p = S.productoDesdeFaltante("Comino");
+  assert.equal(p.precio_actual, null);
+  assert.equal(p.fecha_precio, "");
+  assert.equal(p.estado, "pendiente");
+});
+t("nace provisional: si tuviera factura no estaria en los faltantes", () => {
+  assert.equal(S.productoDesdeFaltante("Comino").precio_origen, "web");
+});
+t("el nombre de la receta queda como ingrediente_generico", () => {
+  // Es la llave con la que Menu lo busca: si se guarda solo en nombre_comercial y alguien lo
+  // renombra, Menu deja de encontrarlo.
+  const p = S.productoDesdeFaltante("  Chile morita  ");
+  assert.equal(p.ingrediente_generico, "Chile morita", "y sin los espacios de los lados");
+  assert.equal(p.nombre_comercial, "Chile morita");
+});
+t("no se puede validar recien creado: le falta todo para costear", () => {
+  assert.equal(S.puedeValidarse(S.productoDesdeFaltante("Comino")), false);
+});
+t("un nombre vacio no crea producto", () => {
+  assert.equal(S.productoDesdeFaltante("   "), null);
+  assert.equal(S.productoDesdeFaltante(null), null);
+});
+
+console.log("\n== de donde sale un precio, y hasta cuando vale ==");
+// Dos origenes que no valen lo mismo. Una factura es el dato fiscal y no caduca: lo que se pago
+// en julio se pago en julio. Un precio consultado a mano envejece, y a los 60 dias hay que
+// revaluarlo — pero se SIGUE publicando marcado, porque desaparecer en silencio es lo que llevo
+// a que Menu inventara $50/kg.
+
+t("la vigencia son 60 dias", () => {
+  // Un const de vm.runInContext queda en el ambito lexico del contexto, no como propiedad del
+  // sandbox: S.VIGENCIA_DIAS seria undefined y la comparacion pasaria sin probar nada.
+  assert.equal(vm.runInContext("VIGENCIA_DIAS", sandbox), 60);
+});
+t("una factura no caduca nunca", () => {
+  const v = S.vigenciaPrecio({ precio_origen:"factura", fecha_precio:"2020-01-01" }, "2026-08-30");
+  assert.equal(v.aplica, false);
+  assert.equal(v.estado, "na");
+});
+t("un provisional recien capturado esta vigente, y vence a los 60 dias", () => {
+  const v = S.vigenciaPrecio({ precio_origen:"web", precio_fecha_consulta:"2026-08-28" }, "2026-08-30");
+  assert.equal(v.estado, "vigente");
+  assert.equal(v.hasta, "2026-10-27", "28 de agosto + 60 dias");
+  assert.equal(v.dias, 58);
+});
+t("a 7 dias o menos avisa antes de que truene", () => {
+  const v = S.vigenciaPrecio({ precio_origen:"web", precio_fecha_consulta:"2026-08-28" }, "2026-10-21");
+  assert.equal(v.estado, "por_vencer");
+  assert.equal(v.dias, 6);
+});
+t("el dia 60 todavia vale; el 61 pide revaluar", () => {
+  const p = { precio_origen:"web", precio_fecha_consulta:"2026-08-28" };
+  assert.equal(S.vigenciaPrecio(p, "2026-10-27").estado, "por_vencer", "el ultimo dia sigue siendo valido");
+  assert.equal(S.vigenciaPrecio(p, "2026-10-28").estado, "revaluar");
+});
+t("una vigencia escrita a mano le gana a los 60 por defecto", () => {
+  // La carne no envejece como una especia: se puede acortar producto por producto.
+  const v = S.vigenciaPrecio({ precio_origen:"web", precio_fecha_consulta:"2026-08-28",
+                               precio_vigencia_hasta:"2026-09-15" }, "2026-08-30");
+  assert.equal(v.hasta, "2026-09-15");
+  assert.equal(v.estado, "vigente");
+});
+t("un provisional sin fecha pide revaluar, no se da por bueno", () => {
+  // Sin fecha con que contar no se puede AFIRMAR que siga vigente. Pedir revaluacion es la
+  // respuesta prudente, y ademas hace visible al producto capturado sin fecha.
+  const v = S.vigenciaPrecio({ precio_origen:"web" }, "2026-08-30");
+  assert.equal(v.estado, "revaluar");
+});
+t("sin fecha de consulta cuenta desde la del precio", () => {
+  const v = S.vigenciaPrecio({ precio_origen:"web", fecha_precio:"2026-08-28" }, "2026-08-30");
+  assert.equal(v.hasta, "2026-10-27");
+});
+t("no truena con basura", () => {
+  assert.equal(S.vigenciaPrecio(null, "2026-08-30").estado, "na");
+  assert.equal(S.vigenciaPrecio({ precio_origen:"web", precio_vigencia_hasta:"no-es-fecha" }, "2026-08-30").estado, "revaluar");
+});
+
+console.log("\n== la factura le gana al provisional SIEMPRE ==");
+// La tentacion es resolverlo con "gana el mas reciente". Con provisionales eso falla: uno
+// capturado hoy es mas reciente que una factura de la semana pasada, y ganaria — dejando a Menu
+// costeando con una consulta de internet habiendo documento fiscal.
+
+t("una factura VIEJA reemplaza a un provisional NUEVO", () => {
+  const p = { precio_actual:214.50, fecha_precio:"2026-08-28", precio_origen:"web",
+              precio_fuente:"tienda en linea", precio_fecha_consulta:"2026-08-28" };
+  const r = S.aplicarPrecioDeFactura(p, { precio:186.40, fecha:"2026-08-14", folio:"A1" });
+  assert.ok(r, "la factura tiene que entrar aunque sea anterior");
+  close(r.precio_actual, 186.40, 0.01);
+  assert.equal(r.precio_origen, "factura");
+  assert.equal(r._reemplazoProvisional, true);
+});
+t("al reemplazar se limpia la procedencia del provisional", () => {
+  // Dejarla puesta haria ver a una factura como si siguiera sostenida por una pagina de
+  // internet, y la vigencia la caducaria sin razon.
+  const p = { precio_actual:214.50, fecha_precio:"2026-08-28", precio_origen:"web",
+              precio_fuente:"tienda en linea", precio_fecha_consulta:"2026-08-28",
+              precio_vigencia_hasta:"2026-10-27" };
+  const r = S.aplicarPrecioDeFactura(p, { precio:186.40, fecha:"2026-08-14" });
+  assert.equal(r.precio_fuente, "");
+  assert.equal(r.precio_fecha_consulta, "");
+  assert.equal(r.precio_vigencia_hasta, "");
+  assert.equal(S.vigenciaPrecio(r, "2027-01-01").estado, "na", "y ya no caduca");
+});
+t("lo que habia queda en el historial", () => {
+  const p = { precio_actual:214.50, fecha_precio:"2026-08-28", precio_origen:"web", precio_fuente:"tienda" };
+  const r = S.aplicarPrecioDeFactura(p, { precio:186.40, fecha:"2026-08-14" });
+  assert.equal(r.precio_historial.length, 1);
+  close(r.precio_historial[0].precio, 214.50, 0.01);
+  assert.equal(r.precio_historial[0].origen, "web");
+  assert.equal(r.precio_historial[0].fuente, "tienda");
+});
+t("el historial se queda en los ultimos 5", () => {
+  const p = { precio_actual:10, fecha_precio:"2026-01-01", precio_origen:"factura",
+              precio_historial:[1,2,3,4,5].map(n=>({precio:n, fecha:"2025-01-0"+n, origen:"factura"})) };
+  const r = S.aplicarPrecioDeFactura(p, { precio:20, fecha:"2026-02-01" });
+  assert.equal(r.precio_historial.length, 5);
+  close(r.precio_historial[4].precio, 10, 0.01, "el mas reciente al final");
+  close(r.precio_historial[0].precio, 2, 0.01, "y el mas viejo se cae");
+});
+t("entre DOS facturas sigue ganando la mas reciente", () => {
+  const p = { precio_actual:200, fecha_precio:"2026-08-20", precio_origen:"factura" };
+  assert.equal(S.aplicarPrecioDeFactura(p, { precio:150, fecha:"2026-07-01" }), null, "la vieja no entra");
+  const r = S.aplicarPrecioDeFactura(p, { precio:150, fecha:"2026-08-25" });
+  assert.ok(r); close(r.precio_actual, 150, 0.01);
+});
+t("una factura del mismo dia si actualiza", () => {
+  const p = { precio_actual:200, fecha_precio:"2026-08-20", precio_origen:"factura" };
+  const r = S.aplicarPrecioDeFactura(p, { precio:150, fecha:"2026-08-20" });
+  assert.ok(r, "refacturaciones y correcciones del mismo dia tienen que poder entrar");
+});
+t("un precio de cero o negativo no reemplaza nada", () => {
+  const p = { precio_actual:200, fecha_precio:"2026-08-20", precio_origen:"web" };
+  assert.equal(S.aplicarPrecioDeFactura(p, { precio:0, fecha:"2026-08-25" }), null);
+  assert.equal(S.aplicarPrecioDeFactura(p, { precio:-5, fecha:"2026-08-25" }), null);
+  assert.equal(S.aplicarPrecioDeFactura(p, null), null);
+  assert.equal(S.aplicarPrecioDeFactura(null, { precio:10 }), null);
+});
+t("un producto sin precio previo no inventa historial", () => {
+  const r = S.aplicarPrecioDeFactura({ nombre_comercial:"Ajo" }, { precio:140, fecha:"2026-08-14" });
+  assert.deepEqual(r.precio_historial, []);
+});
+
+console.log("\n== un provisional no se publica sin decir de donde salio ==");
+t("falta la fuente: no se puede validar", () => {
+  const base = { nombre_comercial:"Comino", unidad_base:"kg", contenido_cantidad:1, contenido_unidad:"kg" };
+  assert.equal(S.puedeValidarse({ ...base, precio_origen:"web", precio_fecha_consulta:"2026-08-28" }), false);
+  assert.ok(/de donde salio|dónde salió/.test(S.motivoNoValidable({ ...base, precio_origen:"web", precio_fecha_consulta:"2026-08-28" })));
+});
+t("falta la fecha de consulta: tampoco", () => {
+  const base = { nombre_comercial:"Comino", unidad_base:"kg", contenido_cantidad:1, contenido_unidad:"kg" };
+  assert.equal(S.puedeValidarse({ ...base, precio_origen:"web", precio_fuente:"tienda en linea" }), false);
+});
+t("con fuente y fecha si se valida", () => {
+  assert.equal(S.puedeValidarse({ nombre_comercial:"Comino", unidad_base:"kg", contenido_cantidad:1,
+    contenido_unidad:"kg", precio_origen:"web", precio_fuente:"tienda en linea",
+    precio_fecha_consulta:"2026-08-28" }), true);
+});
+t("una factura no necesita fuente: su respaldo es el CFDI", () => {
+  assert.equal(S.puedeValidarse({ nombre_comercial:"Ajo", unidad_base:"kg", contenido_cantidad:1,
+    contenido_unidad:"kg", precio_origen:"factura" }), true);
+});
+t("los espacios no cuentan como fuente", () => {
+  assert.equal(S.puedeValidarse({ nombre_comercial:"Comino", unidad_base:"kg", contenido_cantidad:1,
+    contenido_unidad:"kg", precio_origen:"web", precio_fuente:"   ",
+    precio_fecha_consulta:"2026-08-28" }), false);
+});
+
+console.log("\n== lo publicado dice su origen, y el vencido NO desaparece ==");
+const _fila = (prod) => ({ incluir:true, nombreSync:"X", sinonimosSync:[], producto:prod,
+                           calc:{ ok:true, precio:100, unidadBase:"kg" } });
+t("una factura se publica como no provisional", () => {
+  const m = S.construirMapaPreciosMenu([_fila({ precio_origen:"factura", fecha_precio:"2026-08-14" })],
+                                       {}, "21/08/2026", "2026-08-30");
+  assert.equal(m["X"].origen, "factura");
+  assert.equal(m["X"].provisional, false);
+  assert.equal(m["X"].vigencia, undefined, "una factura no lleva vigencia");
+});
+t("un provisional vigente se publica marcado y con su fecha limite", () => {
+  const m = S.construirMapaPreciosMenu([_fila({ precio_origen:"web", precio_fecha_consulta:"2026-08-28" })],
+                                       {}, "29/08/2026", "2026-08-30");
+  assert.equal(m["X"].origen, "web");
+  assert.equal(m["X"].provisional, true);
+  assert.equal(m["X"].vigencia, "2026-10-27");
+  assert.equal(m["X"].revaluar, false);
+});
+t("un provisional VENCIDO se sigue publicando, marcado para revaluar", () => {
+  // Es la decision del diseño: dejar de publicarlo deja a la receta sin costo y en silencio, y
+  // ese silencio es lo que hizo que Menu inventara un precio. Mejor viejo y señalado que hueco.
+  const m = S.construirMapaPreciosMenu([_fila({ precio_origen:"web", precio_fecha_consulta:"2026-01-01" })],
+                                       {}, "30/08/2026", "2026-08-30");
+  assert.ok(m["X"], "tiene que seguir ahi");
+  close(m["X"].precio, 100, 0.01);
+  assert.equal(m["X"].revaluar, true);
+});
+t("un producto sin origen se toma como factura (todo el historico)", () => {
+  // Los productos que ya existian no traen precio_origen. Asumir "web" los caducaria a todos de
+  // golpe y llenaria Menu de avisos falsos.
+  const m = S.construirMapaPreciosMenu([_fila({ fecha_precio:"2026-08-14" })], {}, "21/08/2026", "2026-08-30");
+  assert.equal(m["X"].origen, "factura");
+  assert.equal(m["X"].provisional, false);
 });
 
 console.log("\n== faltantes de Menu: el precio ya estaba, con otro nombre ==");

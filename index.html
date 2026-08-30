@@ -1467,6 +1467,7 @@ body.snav-min .side-theme span { display:none; }
       <button class="filter-btn" data-estado="ignorado" onclick="setCatProdFiltro('ignorado',this)">🚫 Ignorado</button>
       <button class="btn btn-light" style="margin-left:auto;padding:6px 14px;font-size:12.5px" onclick="abrirFaltantes()">🔗 Faltantes de Menú</button>
     </div>
+    <div id="catProdRevaluar" style="display:none;padding:10px 14px;background:#FFF8E1;border-radius:8px;font-size:12px;color:var(--txt);margin-bottom:14px;border-left:4px solid var(--do);line-height:1.5"></div>
     <div id="catProdDupBanner" style="display:none;padding:10px 14px;background:#FFF3E0;border-radius:8px;font-size:12px;color:#E65100;margin-bottom:14px;border-left:4px solid #E65100;cursor:pointer" onclick="setCatProdFiltro('duplicados')" title="Ver solo los posibles duplicados"></div>
     <div class="tbl-wrap">
       <table>
@@ -1624,6 +1625,36 @@ body.snav-min .side-theme span { display:none; }
       <div class="field">
         <label>Fecha de ese precio</label>
         <input type="date" id="pcFechaPrecio">
+      </div>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>¿De dónde sale este precio?</label>
+      <select id="pcPrecioOrigen" onchange="togglePrecioOrigen()">
+        <option value="factura">🧾 De una factura — dato fiscal, no caduca</option>
+        <option value="web">🌐 Provisional — consultado a mano, se revalúa a los 60 días</option>
+      </select>
+    </div>
+    <div id="pcProvisionalCampos" style="display:none;background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:14px 16px;margin-top:12px">
+      <div style="font-size:12px;color:var(--txt);margin-bottom:12px;line-height:1.55">
+        Un precio provisional sirve para costear mientras no llega la factura, pero envejece.
+        Sin decir de dónde salió y cuándo, nadie va a poder juzgarlo después — por eso los dos
+        campos son obligatorios para poder validarlo. <strong>En cuanto llegue una factura de este
+        producto, la factura lo reemplaza sola</strong>, aunque sea más vieja.
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>¿De dónde? *</label>
+          <input type="text" id="pcPrecioFuente" placeholder="Liga, tienda o quién lo estimó">
+        </div>
+        <div class="field">
+          <label>¿Cuándo se consultó? *</label>
+          <input type="date" id="pcPrecioConsulta">
+        </div>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label>Revaluar antes de</label>
+        <input type="date" id="pcPrecioVigencia">
+        <div style="font-size:11px;color:var(--txt2);margin-top:3px">Si lo dejas vacío son 60 días desde la consulta. Acórtalo para lo que cambia rápido.</div>
       </div>
     </div>
 
@@ -1993,7 +2024,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-30-a";
+const APP_BUILD = "2026-08-30-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -7144,7 +7175,7 @@ function cambiarNombreIdent(i, valor){
 async function aplicarIdentificacion(){
   const sel = (_cfdiAcciones||[]).filter(a=>a._sel && a.tipo!=="ignorar");
   if(!sel.length) return;
-  let alias = 0, nuevos = 0, errores = 0;
+  let alias = 0, nuevos = 0, errores = 0, reemplazos = 0;
   // Dos renglones distintos pueden apuntar al MISMO producto nuevo (dos claves de Walmart que son
   // la misma cebolla). El primero lo crea y el segundo se cuelga de ese, en vez de crear un
   // gemelo que después habría que fusionar a mano.
@@ -7168,11 +7199,14 @@ async function aplicarIdentificacion(){
         if(!p || !p.id) continue;
         const ya = (p.alias_factura||[]).some(x=>normalizarParaComparar(x)===normalizarParaComparar(a.desc));
         if(!ya) p.alias_factura = [...(p.alias_factura||[]), a.desc];
-        if((p.fecha_precio||"") <= (a.precio.fecha||"")){
-          p.precio_actual = a.precio.precio;
-          p.fecha_precio  = a.precio.fecha;
-          if(a.precio.folio)     p.factura_origen   = a.precio.folio;
-          if(a.precio.proveedor) p.proveedor_nombre = a.precio.proveedor;
+        // Antes esto era "solo si la factura es más reciente", y con precios provisionales eso
+        // falla: uno capturado hoy le ganaría a una factura de la semana pasada. aplicarPrecioDeFactura
+        // pone el origen por encima de la fecha.
+        const act = aplicarPrecioDeFactura(p, a.precio);
+        if(act){
+          const { _reemplazoProvisional, ...limpio } = act;
+          Object.assign(p, limpio);
+          if(_reemplazoProvisional) reemplazos++;
         }
         const { id, ...datos } = p;
         await fbUpdateDoc(CATALOGO_COL, id, datos);
@@ -7186,7 +7220,9 @@ async function aplicarIdentificacion(){
           piezas_por_presentacion: null, peso_pieza_valor: null, peso_pieza_unidad: null,
           unidad_base: null, porcion_valor: null, porcion_unidad: null, merma_pct: null,
           estado: "pendiente", precio_actual: a.precio.precio, fecha_precio: a.precio.fecha || "",
-          factura_origen: a.precio.folio || "", notas: "Identificado desde el CFDI"
+          factura_origen: a.precio.folio || "", notas: "Identificado desde el CFDI",
+          precio_origen: "factura", precio_fuente: "", precio_fecha_consulta: "",
+          precio_vigencia_hasta: "", precio_historial: []
         };
         const id = await fbCreateDoc(CATALOGO_COL, nuevo);
         if(id){
@@ -7744,6 +7780,7 @@ async function renderCatalogoProductos(forzar){
   }
   lista.sort((a,b)=>(a.nombre_comercial||"").localeCompare(b.nombre_comercial||""));
 
+  try{ avisoPreciosARevaluar(); }catch(_){}
   const tbody = document.getElementById("catProdBody");
   const empty = document.getElementById("catProdEmpty");
   if(!tbody) return;
@@ -8367,15 +8404,25 @@ function borrarGastoDuplicado(id){
 // fusiona con los sinónimos capturados, sin duplicados por mayúsculas ni acentos.
 // Pura y sin escritura: sincronizar puede reparar la salida sin modificar silenciosamente el
 // catálogo; el documento del producto se normaliza la próxima vez que una persona lo guarde.
+// Parte un texto en los nombres que trae dentro: coma, punto y coma, salto de línea, o punto
+// seguido de espacio. El punto solo cuenta cuando le sigue algo, así "3.8lt" y los decimales
+// quedan intactos. Es función y no constante para que haya UN solo separador: cuando vivía
+// escrito dos veces, se arregló en un lado y no en el otro.
+function _sepNombres(s){
+  return String(s==null ? "" : s).split(/[,;\n]+|\.\s+(?=\S)/);
+}
 function separarNombresMenu(nombrePrincipal, sinonimos){
-  const partes = String(nombrePrincipal==null ? "" : nombrePrincipal)
-    // El catálogo histórico trae variantes unidas tanto con coma como con punto:
-    // "Tortilla Maiz. Tortilla" y "Alitas IQF. Alitas de Pollo" son casos reales.
-    // Solo se toma el punto seguido de espacio; así 3.8lt y otros decimales quedan intactos.
-    .split(/[,;\n]+|\.\s+(?=\S)/).map(x=>x.trim()).filter(Boolean);
+  // El catálogo histórico trae variantes unidas tanto con coma como con punto:
+  // "Tortilla Maiz. Tortilla" y "Alitas IQF. Alitas de Pollo" son casos reales.
+  const partes = _sepNombres(nombrePrincipal).map(x=>x.trim()).filter(Boolean);
   const principal = partes.shift() || "";
-  const extras = partes.concat(Array.isArray(sinonimos) ? sinonimos :
-    String(sinonimos==null ? "" : sinonimos).split(/[,;\n]+|\.\s+(?=\S)/));
+  // Los elementos del ARRAY también se parten. Antes solo se partía la cadena: si los sinónimos
+  // venían como array, un elemento compuesto pasaba entero y se publicaba tal cual. Así siguen
+  // vivas "Alitas IQF. Alitas de Pollo", "Tortilla Maiz. Tortilla" y "Filete de pescado. Basa" en
+  // el documento de Menú — llaves que ninguna receta que nombre solo una de sus partes alcanza.
+  const extras = partes.concat(
+    (Array.isArray(sinonimos) ? sinonimos : [sinonimos])
+      .flatMap(s => _sepNombres(s)));
   const vistos = new Set();
   const clavePrincipal = normalizarParaComparar(principal);
   if(clavePrincipal) vistos.add(clavePrincipal);
@@ -8593,6 +8640,70 @@ function llavesMenuDeFila(row){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// DE DÓNDE SALE UN PRECIO, Y HASTA CUÁNDO VALE
+// ═══════════════════════════════════════════════════════════════════════════
+// Dos orígenes, y no valen lo mismo:
+//   factura → sale de un CFDI timbrado. Es el dato fiscal y no caduca: lo que se pagó en julio
+//             se pagó en julio, y seguirá siendo cierto para siempre.
+//   web     → alguien lo consultó y lo capturó a mano. Sirve para costear mientras no llegue la
+//             factura, pero envejece: un precio de hace medio año ya no describe nada.
+// De ahí que la vigencia solo aplique a los provisionales.
+const VIGENCIA_DIAS = 60;
+
+// Un precio provisional NO se deja de publicar al vencer: se marca para revaluar y se sigue
+// mandando. Desaparecer en silencio es justo lo que llevó a que Menú inventara $50/kg cuando no
+// encontraba precio; repetir el silencio invita a que vuelva a inventar. Un precio viejo y
+// señalado es más honesto que un hueco.
+//   estado: "na" (una factura, no caduca) · "vigente" · "por_vencer" (≤7 días) · "revaluar"
+function vigenciaPrecio(p, hoyISO){
+  const hoy = hoyISO || todayStr();
+  if(!p || p.precio_origen !== "web") return { aplica:false, estado:"na", hasta:"", dias:null };
+  const base = p.precio_fecha_consulta || p.fecha_precio || "";
+  const hasta = p.precio_vigencia_hasta || (base ? _sumarDiaISO(base, VIGENCIA_DIAS) : "");
+  // Sin fecha con qué contar no se puede afirmar que siga vigente. Se pide revaluar: es la
+  // respuesta prudente, y además hace visible al producto que se capturó sin fecha.
+  if(!hasta) return { aplica:true, estado:"revaluar", hasta:"", dias:null };
+  const dias = Math.round((new Date(hasta+"T12:00:00") - new Date(hoy+"T12:00:00")) / 86400000);
+  if(isNaN(dias)) return { aplica:true, estado:"revaluar", hasta, dias:null };
+  return { aplica:true, hasta, dias, estado: dias < 0 ? "revaluar" : (dias <= 7 ? "por_vencer" : "vigente") };
+}
+
+// ── La factura le gana al provisional SIEMPRE ──────────────────────────────
+// Ojo con la tentación de resolverlo con "gana el más reciente": un precio web capturado hoy es
+// más reciente que una factura de la semana pasada, y ganaría — dejando a Menú costeando con una
+// consulta de internet habiendo documento fiscal. El ORIGEN manda sobre la fecha; la fecha solo
+// desempata entre dos precios del mismo origen.
+// Pura y sin escritura: devuelve el producto ya actualizado, o null si no hay que tocar nada.
+function aplicarPrecioDeFactura(producto, precio){
+  if(!producto || !precio || !(parseFloat(precio.precio) > 0)) return null;
+  const eraProvisional = producto.precio_origen === "web";
+  // Entre dos facturas, la más reciente. Contra un provisional, la factura entra aunque sea vieja.
+  if(!eraProvisional && (producto.fecha_precio||"") > (precio.fecha||"")) return null;
+  const hist = [...(producto.precio_historial||[])];
+  if(producto.precio_actual != null && producto.precio_actual !== ""){
+    hist.push({
+      precio: producto.precio_actual, fecha: producto.fecha_precio || "",
+      origen: producto.precio_origen || "factura", fuente: producto.precio_fuente || "",
+      reemplazado: new Date().toISOString(),
+    });
+  }
+  return {
+    ...producto,
+    precio_actual: precio.precio,
+    fecha_precio: precio.fecha || "",
+    factura_origen: precio.folio || producto.factura_origen || "",
+    proveedor_nombre: precio.proveedor || producto.proveedor_nombre || "",
+    precio_origen: "factura",
+    // La procedencia del provisional se limpia: dejarla puesta haría ver a una factura como si
+    // siguiera sostenida por una página de internet, y la vigencia la caducaría sin razón.
+    precio_fuente: "", precio_fecha_consulta: "", precio_vigencia_hasta: "",
+    // Los últimos 5. Sin esto, cuando una factura pisa un provisional no queda rastro de qué había.
+    precio_historial: hist.slice(-5),
+    _reemplazoProvisional: eraProvisional,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // FALTANTES DE MENÚ — casar un nombre de receta con un producto que YA tiene precio
 // ═══════════════════════════════════════════════════════════════════════════
 // Menú exporta la lista de ingredientes de receta que se quedaron sin precio. Al cruzarla contra
@@ -8701,6 +8812,9 @@ function planAlias(faltantes, catalogo){
     const nombre = (f && f.nombre) || "";
     const k = normalizarParaComparar(nombre);
     if(exacto.has(k)) return { ...f, estado:"cubierto", producto:exacto.get(k), candidatos:[] };
+    // Antes de buscar candidatos: si es una medida, no hay producto que valga. Va aparte para que
+    // no se cuele entre los que sí necesitan precio y alguien se lo capture por error.
+    if(pareceMedidaNoIngrediente(nombre)) return { ...f, estado:"medida", candidatos:[] };
     const cand = candidatosAlias(nombre, catalogo, f && f.unidad);
     return { ...f, estado: cand.length ? "candidatos" : "sin_candidato", candidatos:cand };
   });
@@ -8708,12 +8822,68 @@ function planAlias(faltantes, catalogo){
 
 // Cuánto pesa cada grupo, para poder decir "esto cubre 205 de 353 usos" en vez de "25 filas".
 function resumenPlanAlias(plan){
-  const r = { cubierto:0, candidatos:0, sin_candidato:0, recetas:{cubierto:0, candidatos:0, sin_candidato:0}, total:0 };
+  const r = { cubierto:0, candidatos:0, sin_candidato:0, medida:0,
+              recetas:{cubierto:0, candidatos:0, sin_candidato:0, medida:0}, total:0 };
   (plan||[]).forEach(x=>{
     if(!x || !r.recetas.hasOwnProperty(x.estado)) return;
     r[x.estado]++; r.recetas[x.estado] += (parseInt(x.recetas,10)||0); r.total += (parseInt(x.recetas,10)||0);
   });
   return r;
+}
+
+// ── Lo que Menú manda como MEDIDA y no como ingrediente ────────────────────
+// "Taza de agua", "Cucharadas de manteca de cerdo": ahí la receta escribió la cantidad dentro del
+// nombre. No es un ingrediente que le falte precio a Egresos, es un renglón mal capturado en la
+// receta — y ponerle precio aquí taparía el problema del otro lado en vez de arreglarlo.
+//
+// La lista es corta A PROPÓSITO. La primera versión detectaba por forma —"<unidad> de <algo>"— y
+// marcó "hojas de laurel", que es el nombre real del ingrediente. Lo mismo habría pasado con
+// "dientes de ajo", "ramas de canela" y "Rebanada de queso", que está publicado a $1.93/pz.
+// Lo que separa unas de otras no es la forma: es que taza, cucharada y gramo NUNCA nombran un
+// ingrediente, mientras que hoja, diente, rama, manojo, rebanada, lata y pieza sí. Por eso solo
+// van las medidas puras, y por eso agregar una palabra aquí necesita comprobar que no sea el
+// nombre de algo que se compra.
+const MEDIDAS_PURAS = [
+  "cucharada","cucharadas","cucharadita","cucharaditas","taza","tazas",
+  "gramo","gramos","kilo","kilos","litro","litros","mililitro","mililitros",
+  "onza","onzas","pizca","pizcas","chorrito","puno","punado",
+  // Abreviaturas: normalizarParaComparar ya quitó los puntos, así que "ml." llega como "ml".
+  "ml","lt","l","gr","g","kg","oz","cda","cdas","cdta","cdtas",
+];
+function pareceMedidaNoIngrediente(nombre){
+  const n = normalizarParaComparar(nombre);
+  if(!n) return false;
+  let partes = n.split(/\s+/);
+  // La cantidad puede venir con número delante: "2 tazas de agua", "500 ml de crema". Se quita el
+  // número y se juzga lo que queda, que es el mismo caso de siempre.
+  if(partes.length && /^[0-9]+$/.test(partes[0])) partes = partes.slice(1);
+  // Tiene que ser "<medida> de <algo>": la medida sola ("Gramos") no dice nada, y la medida al
+  // final ("pollo en trozos") no es este caso.
+  return partes.length >= 3 && partes[1] === "de" && MEDIDAS_PURAS.indexOf(partes[0]) !== -1;
+}
+
+// El producto que nace de un faltante de Menú. Nace VACÍO de precio a propósito: importar la
+// lista no inventa cifras, solo crea el renglón donde alguien va a capturarlas. Y nace
+// provisional, porque si tuviera factura no estaría en la lista de faltantes.
+// El nombre de la receta se guarda como ingrediente_generico: es la llave con la que Menú lo va
+// a buscar, así que tiene que salir publicado tal cual viene.
+function productoDesdeFaltante(nombre){
+  const n = String(nombre||"").trim();
+  if(!n) return null;
+  return {
+    proveedor_id:null, proveedor_nombre:"",
+    nombre_comercial:n, nombre_normalizado:n, ingrediente_generico:n,
+    alias_factura:[], sinonimos_menu:[],
+    marca:"", familia:"", categoria:"", presentacion:"",
+    unidad_factura:"", contenido_cantidad:null, contenido_unidad:null,
+    piezas_por_presentacion:null, peso_pieza_valor:null, peso_pieza_unidad:null,
+    unidad_base:null, porcion_valor:null, porcion_unidad:null, merma_pct:null,
+    estado:"pendiente",
+    precio_actual:null, fecha_precio:"", factura_origen:"",
+    precio_origen:"web", precio_fuente:"", precio_fecha_consulta:"",
+    precio_vigencia_hasta:"", precio_historial:[],
+    notas:"Dado de alta desde los faltantes de Menú",
+  };
 }
 
 // Agregar el sinónimo sin duplicar por mayúsculas ni acentos, y sin repetir el nombre principal
@@ -8739,7 +8909,7 @@ function conSinonimoAgregado(producto, nombre){
 //                     destildar significa "hoy no lo toques", no "bórralo de Menú".
 // Si dos filas comparten nombre, la de factura más reciente gana (se escribe al final).
 // Pura: sin DOM ni red, para poder probarla.
-function construirMapaPreciosMenu(rows, preciosActuales, fechaHoy){
+function construirMapaPreciosMenu(rows, preciosActuales, fechaHoy, hoyISO){
   const nuevo = {};
   (rows||[])
     .filter(r => r && r.calc && r.calc.ok && String(r.nombreSync||"").trim())
@@ -8755,11 +8925,18 @@ function construirMapaPreciosMenu(rows, preciosActuales, fechaHoy){
       // hay forma de caducar un precio que no se puede fechar. `fecha_precio` es la de verdad.
       // Se AGREGA en vez de corregir `fecha`: ForX ya lee ese campo, y cambiarle el significado
       // sin avisar rompe en silencio. Conviven hasta que ForX adopte el nuevo y se retire el viejo.
+      const vig = vigenciaPrecio(r.producto, hoyISO);
       const entrada = {
         precio: Math.round(r.calc.precio*100)/100,
         unidad_base: r.calc.unidadBase,
         fecha: fechaHoy,
         fecha_precio: (r.producto && r.producto.fecha_precio) || "",
+        // Menú puede seguir leyendo solo precio y unidad_base: agregar campos no rompe nada.
+        // Cuando quiera, con `provisional` sabe cuál no está respaldado por una factura, y con
+        // `revaluar` cuál además ya envejeció. Lo que NO se hace es dejar de publicarlo.
+        origen: (r.producto && r.producto.precio_origen) || "factura",
+        provisional: vig.aplica,
+        ...(vig.aplica ? { vigencia: vig.hasta, revaluar: vig.estado === "revaluar" } : {}),
       };
       llavesMenuDeFila(r).forEach(key=>{
         if(r.incluir) nuevo[key] = { ...entrada };
@@ -8789,7 +8966,7 @@ async function confirmarSyncMenu(){
     // Fusionar dejaba huérfanas para siempre las entradas de productos borrados o marcados
     // como ignorados: nunca se volvían a mencionar, pero tampoco se iban, y Menú seguía
     // costeando recetas con esos precios viejos.
-    const nuevoMapa = construirMapaPreciosMenu(_syncMenuRows, preciosActuales, fechaHoy);
+    const nuevoMapa = construirMapaPreciosMenu(_syncMenuRows, preciosActuales, fechaHoy, todayStr());
     const eliminadas = Object.keys(preciosActuales).filter(k => !(k in nuevoMapa));
     if(eliminadas.length){
       const muestra = eliminadas.slice(0,12).map(k=>"  • "+k).join("\n");
@@ -8858,10 +9035,12 @@ function renderFaltantes(){
     <div class="scard"><div class="scard-label">Ya cubiertos</div><div class="scard-val">${res.cubierto}</div><div class="scard-sub">${res.recetas.cubierto} usos en recetas</div></div>
     <div class="scard ${res.candidatos?'alert':''}"><div class="scard-label">Puede ser un sinónimo</div><div class="scard-val">${res.candidatos}</div><div class="scard-sub">${res.recetas.candidatos} usos · ${pct}% del total</div></div>
     <div class="scard"><div class="scard-label">Necesitan precio</div><div class="scard-val">${res.sin_candidato}</div><div class="scard-sub">${res.recetas.sin_candidato} usos en recetas</div></div>
+    ${res.medida?`<div class="scard"><div class="scard-label">Se arreglan en la receta</div><div class="scard-val">${res.medida}</div><div class="scard-sub">son medidas, no ingredientes</div></div>`:""}
   </div>`;
 
   const conCand = _faltantesPlan.filter(x=>x.estado==="candidatos");
   const sinNada = _faltantesPlan.filter(x=>x.estado==="sin_candidato");
+  const medidas = _faltantesPlan.filter(x=>x.estado==="medida");
   let html = "";
   if(conCand.length){
     html += `<div style="font-size:12.5px;color:var(--txt2);margin:4px 0 10px;line-height:1.55">
@@ -8895,11 +9074,48 @@ function renderFaltantes(){
     html += `<div style="font-size:12.5px;color:var(--txt2);margin:20px 0 10px;line-height:1.55">
       <strong>${sinNada.length} no se parecen a nada del catálogo.</strong> Éstos sí necesitan que
       alguien les capture un precio; no hay sinónimo que los rescate.
-    </div><div class="tbl-wrap"><table><thead><tr><th>Ingrediente</th><th style="text-align:right">Recetas</th></tr></thead><tbody>
-      ${sinNada.map(x=>`<tr><td>${esc(x.nombre)}</td><td class="amount-cell">${x.recetas||"—"}</td></tr>`).join("")}
+    </div><div class="tbl-wrap"><table><thead><tr><th>Ingrediente</th><th style="text-align:right">Recetas</th><th></th></tr></thead><tbody>
+      ${sinNada.map(x=>`<tr><td>${esc(x.nombre)}</td><td class="amount-cell">${x.recetas||"—"}</td>
+        <td style="text-align:right"><button class="btn btn-light" style="padding:4px 10px;font-size:11px;white-space:nowrap" title="Crearlo en el catálogo para capturarle un precio" onclick="altaDesdeFaltante(${_faltantesPlan.indexOf(x)})">➕ Darlo de alta</button></td></tr>`).join("")}
+    </tbody></table></div>`;
+  }
+  if(medidas.length){
+    html += `<div style="font-size:12.5px;color:var(--txt2);margin:20px 0 10px;line-height:1.55">
+      <strong>${medidas.length} no son ingredientes, son medidas.</strong> La receta escribió la
+      cantidad dentro del nombre. No les falta precio aquí: <strong>se corrigen en la receta, en
+      Menú</strong>. Ponerles precio en el catálogo taparía el problema en vez de arreglarlo.
+    </div><div class="tbl-wrap"><table><thead><tr><th>Como viene de Menú</th><th style="text-align:right">Recetas</th><th>Lo que probablemente quiso decir</th></tr></thead><tbody>
+      ${medidas.map(x=>{
+        const p = normalizarParaComparar(x.nombre).split(/\s+/).slice(2).join(" ");
+        return `<tr><td>${esc(x.nombre)}</td><td class="amount-cell">${x.recetas||"—"}</td>
+          <td style="color:var(--txt2)">${esc(p||"—")}</td></tr>`;
+      }).join("")}
     </tbody></table></div>`;
   }
   document.getElementById("faltantesBody").innerHTML = html;
+}
+
+// Crea el producto y abre su ficha para capturar el precio ahí mismo. No se captura desde este
+// modal a propósito: el precio necesita unidad, contenido y conversión para poder costear, y todo
+// eso ya vive en el editor. Duplicarlo aquí sería una segunda forma de capturar lo mismo.
+async function altaDesdeFaltante(idx){
+  const x = _faltantesPlan[idx];
+  if(!x) return;
+  const nuevo = productoDesdeFaltante(x.nombre);
+  if(!nuevo) return;
+  setStatus("faltantesStatus", `Dando de alta «${x.nombre}»…`, "loading");
+  const id = await fbCreateDoc(CATALOGO_COL, nuevo);
+  if(!id){
+    setStatus("faltantesStatus", `❌ No se pudo dar de alta «${x.nombre}». No se creó nada.`, "err");
+    return;
+  }
+  const doc = { id, ...nuevo };
+  _catalogoProductos.push(doc);
+  x.estado = "cubierto"; x.producto = doc; x.candidatos = [];
+  renderFaltantes();
+  if(document.getElementById("catProdBody")) renderCatalogoProductos();
+  closeFaltantesModal();
+  abrirEditorProducto(id);
 }
 
 async function aplicarAlias(idx, productoId){
@@ -8937,6 +9153,9 @@ function closeSyncMenuModal(){ document.getElementById("syncMenuModal").classLis
 // necesita saber CUÁNTAS piezas trae la presentación, no cuánto pesa cada una.
 function puedeValidarse(p){
   if(!p.nombre_comercial || !p.unidad_base) return false;
+  // Un precio provisional sin fuente ni fecha es un número sin respaldo, y una vez publicado
+  // nadie puede saber de dónde salió ni si sigue siendo cierto. Aquí es donde se para.
+  if(p.precio_origen === "web" && !(String(p.precio_fuente||"").trim() && (p.precio_fecha_consulta||p.fecha_precio))) return false;
   const tieneContenido = p.contenido_cantidad!=null && p.contenido_cantidad!=="" && !!p.contenido_unidad;
   if(p.unidad_base==="kg" || p.unidad_base==="lt") return tieneContenido;
   if(p.unidad_base==="pz") return p.piezas_por_presentacion!=null && p.piezas_por_presentacion!=="";
@@ -8945,11 +9164,43 @@ function puedeValidarse(p){
 }
 function motivoNoValidable(p){
   if(!p.nombre_comercial) return "falta el nombre del producto";
+  if(p.precio_origen === "web" && !String(p.precio_fuente||"").trim()) return "es un precio provisional y falta decir de dónde salió";
+  if(p.precio_origen === "web" && !(p.precio_fecha_consulta||p.fecha_precio)) return "es un precio provisional y falta la fecha en que se consultó";
   if(!p.unidad_base) return "falta elegir cómo se usa el producto (peso, pieza o porción)";
   if((p.unidad_base==="kg"||p.unidad_base==="lt") && !(p.contenido_cantidad && p.contenido_unidad)) return "falta cuánto trae en total la presentación";
   if(p.unidad_base==="pz" && !p.piezas_por_presentacion) return "falta cuántas piezas trae la presentación";
   if(p.unidad_base==="porcion") return "falta el contenido total o el tamaño de la porción";
   return "faltan datos para poder costear el producto";
+}
+
+function togglePrecioOrigen(){
+  const es = document.getElementById("pcPrecioOrigen");
+  const caja = document.getElementById("pcProvisionalCampos");
+  if(!es || !caja) return;
+  caja.style.display = es.value === "web" ? "block" : "none";
+  // Consultar un precio y no anotar cuándo es el error fácil, y es el que rompe la vigencia.
+  const c = document.getElementById("pcPrecioConsulta");
+  if(es.value === "web" && c && !c.value) c.value = todayStr();
+}
+
+// El aviso de los que ya toca revaluar. Va arriba de la lista, junto al de duplicados: si esto
+// vive solo dentro de cada ficha, nadie lo ve hasta que abre el producto — y un precio de hace
+// medio año no avisa solo.
+function avisoPreciosARevaluar(){
+  const el = document.getElementById("catProdRevaluar");
+  if(!el) return;
+  const hoy = todayStr();
+  const v = (_catalogoProductos||[])
+    .filter(p=>p && p.estado !== "ignorado")
+    .map(p=>({ p, v: vigenciaPrecio(p, hoy) }))
+    .filter(x=>x.v.aplica && (x.v.estado === "revaluar" || x.v.estado === "por_vencer"));
+  if(!v.length){ el.style.display = "none"; return; }
+  const vencidos = v.filter(x=>x.v.estado === "revaluar");
+  const nombres = v.slice(0,6).map(x=>esc(x.p.ingrediente_generico || x.p.nombre_comercial || "")).join(" · ");
+  el.style.display = "block";
+  el.innerHTML = `<strong>${v.length} precio(s) provisionales por revaluar</strong>` +
+    (vencidos.length ? ` — ${vencidos.length} ya pasaron de los ${VIGENCIA_DIAS} días.` : ` en los próximos días.`) +
+    ` Se siguen publicando en Menú marcados, no desaparecen.<div style="font-size:11px;margin-top:5px;opacity:.85">${nombres}${v.length>6?` …y ${v.length-6} más`:""}</div>`;
 }
 
 async function cambiarEstadoRapido(id, estado){
@@ -9134,6 +9385,13 @@ function abrirEditorProducto(id){
   document.getElementById("pcMermaPct").value = p?.merma_pct ?? "";
   document.getElementById("pcPrecioActual").value = p?.precio_actual ?? "";
   document.getElementById("pcFechaPrecio").value = p?.fecha_precio || (p ? "" : todayStr());
+  // Un producto viejo no trae precio_origen. Se asume factura: asumir "web" caducaría de golpe
+  // todo el histórico y llenaría Menú de avisos falsos por un campo que nadie había capturado.
+  document.getElementById("pcPrecioOrigen").value   = p?.precio_origen === "web" ? "web" : "factura";
+  document.getElementById("pcPrecioFuente").value   = p?.precio_fuente || "";
+  document.getElementById("pcPrecioConsulta").value = p?.precio_fecha_consulta || "";
+  document.getElementById("pcPrecioVigencia").value = p?.precio_vigencia_hasta || "";
+  togglePrecioOrigen();
 
   // Traduce la unidad_base guardada a la pregunta amigable "¿cómo se usa?".
   const ub = p?.unidad_base || "";
@@ -9250,6 +9508,12 @@ async function guardarProducto(nuevoEstado){
     estado: nuevoEstado || existente?.estado || "pendiente",
     precio_actual: numOrNull(document.getElementById("pcPrecioActual").value),
     fecha_precio: document.getElementById("pcFechaPrecio").value || null,
+    precio_origen: document.getElementById("pcPrecioOrigen").value || "factura",
+    // Los datos del provisional solo se guardan si el precio ES provisional: dejarlos pegados a
+    // una factura la haría caducar sin razón.
+    precio_fuente:         document.getElementById("pcPrecioOrigen").value === "web" ? (document.getElementById("pcPrecioFuente").value||"").trim() : "",
+    precio_fecha_consulta: document.getElementById("pcPrecioOrigen").value === "web" ? (document.getElementById("pcPrecioConsulta").value||"") : "",
+    precio_vigencia_hasta: document.getElementById("pcPrecioOrigen").value === "web" ? (document.getElementById("pcPrecioVigencia").value||"") : "",
     factura_origen: existente?.factura_origen ?? "",
     notas: document.getElementById("pcNotas").value.trim()
   };
