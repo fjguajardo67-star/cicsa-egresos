@@ -2024,7 +2024,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-30-c";
+const APP_BUILD = "2026-08-30-d";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -8802,6 +8802,9 @@ function planAlias(faltantes, catalogo){
     const nombre = (f && f.nombre) || "";
     const k = normalizarParaComparar(nombre);
     if(exacto.has(k)) return { ...f, estado:"cubierto", producto:exacto.get(k), candidatos:[] };
+    // Antes de buscar candidatos: si es una medida, no hay producto que valga. Va aparte para que
+    // no se cuele entre los que sí necesitan precio y alguien se lo capture por error.
+    if(pareceMedidaNoIngrediente(nombre)) return { ...f, estado:"medida", candidatos:[] };
     const cand = candidatosAlias(nombre, catalogo, f && f.unidad);
     return { ...f, estado: cand.length ? "candidatos" : "sin_candidato", candidatos:cand };
   });
@@ -8809,12 +8812,39 @@ function planAlias(faltantes, catalogo){
 
 // Cuánto pesa cada grupo, para poder decir "esto cubre 205 de 353 usos" en vez de "25 filas".
 function resumenPlanAlias(plan){
-  const r = { cubierto:0, candidatos:0, sin_candidato:0, recetas:{cubierto:0, candidatos:0, sin_candidato:0}, total:0 };
+  const r = { cubierto:0, candidatos:0, sin_candidato:0, medida:0,
+              recetas:{cubierto:0, candidatos:0, sin_candidato:0, medida:0}, total:0 };
   (plan||[]).forEach(x=>{
     if(!x || !r.recetas.hasOwnProperty(x.estado)) return;
     r[x.estado]++; r.recetas[x.estado] += (parseInt(x.recetas,10)||0); r.total += (parseInt(x.recetas,10)||0);
   });
   return r;
+}
+
+// ── Lo que Menú manda como MEDIDA y no como ingrediente ────────────────────
+// "Taza de agua", "Cucharadas de manteca de cerdo": ahí la receta escribió la cantidad dentro del
+// nombre. No es un ingrediente que le falte precio a Egresos, es un renglón mal capturado en la
+// receta — y ponerle precio aquí taparía el problema del otro lado en vez de arreglarlo.
+//
+// La lista es corta A PROPÓSITO. La primera versión detectaba por forma —"<unidad> de <algo>"— y
+// marcó "hojas de laurel", que es el nombre real del ingrediente. Lo mismo habría pasado con
+// "dientes de ajo", "ramas de canela" y "Rebanada de queso", que está publicado a $1.93/pz.
+// Lo que separa unas de otras no es la forma: es que taza, cucharada y gramo NUNCA nombran un
+// ingrediente, mientras que hoja, diente, rama, manojo, rebanada, lata y pieza sí. Por eso solo
+// van las medidas puras, y por eso agregar una palabra aquí necesita comprobar que no sea el
+// nombre de algo que se compra.
+const MEDIDAS_PURAS = [
+  "cucharada","cucharadas","cucharadita","cucharaditas","taza","tazas",
+  "gramo","gramos","kilo","kilos","litro","litros","mililitro","mililitros",
+  "onza","onzas","pizca","pizcas","chorrito","puno","punado",
+];
+function pareceMedidaNoIngrediente(nombre){
+  const n = normalizarParaComparar(nombre);
+  if(!n) return false;
+  const partes = n.split(/\s+/);
+  // Tiene que ser "<medida> de <algo>": la medida sola ("Gramos") no dice nada, y la medida al
+  // final ("pollo en trozos") no es este caso.
+  return partes.length >= 3 && partes[1] === "de" && MEDIDAS_PURAS.indexOf(partes[0]) !== -1;
 }
 
 // El producto que nace de un faltante de Menú. Nace VACÍO de precio a propósito: importar la
@@ -8990,10 +9020,12 @@ function renderFaltantes(){
     <div class="scard"><div class="scard-label">Ya cubiertos</div><div class="scard-val">${res.cubierto}</div><div class="scard-sub">${res.recetas.cubierto} usos en recetas</div></div>
     <div class="scard ${res.candidatos?'alert':''}"><div class="scard-label">Puede ser un sinónimo</div><div class="scard-val">${res.candidatos}</div><div class="scard-sub">${res.recetas.candidatos} usos · ${pct}% del total</div></div>
     <div class="scard"><div class="scard-label">Necesitan precio</div><div class="scard-val">${res.sin_candidato}</div><div class="scard-sub">${res.recetas.sin_candidato} usos en recetas</div></div>
+    ${res.medida?`<div class="scard"><div class="scard-label">Se arreglan en la receta</div><div class="scard-val">${res.medida}</div><div class="scard-sub">son medidas, no ingredientes</div></div>`:""}
   </div>`;
 
   const conCand = _faltantesPlan.filter(x=>x.estado==="candidatos");
   const sinNada = _faltantesPlan.filter(x=>x.estado==="sin_candidato");
+  const medidas = _faltantesPlan.filter(x=>x.estado==="medida");
   let html = "";
   if(conCand.length){
     html += `<div style="font-size:12.5px;color:var(--txt2);margin:4px 0 10px;line-height:1.55">
@@ -9030,6 +9062,19 @@ function renderFaltantes(){
     </div><div class="tbl-wrap"><table><thead><tr><th>Ingrediente</th><th style="text-align:right">Recetas</th><th></th></tr></thead><tbody>
       ${sinNada.map(x=>`<tr><td>${esc(x.nombre)}</td><td class="amount-cell">${x.recetas||"—"}</td>
         <td style="text-align:right"><button class="btn btn-light" style="padding:4px 10px;font-size:11px;white-space:nowrap" title="Crearlo en el catálogo para capturarle un precio" onclick="altaDesdeFaltante(${_faltantesPlan.indexOf(x)})">➕ Darlo de alta</button></td></tr>`).join("")}
+    </tbody></table></div>`;
+  }
+  if(medidas.length){
+    html += `<div style="font-size:12.5px;color:var(--txt2);margin:20px 0 10px;line-height:1.55">
+      <strong>${medidas.length} no son ingredientes, son medidas.</strong> La receta escribió la
+      cantidad dentro del nombre. No les falta precio aquí: <strong>se corrigen en la receta, en
+      Menú</strong>. Ponerles precio en el catálogo taparía el problema en vez de arreglarlo.
+    </div><div class="tbl-wrap"><table><thead><tr><th>Como viene de Menú</th><th style="text-align:right">Recetas</th><th>Lo que probablemente quiso decir</th></tr></thead><tbody>
+      ${medidas.map(x=>{
+        const p = normalizarParaComparar(x.nombre).split(/\s+/).slice(2).join(" ");
+        return `<tr><td>${esc(x.nombre)}</td><td class="amount-cell">${x.recetas||"—"}</td>
+          <td style="color:var(--txt2)">${esc(p||"—")}</td></tr>`;
+      }).join("")}
     </tbody></table></div>`;
   }
   document.getElementById("faltantesBody").innerHTML = html;

@@ -90,7 +90,7 @@ function extractConst(name) {
 // ninguna prueba lo notara.
 const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
-const CONSTS_ARR = ["COLS_DETALLE_GASTOS"];
+const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS"];
 
 
 const FUNCS = [
@@ -103,6 +103,7 @@ const FUNCS = [
   "vigenciaPrecio", "aplicarPrecioDeFactura", "puedeValidarse", "motivoNoValidable",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
+  "pareceMedidaNoIngrediente",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
@@ -693,6 +694,73 @@ t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
     { id: "b", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
   ]);
   assert.equal(r.length, 0);
+});
+
+console.log("\n== medidas disfrazadas de ingrediente ==");
+// "Taza de agua", "Cucharadas de manteca de cerdo": la receta metio la cantidad dentro del
+// nombre. No le falta precio a Egresos — se corrige en la receta, en Menu. Ponerle precio aqui
+// taparia el problema del otro lado.
+
+t("los cuatro casos reales del archivo se marcan", () => {
+  ["Taza de agua", "Cucharadas de manteca de cerdo", "Gramos de chicharrón prensado",
+   "Cucharadita de sal con ajo en polvo"].forEach(n=>{
+    assert.equal(S.pareceMedidaNoIngrediente(n), true, n);
+  });
+});
+t("hojas de laurel NO se marca: es el nombre del ingrediente", () => {
+  // La primera version detectaba por forma —"<unidad> de <algo>"— y marcaba esto, que se compra
+  // asi. Lo que separa unas de otras no es la forma, es que palabra es.
+  assert.equal(S.pareceMedidaNoIngrediente("hojas de laurel"), false);
+});
+t("ni dientes de ajo, ni ramas de canela, ni Rebanada de queso", () => {
+  // "Rebanada de queso" esta publicado a $1.93/pz: marcarlo lo sacaria de circulacion.
+  ["dientes de ajo", "ramas de canela", "Rebanada de queso", "manojo de cilantro",
+   "lata de chipotles"].forEach(n=>{
+    assert.equal(S.pareceMedidaNoIngrediente(n), false, n);
+  });
+});
+t("la medida sola no basta: tiene que ser <medida> de <algo>", () => {
+  assert.equal(S.pareceMedidaNoIngrediente("Gramos"), false);
+  assert.equal(S.pareceMedidaNoIngrediente("Taza"), false);
+  assert.equal(S.pareceMedidaNoIngrediente("Cucharadas de"), false, "sin el que, tampoco");
+});
+t("la medida tiene que ir al principio, no en medio", () => {
+  // "Pollo en trozos" o "Queso en rebanadas" son formas de venderlo, no cantidades.
+  assert.equal(S.pareceMedidaNoIngrediente("Pollo en gramos"), false);
+});
+t("los acentos y las mayusculas no cambian nada", () => {
+  assert.equal(S.pareceMedidaNoIngrediente("PUÑADO DE CILANTRO"), true);
+  assert.equal(S.pareceMedidaNoIngrediente("Pizca de sal"), true);
+});
+t("no truena con basura", () => {
+  assert.equal(S.pareceMedidaNoIngrediente(""), false);
+  assert.equal(S.pareceMedidaNoIngrediente(null), false);
+});
+t("la lista de medidas no incluye ninguna que nombre un producto", () => {
+  // Guardia sobre la lista misma: agregarle "hoja" o "rebanada" sacaria de circulacion
+  // ingredientes reales, y el dia que pase nadie va a acordarse de por que.
+  ["hoja","hojas","diente","dientes","rama","ramas","manojo","rebanada","rebanadas",
+   "lata","latas","pieza","piezas"].forEach(p=>{
+    assert.equal(S.MEDIDAS_PURAS.indexOf(p), -1, `"${p}" nombra ingredientes: no puede ser medida pura`);
+  });
+});
+
+t("el plan las separa en su propio monton", () => {
+  const p = S.planAlias([
+    { nombre:"Taza de agua", recetas:1 },
+    { nombre:"hojas de laurel", recetas:3 },
+  ], []);
+  assert.equal(p[0].estado, "medida");
+  assert.equal(p[1].estado, "sin_candidato", "el laurel si necesita precio");
+});
+t("una medida no se cuela entre las que necesitan precio", () => {
+  // Si se colara, alguien le capturaria un precio a "Taza de agua" y quedaria publicado.
+  const r = S.resumenPlanAlias(S.planAlias([
+    { nombre:"Taza de agua", recetas:1 }, { nombre:"Chile morita", recetas:3 },
+  ], []));
+  assert.equal(r.medida, 1);
+  assert.equal(r.sin_candidato, 1);
+  assert.equal(r.recetas.medida, 1);
 });
 
 console.log("\n== dar de alta un faltante ==");
