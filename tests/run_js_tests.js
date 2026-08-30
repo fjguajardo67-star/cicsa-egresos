@@ -103,7 +103,7 @@ const FUNCS = [
   "vigenciaPrecio", "aplicarPrecioDeFactura", "puedeValidarse", "motivoNoValidable",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
-  "pareceMedidaNoIngrediente",
+  "pareceMedidaNoIngrediente", "_sepNombres",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
@@ -694,6 +694,73 @@ t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
     { id: "b", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
   ]);
   assert.equal(r.length, 0);
+});
+
+console.log("\n== un sinonimo compuesto tambien se parte ==");
+// separarNombresMenu partia el nombre principal pero NO los elementos del array de sinonimos: si
+// venian como array, un elemento compuesto pasaba entero y se publicaba tal cual. Por eso siguen
+// vivas en Menu "Alitas IQF. Alitas de Pollo", "Tortilla Maiz. Tortilla" y "Filete de pescado.
+// Basa" — llaves que ninguna receta que nombre solo una de sus partes alcanza.
+
+t("un elemento compuesto del ARRAY se parte", () => {
+  const r = S.separarNombresMenu("Alitas", ["Alitas IQF. Alitas de Pollo"]);
+  assert.deepEqual(r.sinonimos, ["Alitas IQF", "Alitas de Pollo"]);
+});
+t("y por lo tanto la llave compuesta ya no se publica", () => {
+  const k = S.llavesMenuDeFila({ nombreSync:"Alitas", sinonimosSync:["Alitas IQF. Alitas de Pollo"] });
+  assert.ok(!k.some(x=>/\.\s/.test(x)), "ninguna llave puede llevar un punto seguido de espacio");
+  assert.ok(k.indexOf("Alitas de Pollo") > -1, "y las partes si tienen que estar");
+});
+t("los tres casos reales del documento publicado", () => {
+  [["Alitas IQF. Alitas de Pollo", "Alitas IQF", "Alitas de Pollo"],
+   ["Tortilla Maiz. Tortilla",     "Tortilla Maiz", "Tortilla"],
+   ["Filete de pescado. Basa",     "Filete de pescado", "Basa"]].forEach(([junto, a, b])=>{
+    const r = S.separarNombresMenu("X", [junto]);
+    assert.deepEqual(r.sinonimos, [a, b], junto);
+  });
+});
+t("las comas dentro del array tambien", () => {
+  assert.deepEqual(S.separarNombresMenu("Queso", ["Oaxaca, Quesillo"]).sinonimos, ["Oaxaca", "Quesillo"]);
+});
+t("los decimales NO se parten", () => {
+  // "3.8lt" no lleva espacio despues del punto, asi que no cuenta como separador.
+  assert.equal(S.separarNombresMenu("Aderezo ranch 3.8lt", []).principal, "Aderezo ranch 3.8lt");
+  assert.deepEqual(S.separarNombresMenu("X", ["Atun 1.8kg"]).sinonimos, ["Atun 1.8kg"]);
+});
+t("hay UN solo separador, no dos escritos aparte", () => {
+  // Cuando el separador vivia escrito dos veces se arreglo en un lado y no en el otro, y ese es
+  // exactamente el bug de arriba. La guardia es textual: que nadie vuelva a escribirlo a mano.
+  const i = script.indexOf("function separarNombresMenu(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(!b.includes("[,;"), "el separador tiene que salir de _sepNombres, no reescribirse aqui");
+});
+t("_sepNombres no truena con nada", () => {
+  assert.deepEqual(S._sepNombres(null), [""]);
+  assert.deepEqual(S._sepNombres("Ajo"), ["Ajo"]);
+});
+
+console.log("\n== la cantidad puede venir con numero delante ==");
+t("2 tazas de agua y 500 ml de crema son medidas", () => {
+  assert.equal(S.pareceMedidaNoIngrediente("2 tazas de agua"), true);
+  assert.equal(S.pareceMedidaNoIngrediente("500 ml de crema"), true);
+  assert.equal(S.pareceMedidaNoIngrediente("250 gr de queso"), true);
+});
+t("pero el numero no convierte en medida lo que no lo es", () => {
+  // "3 dientes de ajo" sigue siendo ajo: lo que decide es la palabra, no el numero.
+  assert.equal(S.pareceMedidaNoIngrediente("3 dientes de ajo"), false);
+  assert.equal(S.pareceMedidaNoIngrediente("2 hojas de laurel"), false);
+});
+t("un producto con su presentacion en el nombre no se marca", () => {
+  // "Espagueti 3kg" y "Aderezo ranch 3.8lt" estan publicados: el tamaño va al FINAL, que es como
+  // se nombra una presentacion, no como se escribe una cantidad de receta.
+  ["Espagueti 3kg", "Aderezo ranch 3.8lt", "Ajo entero congelado 1 kg",
+   "Atun enlatado dorado 1.8kg"].forEach(n=>{
+    assert.equal(S.pareceMedidaNoIngrediente(n), false, n);
+  });
 });
 
 console.log("\n== medidas disfrazadas de ingrediente ==");

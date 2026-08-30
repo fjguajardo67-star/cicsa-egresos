@@ -2024,7 +2024,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-30-d";
+const APP_BUILD = "2026-08-30-e";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -8404,15 +8404,25 @@ function borrarGastoDuplicado(id){
 // fusiona con los sinónimos capturados, sin duplicados por mayúsculas ni acentos.
 // Pura y sin escritura: sincronizar puede reparar la salida sin modificar silenciosamente el
 // catálogo; el documento del producto se normaliza la próxima vez que una persona lo guarde.
+// Parte un texto en los nombres que trae dentro: coma, punto y coma, salto de línea, o punto
+// seguido de espacio. El punto solo cuenta cuando le sigue algo, así "3.8lt" y los decimales
+// quedan intactos. Es función y no constante para que haya UN solo separador: cuando vivía
+// escrito dos veces, se arregló en un lado y no en el otro.
+function _sepNombres(s){
+  return String(s==null ? "" : s).split(/[,;\n]+|\.\s+(?=\S)/);
+}
 function separarNombresMenu(nombrePrincipal, sinonimos){
-  const partes = String(nombrePrincipal==null ? "" : nombrePrincipal)
-    // El catálogo histórico trae variantes unidas tanto con coma como con punto:
-    // "Tortilla Maiz. Tortilla" y "Alitas IQF. Alitas de Pollo" son casos reales.
-    // Solo se toma el punto seguido de espacio; así 3.8lt y otros decimales quedan intactos.
-    .split(/[,;\n]+|\.\s+(?=\S)/).map(x=>x.trim()).filter(Boolean);
+  // El catálogo histórico trae variantes unidas tanto con coma como con punto:
+  // "Tortilla Maiz. Tortilla" y "Alitas IQF. Alitas de Pollo" son casos reales.
+  const partes = _sepNombres(nombrePrincipal).map(x=>x.trim()).filter(Boolean);
   const principal = partes.shift() || "";
-  const extras = partes.concat(Array.isArray(sinonimos) ? sinonimos :
-    String(sinonimos==null ? "" : sinonimos).split(/[,;\n]+|\.\s+(?=\S)/));
+  // Los elementos del ARRAY también se parten. Antes solo se partía la cadena: si los sinónimos
+  // venían como array, un elemento compuesto pasaba entero y se publicaba tal cual. Así siguen
+  // vivas "Alitas IQF. Alitas de Pollo", "Tortilla Maiz. Tortilla" y "Filete de pescado. Basa" en
+  // el documento de Menú — llaves que ninguna receta que nombre solo una de sus partes alcanza.
+  const extras = partes.concat(
+    (Array.isArray(sinonimos) ? sinonimos : [sinonimos])
+      .flatMap(s => _sepNombres(s)));
   const vistos = new Set();
   const clavePrincipal = normalizarParaComparar(principal);
   if(clavePrincipal) vistos.add(clavePrincipal);
@@ -8837,11 +8847,16 @@ const MEDIDAS_PURAS = [
   "cucharada","cucharadas","cucharadita","cucharaditas","taza","tazas",
   "gramo","gramos","kilo","kilos","litro","litros","mililitro","mililitros",
   "onza","onzas","pizca","pizcas","chorrito","puno","punado",
+  // Abreviaturas: normalizarParaComparar ya quitó los puntos, así que "ml." llega como "ml".
+  "ml","lt","l","gr","g","kg","oz","cda","cdas","cdta","cdtas",
 ];
 function pareceMedidaNoIngrediente(nombre){
   const n = normalizarParaComparar(nombre);
   if(!n) return false;
-  const partes = n.split(/\s+/);
+  let partes = n.split(/\s+/);
+  // La cantidad puede venir con número delante: "2 tazas de agua", "500 ml de crema". Se quita el
+  // número y se juzga lo que queda, que es el mismo caso de siempre.
+  if(partes.length && /^[0-9]+$/.test(partes[0])) partes = partes.slice(1);
   // Tiene que ser "<medida> de <algo>": la medida sola ("Gramos") no dice nada, y la medida al
   // final ("pollo en trozos") no es este caso.
   return partes.length >= 3 && partes[1] === "de" && MEDIDAS_PURAS.indexOf(partes[0]) !== -1;
