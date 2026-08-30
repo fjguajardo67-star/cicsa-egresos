@@ -1465,6 +1465,7 @@ body.snav-min .side-theme span { display:none; }
       <button class="filter-btn" data-estado="pendiente" onclick="setCatProdFiltro('pendiente',this)">⏳ Pendiente</button>
       <button class="filter-btn" data-estado="validado" onclick="setCatProdFiltro('validado',this)">✅ Validado</button>
       <button class="filter-btn" data-estado="ignorado" onclick="setCatProdFiltro('ignorado',this)">🚫 Ignorado</button>
+      <button class="btn btn-light" style="margin-left:auto;padding:6px 14px;font-size:12.5px" onclick="abrirFaltantes()">🔗 Faltantes de Menú</button>
     </div>
     <div id="catProdDupBanner" style="display:none;padding:10px 14px;background:#FFF3E0;border-radius:8px;font-size:12px;color:#E65100;margin-bottom:14px;border-left:4px solid #E65100;cursor:pointer" onclick="setCatProdFiltro('duplicados')" title="Ver solo los posibles duplicados"></div>
     <div class="tbl-wrap">
@@ -1692,6 +1693,28 @@ body.snav-min .side-theme span { display:none; }
 </div>
 
 <!-- MODAL: SINCRONIZAR VALIDADOS A MENÚ (Fase 2 del Catálogo) -->
+<div class="modal-overlay" id="faltantesModal">
+  <div class="modal" style="max-width:900px">
+    <h3>🔗 Faltantes de Menú</h3>
+    <p style="font-size:12.5px;color:var(--txt2);margin:-6px 0 14px;line-height:1.55">
+      Sube el CSV que exporta Menú con los ingredientes que se quedaron sin precio. Muchos ya
+      tienen precio en el catálogo <strong>con otro nombre</strong> —«Aceite» existe como «Aceite
+      vegetal»— y eso se arregla agregando el sinónimo, sin capturar ningún precio nuevo.
+    </p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <input type="file" id="faltantesFile" accept=".csv,text/csv" onchange="cargarFaltantesCsv(this)"
+        style="font-size:13px;font-family:inherit">
+      <span id="faltantesArchivo" style="font-size:12px;color:var(--txt2)"></span>
+    </div>
+    <div id="faltantesResumen" style="display:none;margin-bottom:14px"></div>
+    <div id="faltantesBody" style="max-height:50vh;overflow-y:auto"></div>
+    <div class="status" id="faltantesStatus" style="margin-top:10px"></div>
+    <div class="btn-row" style="margin-top:16px">
+      <button class="btn btn-light" onclick="closeFaltantesModal()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="syncMenuModal">
   <div class="modal" style="max-width:720px">
     <h3>🍽️ Sincronizar validados a Menú</h3>
@@ -1970,7 +1993,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-29-e";
+const APP_BUILD = "2026-08-30-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -8569,6 +8592,144 @@ function llavesMenuDeFila(row){
   return out;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FALTANTES DE MENÚ — casar un nombre de receta con un producto que YA tiene precio
+// ═══════════════════════════════════════════════════════════════════════════
+// Menú exporta la lista de ingredientes de receta que se quedaron sin precio. Al cruzarla contra
+// lo publicado apareció lo que nadie esperaba: 25 de 96 YA tenían precio, con otro nombre, y esos
+// 25 concentraban 205 de los 353 usos en recetas. "Aceite" existía como "Aceite vegetal";
+// "Pierna y muslo deshuesado" como "Pierna y muslo de pollo". No faltaba el precio: faltaba el
+// sinónimo. Se arregla escribiendo en sinonimos_menu, que es el campo que genera las llaves
+// publicadas (ver llavesMenuDeFila) — NO en alias_factura, que sirve para casar descripciones de
+// CFDI y no publica nada.
+
+// Lee el CSV que exporta Menú. Se aceptan las dos columnas que trae hoy y se ignora el resto,
+// para que agregarle columnas no rompa la importación.
+function parsearFaltantesCsv(texto){
+  const lineas = String(texto||"").split(/\r?\n/).filter(l=>l.trim());
+  if(!lineas.length) return [];
+  const celdas = l => {
+    // Comillas dobles al estilo CSV: "Ajo (42); ajo (11)" lleva comas dentro.
+    const out=[]; let cur="", dentro=false;
+    for(let i=0;i<l.length;i++){
+      const c=l[i];
+      if(c === '"'){ if(dentro && l[i+1]==='"'){ cur+='"'; i++; } else dentro=!dentro; }
+      else if(c === "," && !dentro){ out.push(cur); cur=""; }
+      else cur+=c;
+    }
+    out.push(cur);
+    return out.map(x=>x.trim());
+  };
+  const cab = celdas(lineas[0].replace(/^\uFEFF/, "")).map(x=>normalizarParaComparar(x));
+  const iNom = cab.findIndex(c=>c.includes("ingrediente"));
+  const iRec = cab.findIndex(c=>c.includes("receta"));
+  if(iNom < 0) return [];
+  const vistos = new Set(), out = [];
+  lineas.slice(1).forEach(l=>{
+    const c = celdas(l);
+    const nombre = (c[iNom]||"").trim();
+    if(!nombre) return;
+    const k = normalizarParaComparar(nombre);
+    if(!k || vistos.has(k)) return;
+    vistos.add(k);
+    out.push({ nombre, recetas: iRec>=0 ? (parseInt(c[iRec],10)||0) : 0 });
+  });
+  return out.sort((a,b)=>b.recetas-a.recetas);
+}
+
+// ¿`corto` aparece como PALABRA dentro de `largo`, o solo como pedazo de otra palabra?
+// Ésta es la guardia que separa un acierto de un desastre. posibleMismoIngrediente casa por
+// subcadena, y por subcadena "pollo" está dentro de "repollo" y "sal" dentro de "salsa bbq":
+// el cruce real propuso costear col a precio de pollo ($70.47/kg) y sal a precio de salsa
+// embotellada ($37.50/lt). Lo que distingue esos dos de "Aceite → Aceite vegetal" no es el
+// tamaño ni el parecido, es que ahí "aceite" SÍ es una palabra entera.
+function _esPalabraCompleta(corto, largo){
+  const c = normalizarParaComparar(corto), l = normalizarParaComparar(largo);
+  if(!c || !l) return false;
+  const palabras = l.split(/\s+/);
+  return c.split(/\s+/).every(p => palabras.indexOf(p) !== -1);
+}
+
+// Por qué este candidato puede estar mal. null = no se le ve nada raro (que no es lo mismo que
+// estar bien: "Espinazo de cerdo" contra "Pierna sin hueso de cerdo" pasa las dos guardias y es
+// otro corte a otro precio. Por eso esto SUGIERE y una persona decide).
+function riesgoAlias(faltante, producto, unidadEsperada){
+  const nom = (producto && (producto.ingrediente_generico || producto.nombre_comercial)) || "";
+  const a = normalizarParaComparar(faltante), b = normalizarParaComparar(nom);
+  if(!a || !b) return { tipo:"vacio", texto:"falta el nombre" };
+  const subcadena = a !== b && (a.includes(b) || b.includes(a));
+  if(subcadena && !_esPalabraCompleta(a.length<b.length?a:b, a.length<b.length?b:a)){
+    return { tipo:"pedazo", texto:`«${faltante}» y «${nom}» solo comparten letras, no una palabra` };
+  }
+  if(unidadEsperada && producto.unidad_base && unidadEsperada !== producto.unidad_base){
+    return { tipo:"unidad", texto:`la receta lo mide en ${unidadEsperada} y el producto en ${producto.unidad_base}` };
+  }
+  return null;
+}
+
+// Los productos que podrían ser este faltante, ordenados: primero los que no levantan sospecha.
+function candidatosAlias(faltante, catalogo, unidadEsperada){
+  const out = [];
+  (catalogo||[]).forEach(p=>{
+    if(!p || p.estado === "ignorado") return;
+    const nom = p.ingrediente_generico || p.nombre_comercial || "";
+    if(!nom) return;
+    const nombres = [nom, ...(p.sinonimos_menu||[])];
+    const casa = nombres.some(n =>
+      normalizarParaComparar(n) === normalizarParaComparar(faltante) ||
+      posibleMismoIngrediente(faltante, n));
+    if(!casa) return;
+    out.push({ producto:p, riesgo: riesgoAlias(faltante, p, unidadEsperada) });
+  });
+  return out.sort((a,b)=>(a.riesgo?1:0)-(b.riesgo?1:0));
+}
+
+// El plan completo: qué hacer con cada faltante. Pura, para poder probarla entera.
+//   cubierto      → ya lo publica un producto con ese nombre exacto; no hay nada que hacer.
+//   candidatos    → hay producto(s) que pueden ser; una persona acepta o descarta.
+//   sin_candidato → no se parece a nada; éste sí necesita un precio nuevo.
+function planAlias(faltantes, catalogo){
+  const exacto = new Map();
+  (catalogo||[]).forEach(p=>{
+    if(!p || p.estado === "ignorado") return;
+    [p.ingrediente_generico || p.nombre_comercial, ...(p.sinonimos_menu||[])].forEach(n=>{
+      const k = normalizarParaComparar(n);
+      if(k && !exacto.has(k)) exacto.set(k, p);
+    });
+  });
+  return (faltantes||[]).map(f=>{
+    const nombre = (f && f.nombre) || "";
+    const k = normalizarParaComparar(nombre);
+    if(exacto.has(k)) return { ...f, estado:"cubierto", producto:exacto.get(k), candidatos:[] };
+    const cand = candidatosAlias(nombre, catalogo, f && f.unidad);
+    return { ...f, estado: cand.length ? "candidatos" : "sin_candidato", candidatos:cand };
+  });
+}
+
+// Cuánto pesa cada grupo, para poder decir "esto cubre 205 de 353 usos" en vez de "25 filas".
+function resumenPlanAlias(plan){
+  const r = { cubierto:0, candidatos:0, sin_candidato:0, recetas:{cubierto:0, candidatos:0, sin_candidato:0}, total:0 };
+  (plan||[]).forEach(x=>{
+    if(!x || !r.recetas.hasOwnProperty(x.estado)) return;
+    r[x.estado]++; r.recetas[x.estado] += (parseInt(x.recetas,10)||0); r.total += (parseInt(x.recetas,10)||0);
+  });
+  return r;
+}
+
+// Agregar el sinónimo sin duplicar por mayúsculas ni acentos, y sin repetir el nombre principal
+// (que ya se publica solo). Devuelve null cuando no hay nada que escribir.
+function conSinonimoAgregado(producto, nombre){
+  const n = String(nombre||"").trim();
+  if(!producto || !n) return null;
+  const k = normalizarParaComparar(n);
+  if(!k) return null;
+  const principal = normalizarParaComparar(producto.ingrediente_generico || producto.nombre_comercial || "");
+  if(k === principal) return null;
+  const ya = (producto.sinonimos_menu||[]).some(s=>normalizarParaComparar(s)===k);
+  if(ya) return null;
+  return [...(producto.sinonimos_menu||[]), n];
+}
+
 // Arma el mapa COMPLETO de precios para Menú a partir del catálogo (una llave por producto
 // validado que se puede costear). Es el reemplazo del documento entero, así que lo que no
 // salga de aquí desaparece de Menú — que es justo el punto: un producto borrado o ignorado
@@ -8588,7 +8749,18 @@ function construirMapaPreciosMenu(rows, preciosActuales, fechaHoy){
       // Cada fila se publica bajo TODAS sus llaves (nombre de receta + sinónimos, cada uno en
       // sus variantes de mayúsculas/acentos). El texto va tal cual se generó: un "Title Case"
       // rompía acentos ("Atún"→"AtúN") y Menú matchea la llave EXACTA contra el ingrediente.
-      const entrada = { precio: Math.round(r.calc.precio*100)/100, unidad_base: r.calc.unidadBase, fecha: fechaHoy };
+      // `fecha` es la del DÍA EN QUE SE SINCRONIZÓ, y por eso las 239 llaves publicadas dicen
+      // todas 21/08/2026: no es que todo se comprara ese día, es que aquí se estampaba fechaHoy.
+      // Consecuencia: en ForX una factura de enero y una de agosto se ven igual de frescas, y no
+      // hay forma de caducar un precio que no se puede fechar. `fecha_precio` es la de verdad.
+      // Se AGREGA en vez de corregir `fecha`: ForX ya lee ese campo, y cambiarle el significado
+      // sin avisar rompe en silencio. Conviven hasta que ForX adopte el nuevo y se retire el viejo.
+      const entrada = {
+        precio: Math.round(r.calc.precio*100)/100,
+        unidad_base: r.calc.unidadBase,
+        fecha: fechaHoy,
+        fecha_precio: (r.producto && r.producto.fecha_precio) || "",
+      };
       llavesMenuDeFila(r).forEach(key=>{
         if(r.incluir) nuevo[key] = { ...entrada };
         // Destildar es "hoy no lo toques", no "bórralo": la llave que ya existía se conserva.
@@ -8639,6 +8811,121 @@ async function confirmarSyncMenu(){
     document.getElementById("syncMenuStatus").textContent = "❌ Error al sincronizar: " + err.message;
   }
   document.getElementById("syncMenuBtnConfirmar").disabled = false;
+}
+
+// ── Faltantes de Menú: la pantalla ─────────────────────────────────────────
+// Todo el criterio vive en planAlias/riesgoAlias, que son puras y están probadas. Aquí solo se
+// pinta y se escribe. La regla de la pantalla es una: NADA se aplica solo. El cruce real propuso
+// costear col a precio de pollo, así que cada renglón necesita que alguien lo acepte.
+let _faltantesPlan = [];
+function abrirFaltantes(){
+  _faltantesPlan = [];
+  document.getElementById("faltantesArchivo").textContent = "";
+  document.getElementById("faltantesResumen").style.display = "none";
+  document.getElementById("faltantesBody").innerHTML =
+    `<p style="font-size:13px;color:var(--txt2)">Elige el archivo para empezar.</p>`;
+  document.getElementById("faltantesStatus").style.display = "none";
+  const inp = document.getElementById("faltantesFile"); if(inp) inp.value = "";
+  document.getElementById("faltantesModal").classList.add("open");
+}
+function closeFaltantesModal(){ document.getElementById("faltantesModal").classList.remove("open"); }
+
+function cargarFaltantesCsv(input){
+  const f = input && input.files && input.files[0];
+  if(!f) return;
+  document.getElementById("faltantesArchivo").textContent = f.name;
+  const lector = new FileReader();
+  lector.onload = e=>{
+    const filas = parsearFaltantesCsv(String(e.target.result||""));
+    if(!filas.length){
+      setStatus("faltantesStatus", "⚠ No encontré una columna «Ingrediente» en ese archivo.", "err");
+      return;
+    }
+    document.getElementById("faltantesStatus").style.display = "none";
+    _faltantesPlan = planAlias(filas, _catalogoProductos);
+    renderFaltantes();
+  };
+  lector.onerror = ()=> setStatus("faltantesStatus", "❌ No se pudo leer el archivo.", "err");
+  lector.readAsText(f, "utf-8");
+}
+
+function renderFaltantes(){
+  const res = resumenPlanAlias(_faltantesPlan);
+  const cont = document.getElementById("faltantesResumen");
+  const pct = res.total ? Math.round(res.recetas.candidatos/res.total*100) : 0;
+  cont.style.display = "block";
+  cont.innerHTML = `<div class="summary-grid">
+    <div class="scard"><div class="scard-label">Ya cubiertos</div><div class="scard-val">${res.cubierto}</div><div class="scard-sub">${res.recetas.cubierto} usos en recetas</div></div>
+    <div class="scard ${res.candidatos?'alert':''}"><div class="scard-label">Puede ser un sinónimo</div><div class="scard-val">${res.candidatos}</div><div class="scard-sub">${res.recetas.candidatos} usos · ${pct}% del total</div></div>
+    <div class="scard"><div class="scard-label">Necesitan precio</div><div class="scard-val">${res.sin_candidato}</div><div class="scard-sub">${res.recetas.sin_candidato} usos en recetas</div></div>
+  </div>`;
+
+  const conCand = _faltantesPlan.filter(x=>x.estado==="candidatos");
+  const sinNada = _faltantesPlan.filter(x=>x.estado==="sin_candidato");
+  let html = "";
+  if(conCand.length){
+    html += `<div style="font-size:12.5px;color:var(--txt2);margin:4px 0 10px;line-height:1.55">
+      Revisa uno por uno. La sugerencia sale de comparar los nombres, y comparar nombres se
+      equivoca: «Repollo» se parece a «Pollo» y no es lo mismo. <strong>Lo marcado en rojo casi
+      seguro está mal.</strong>
+    </div><div class="tbl-wrap"><table><thead><tr>
+      <th>Falta en Menú</th><th style="text-align:right">Recetas</th><th>Ya existe como</th><th style="text-align:right">Precio</th><th></th>
+    </tr></thead><tbody>`;
+    conCand.forEach(x=>{
+      x.candidatos.forEach((c,ci)=>{
+        const p = c.producto, calc = precioPorUnidadBase(p);
+        const nom = p.ingrediente_generico || p.nombre_comercial || "";
+        const idx = _faltantesPlan.indexOf(x);
+        html += `<tr style="${c.riesgo?'background:#FFF6F5':''}">
+          <td>${ci===0?`<strong>${esc(x.nombre)}</strong>`:`<span style="color:var(--txt2)">↳</span>`}</td>
+          <td class="amount-cell">${ci===0?(x.recetas||"—"):""}</td>
+          <td>${esc(nom)}${(p.sinonimos_menu||[]).length?`<div style="font-size:10.5px;color:var(--txt2)">${(p.sinonimos_menu||[]).map(esc).join(" · ")}</div>`:""}
+            ${c.riesgo?`<div style="font-size:11px;color:var(--red);margin-top:3px">⚠ ${esc(c.riesgo.texto)}</div>`:""}</td>
+          <td class="amount-cell">${calc.ok?`${fmt(calc.precio)}<div style="font-size:10.5px;color:var(--txt2);font-weight:400">por ${esc(calc.unidadBase)}</div>`:`<span style="font-size:11px;color:var(--do)">${esc(calc.motivo||"sin precio")}</span>`}</td>
+          <td style="text-align:right"><button class="btn ${c.riesgo?'btn-light':'btn-green'}" style="padding:4px 10px;font-size:11px;white-space:nowrap"
+            onclick="aplicarAlias(${idx}, '${escAttrJs(p.id)}')">${c.riesgo?'Aun así, es el mismo':'✓ Es el mismo'}</button></td>
+        </tr>`;
+      });
+    });
+    html += `</tbody></table></div>`;
+  } else {
+    html += `<div style="font-size:13px;color:var(--vm);margin-bottom:14px">✅ No quedan sinónimos por revisar.</div>`;
+  }
+  if(sinNada.length){
+    html += `<div style="font-size:12.5px;color:var(--txt2);margin:20px 0 10px;line-height:1.55">
+      <strong>${sinNada.length} no se parecen a nada del catálogo.</strong> Éstos sí necesitan que
+      alguien les capture un precio; no hay sinónimo que los rescate.
+    </div><div class="tbl-wrap"><table><thead><tr><th>Ingrediente</th><th style="text-align:right">Recetas</th></tr></thead><tbody>
+      ${sinNada.map(x=>`<tr><td>${esc(x.nombre)}</td><td class="amount-cell">${x.recetas||"—"}</td></tr>`).join("")}
+    </tbody></table></div>`;
+  }
+  document.getElementById("faltantesBody").innerHTML = html;
+}
+
+async function aplicarAlias(idx, productoId){
+  const x = _faltantesPlan[idx];
+  const p = (_catalogoProductos||[]).find(q=>String(q.id)===String(productoId));
+  if(!x || !p) return;
+  const cand = x.candidatos.find(c=>String(c.producto.id)===String(productoId));
+  if(cand && cand.riesgo &&
+     !confirm(`⚠ ${cand.riesgo.texto}.\n\nSi lo aceptas, en Menú «${x.nombre}» se va a costear con el precio de «${p.ingrediente_generico||p.nombre_comercial}».\n\n¿Es realmente el mismo ingrediente?`)) return;
+  const sinonimos = conSinonimoAgregado(p, x.nombre);
+  if(!sinonimos){
+    setStatus("faltantesStatus", `«${x.nombre}» ya estaba en ese producto.`, "ok");
+    x.estado = "cubierto"; x.candidatos = []; renderFaltantes(); return;
+  }
+  setStatus("faltantesStatus", `Guardando «${x.nombre}»…`, "loading");
+  const { id, ...datos } = p;
+  const ok = await fbUpdateDoc(CATALOGO_COL, p.id, { ...datos, sinonimos_menu: sinonimos });
+  if(!ok){
+    setStatus("faltantesStatus", `❌ No se pudo guardar «${x.nombre}». No se cambió nada.`, "err");
+    return;
+  }
+  p.sinonimos_menu = sinonimos;
+  x.estado = "cubierto"; x.producto = p; x.candidatos = [];
+  setStatus("faltantesStatus", `✅ «${x.nombre}» queda como sinónimo de «${p.ingrediente_generico||p.nombre_comercial}». Se publica en la próxima sincronización a Menú.`, "ok");
+  renderFaltantes();
+  if(document.getElementById("catProdBody")) renderCatalogoProductos();
 }
 
 function closeSyncMenuModal(){ document.getElementById("syncMenuModal").classList.remove("open"); }
