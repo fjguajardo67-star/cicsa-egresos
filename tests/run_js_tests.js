@@ -99,6 +99,9 @@ const FUNCS = [
   "permisosDetalle", "claveFormaPago", "filtrarGastosPanel", "totalesPorFormaPago", "folioDuplicado",
   "filasDetalleGastos", "gastosRepetidosPorId",
   "mapaUuidAFolio", "_folioIdentidad", "facturaEnteraYSusPartes",
+  "basePresupuestoPeriodo",
+  "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
+  "planAlias", "resumenPlanAlias", "conSinonimoAgregado",
   "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
@@ -689,6 +692,284 @@ t("sin folio no agrupa (compras repetidas reales no se marcan)", () => {
     { id: "b", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-01", categoria: "Tortilla", importe: 500.00 },
   ]);
   assert.equal(r.length, 0);
+});
+
+console.log("\n== faltantes de Menu: el precio ya estaba, con otro nombre ==");
+// Al cruzar los 96 faltantes que exporto Menu contra las 239 llaves publicadas apareció que 25 YA
+// tenian precio bajo otro nombre, y esos 25 concentraban 205 de los 353 usos en recetas. No
+// faltaba el precio: faltaba el sinonimo. Los casos de abajo son textuales de ese cruce.
+
+t("lee el CSV que exporta Menu", () => {
+  const f = S.parsearFaltantesCsv(
+    'Prioridad,Ingrediente,Recetas afectadas,Variantes en las recetas\n' +
+    '1,Ajo,53,"Ajo (42); ajo (11)"\n' +
+    '3,Aceite,37,"Aceite (32); aceite (5)"\n');
+  assert.equal(f.length, 2);
+  assert.equal(f[0].nombre, "Ajo");
+  assert.equal(f[0].recetas, 53);
+});
+t("las comas dentro de comillas no parten la fila", () => {
+  // "Ajo (42); ajo (11)" y las listas de recetas llevan comas adentro.
+  const f = S.parsearFaltantesCsv('Ingrediente,Recetas afectadas,Ejemplos\nSal,53,"Uno, Dos, Tres"\n');
+  assert.equal(f.length, 1);
+  assert.equal(f[0].nombre, "Sal");
+  assert.equal(f[0].recetas, 53);
+});
+t("el BOM del inicio no se come la primera columna", () => {
+  // El archivo real venia con BOM: sin quitarlo, la cabecera no casaba y salian cero filas.
+  const f = S.parsearFaltantesCsv('\uFEFFPrioridad,Ingrediente,Recetas afectadas\n1,Ajo,53\n');
+  assert.equal(f.length, 1);
+  assert.equal(f[0].nombre, "Ajo");
+});
+t("sale ordenado por cuanto duele, no por orden de archivo", () => {
+  const f = S.parsearFaltantesCsv('Ingrediente,Recetas afectadas\nComino,5\nAjo,53\nPapa,11\n');
+  assert.deepEqual(f.map(x=>x.nombre), ["Ajo", "Papa", "Comino"]);
+});
+t("un archivo sin columna Ingrediente no inventa filas", () => {
+  assert.deepEqual(S.parsearFaltantesCsv("Producto,Precio\nAjo,10\n"), []);
+  assert.deepEqual(S.parsearFaltantesCsv(""), []);
+  assert.deepEqual(S.parsearFaltantesCsv(null), []);
+});
+
+console.log("\n== la guardia que impide costear col a precio de pollo ==");
+// posibleMismoIngrediente casa por subcadena, y por subcadena "pollo" esta dentro de "repollo" y
+// "sal" dentro de "salsa bbq". El cruce real propuso las dos. Lo que separa esos desastres de
+// "Aceite -> Aceite vegetal" no es el parecido ni el tamaño: es si la palabra esta COMPLETA.
+
+t("Repollo contra Pollo se marca: comparten letras, no una palabra", () => {
+  const r = S.riesgoAlias("Repollo", { nombre_comercial:"Pollo", unidad_base:"kg" });
+  assert.ok(r, "tiene que levantar sospecha");
+  assert.equal(r.tipo, "pedazo");
+});
+t("Sal contra Salsa BBQ se marca por lo mismo", () => {
+  // 53 recetas costeadas con salsa embotellada a $37.50/lt si esto pasa de largo.
+  const r = S.riesgoAlias("Sal", { nombre_comercial:"Salsa BBQ", unidad_base:"lt" });
+  assert.ok(r); assert.equal(r.tipo, "pedazo");
+});
+t("Aceite contra Aceite vegetal NO se marca: ahi si es palabra entera", () => {
+  assert.equal(S.riesgoAlias("Aceite", { nombre_comercial:"Aceite vegetal", unidad_base:"lt" }), null);
+});
+t("Jalapeno contra Chile jalapeno tampoco", () => {
+  assert.equal(S.riesgoAlias("Jalapeno", { nombre_comercial:"Chile jalapeno", unidad_base:"kg" }), null);
+});
+t("los acentos no cambian el veredicto", () => {
+  assert.equal(S.riesgoAlias("Jalapeño", { nombre_comercial:"Chile jalapeno", unidad_base:"kg" }), null);
+  assert.equal(S.riesgoAlias("Rollo Norteño", { nombre_comercial:"Rollo Norteno de Res", unidad_base:"kg" }), null);
+});
+t("la unidad que no cuadra se marca aunque el nombre encaje", () => {
+  // Harina -> Tortilla de Harina, $3/pz. "harina" SI es palabra entera ahi, asi que la guardia
+  // de palabra no lo caza; la de unidad si. Hacen falta las dos.
+  const r = S.riesgoAlias("Harina", { nombre_comercial:"Tortilla de Harina", unidad_base:"pz" }, "kg");
+  assert.ok(r); assert.equal(r.tipo, "unidad");
+});
+t("sin unidad esperada no se inventa un problema de unidad", () => {
+  assert.equal(S.riesgoAlias("Harina", { nombre_comercial:"Tortilla de Harina", unidad_base:"pz" }), null);
+});
+t("un producto sin nombre no pasa como candidato bueno", () => {
+  const r = S.riesgoAlias("Ajo", { nombre_comercial:"", unidad_base:"kg" });
+  assert.ok(r); assert.equal(r.tipo, "vacio");
+});
+t("_esPalabraCompleta hace justo eso y nada mas", () => {
+  assert.equal(S._esPalabraCompleta("aceite", "aceite vegetal"), true);
+  assert.equal(S._esPalabraCompleta("pollo", "repollo"), false);
+  assert.equal(S._esPalabraCompleta("sal", "salsa bbq"), false);
+  assert.equal(S._esPalabraCompleta("pierna y muslo", "pierna y muslo de pollo"), true);
+  assert.equal(S._esPalabraCompleta("", "algo"), false);
+});
+
+console.log("\n== el plan: que hacer con cada faltante ==");
+const CAT = [
+  { id:"1", nombre_comercial:"Aceite vegetal",         unidad_base:"lt", estado:"validado", sinonimos_menu:[] },
+  { id:"2", nombre_comercial:"Pierna y muslo de pollo", unidad_base:"kg", estado:"validado", sinonimos_menu:[] },
+  { id:"3", nombre_comercial:"Pollo",                   unidad_base:"kg", estado:"validado", sinonimos_menu:[] },
+  { id:"4", nombre_comercial:"Comino",                  unidad_base:"kg", estado:"validado", sinonimos_menu:["comino molido"] },
+];
+
+t("lo que ya se publica con ese nombre queda cubierto, sin preguntar", () => {
+  const p = S.planAlias([{ nombre:"Comino", recetas:5 }], CAT);
+  assert.equal(p[0].estado, "cubierto");
+  assert.equal(p[0].candidatos.length, 0);
+});
+t("un sinonimo YA capturado tambien cuenta como cubierto", () => {
+  // Si no, cada importacion volveria a preguntar por lo mismo que ya se resolvio.
+  const p = S.planAlias([{ nombre:"comino molido", recetas:4 }], CAT);
+  assert.equal(p[0].estado, "cubierto");
+});
+t("Aceite encuentra a Aceite vegetal, sin sospecha", () => {
+  const p = S.planAlias([{ nombre:"Aceite", recetas:37 }], CAT);
+  assert.equal(p[0].estado, "candidatos");
+  assert.equal(p[0].candidatos[0].producto.id, "1");
+  assert.equal(p[0].candidatos[0].riesgo, null);
+});
+t("Repollo encuentra a Pollo pero llega MARCADO", () => {
+  // No se esconde el candidato: se enseña con el motivo, porque esconderlo tampoco ayuda a
+  // quien tiene que decidir. Lo que no se hace es aplicarlo solo.
+  const p = S.planAlias([{ nombre:"Repollo", recetas:1 }], CAT);
+  assert.equal(p[0].estado, "candidatos");
+  assert.ok(p[0].candidatos[0].riesgo, "tiene que venir con su advertencia");
+});
+t("los candidatos limpios salen antes que los sospechosos", () => {
+  // "Sal" casa con los dos: con "Salsa BBQ" por pedazo de palabra (mal) y con "Sal de grano"
+  // por palabra entera (bien). El sospechoso va primero en el catalogo a proposito: si nadie
+  // ordena, es el que ve la persona arriba y el que va a aceptar de corrido.
+  const cat = [
+    { id:"a", nombre_comercial:"Salsa BBQ",   unidad_base:"lt", estado:"validado", sinonimos_menu:[] },
+    { id:"b", nombre_comercial:"Sal de grano", unidad_base:"kg", estado:"validado", sinonimos_menu:[] },
+  ];
+  const c = S.planAlias([{ nombre:"Sal", recetas:53 }], cat)[0].candidatos;
+  assert.equal(c.length, 2, "los dos tienen que aparecer");
+  assert.equal(c[0].producto.id, "b", "primero el limpio");
+  assert.equal(c[0].riesgo, null);
+  assert.ok(c[1].riesgo, "y el sospechoso al final, con su motivo");
+});
+t("lo que no se parece a nada pide precio nuevo", () => {
+  const p = S.planAlias([{ nombre:"Chile morita", recetas:3 }], CAT);
+  assert.equal(p[0].estado, "sin_candidato");
+});
+t("un producto ignorado no se ofrece como candidato", () => {
+  // "Ignorado" significa que alguien ya dijo que eso no se costea. Proponerlo lo revive.
+  const cat = [{ id:"9", nombre_comercial:"Agua", unidad_base:"lt", estado:"ignorado", sinonimos_menu:[] }];
+  assert.equal(S.planAlias([{ nombre:"Agua", recetas:4 }], cat)[0].estado, "sin_candidato");
+});
+t("el resumen cuenta recetas, no renglones", () => {
+  // 25 filas suena poco; 205 usos en recetas es lo que de verdad se arregla.
+  const r = S.resumenPlanAlias(S.planAlias([
+    { nombre:"Aceite", recetas:37 }, { nombre:"Comino", recetas:5 }, { nombre:"Chile morita", recetas:3 },
+  ], CAT));
+  assert.equal(r.candidatos, 1);   assert.equal(r.recetas.candidatos, 37);
+  assert.equal(r.cubierto, 1);     assert.equal(r.recetas.cubierto, 5);
+  assert.equal(r.sin_candidato, 1);assert.equal(r.recetas.sin_candidato, 3);
+  assert.equal(r.total, 45);
+});
+t("no truena con catalogo vacio ni con basura", () => {
+  assert.deepEqual(S.planAlias([], []), []);
+  assert.deepEqual(S.planAlias(null, null), []);
+  assert.equal(S.planAlias([{ nombre:"Ajo", recetas:1 }], null)[0].estado, "sin_candidato");
+});
+
+console.log("\n== escribir el sinonimo sin ensuciar el producto ==");
+t("agrega el nombre nuevo conservando los que ya estaban", () => {
+  const s = S.conSinonimoAgregado({ nombre_comercial:"Comino", sinonimos_menu:["comino molido"] }, "Comino en polvo");
+  assert.deepEqual(s, ["comino molido", "Comino en polvo"]);
+});
+t("no duplica por mayusculas ni acentos", () => {
+  assert.equal(S.conSinonimoAgregado({ nombre_comercial:"Comino", sinonimos_menu:["Comino molido"] }, "comino molido"), null);
+  assert.equal(S.conSinonimoAgregado({ nombre_comercial:"Jalapeno", sinonimos_menu:["Jalapeño"] }, "jalapeno"), null);
+});
+t("no se agrega a si mismo como sinonimo", () => {
+  // El nombre principal ya se publica solo; repetirlo solo engorda el documento.
+  assert.equal(S.conSinonimoAgregado({ nombre_comercial:"Aceite vegetal", sinonimos_menu:[] }, "aceite vegetal"), null);
+});
+t("respeta ingrediente_generico como principal cuando existe", () => {
+  assert.equal(S.conSinonimoAgregado({ nombre_comercial:"Aceite Nutrioli 20L", ingrediente_generico:"Aceite", sinonimos_menu:[] }, "aceite"), null);
+});
+t("un nombre vacio no escribe nada", () => {
+  assert.equal(S.conSinonimoAgregado({ nombre_comercial:"X", sinonimos_menu:[] }, "  "), null);
+  assert.equal(S.conSinonimoAgregado(null, "Ajo"), null);
+});
+
+console.log("\n== la fecha publicada tiene que ser la del precio ==");
+t("cada entrada lleva fecha_precio, no solo la de sincronizacion", () => {
+  // Las 239 llaves publicadas decian todas 21/08/2026 porque aqui se estampaba fechaHoy. En Menu
+  // una factura de enero y una de agosto se veian igual de frescas, y sin fecha real no hay
+  // forma de caducar nada.
+  const m = S.construirMapaPreciosMenu([{
+    incluir:true, nombreSync:"Ajo", sinonimosSync:[],
+    producto:{ fecha_precio:"2026-08-14" },
+    calc:{ ok:true, precio:140.51, unidadBase:"kg" },
+  }], {}, "21/08/2026");
+  assert.equal(m["Ajo"].fecha_precio, "2026-08-14", "la fecha DEL PRECIO");
+  assert.equal(m["Ajo"].fecha, "21/08/2026", "y la de sincronizacion se conserva para no romper Menu");
+});
+t("un producto sin fecha de precio no inventa una", () => {
+  const m = S.construirMapaPreciosMenu([{
+    incluir:true, nombreSync:"Sal", sinonimosSync:[], producto:{},
+    calc:{ ok:true, precio:10, unidadBase:"kg" },
+  }], {}, "21/08/2026");
+  assert.equal(m["Sal"].fecha_precio, "", "vacio es honesto; la fecha de hoy seria mentira");
+});
+
+console.log("\n== contra QUE se compara el gasto del periodo ==");
+// Caso real del 03 al 31 de agosto de 2026: objetivo asignado 350,000/semana, pero las metas por
+// categoria sumaban 547,000/semana. Con 29 dias (factor 4.142857) la pantalla contestaba dos cosas
+// opuestas con los mismos datos: contra la suma de categorias el gasto salia POR DEBAJO y en verde
+// (+805,968.96), contra el objetivo salia POR ENCIMA y en rojo (-10,173.90). Las dos cuentas
+// estaban bien. Lo que faltaba era decir cual manda.
+
+const F29 = 29 / 7;
+
+t("manda el objetivo asignado, no la suma de categorias", () => {
+  const B = S.basePresupuestoPeriodo(350000, 547000, F29);
+  close(B.objetivo, 1450000, 0.01);
+  close(B.suma, 2266142.86, 0.01);
+  close(B.base, 1450000, 0.01, "el tope es el que alguien asigno");
+  assert.equal(B.fuente, "asignado");
+});
+t("el descuadre queda dicho, no escondido", () => {
+  // Es la cifra que explica por que las dos lecturas se contradecian.
+  const B = S.basePresupuestoPeriodo(350000, 547000, F29);
+  close(B.descuadre, 816142.86, 0.01, "las categorias reparten de mas");
+  assert.ok(B.descuadre > 0);
+});
+t("repartir de menos tambien es descuadre, con el signo al reves", () => {
+  const B = S.basePresupuestoPeriodo(350000, 300000, 1);
+  close(B.descuadre, -50000, 0.01);
+  close(B.base, 350000, 0.01, "el tope no baja porque se reparta de menos");
+});
+t("cuadrado es descuadre cero", () => {
+  const B = S.basePresupuestoPeriodo(350000, 350000, F29);
+  close(B.descuadre, 0, 0.005);
+  close(B.base, B.suma, 0.01);
+});
+t("sin objetivo asignado el tope es la suma de categorias", () => {
+  // Es el unico numero que queda; comparar contra cero pintaria TODO en rojo.
+  const B = S.basePresupuestoPeriodo(0, 547000, F29);
+  close(B.base, 2266142.86, 0.01);
+  assert.equal(B.fuente, "categorias");
+  assert.equal(B.descuadre, 0, "sin tope no hay nada que descuadre");
+});
+t("el objetivo tambien se prorratea, no se compara semanal contra un mes", () => {
+  // El error que ya se corrigio una vez en Seguimiento: un mes de gasto contra la meta de UNA
+  // semana hace que todo salga excedido.
+  const B = S.basePresupuestoPeriodo(350000, 350000, F29);
+  close(B.objetivo, 1450000, 0.01);
+  assert.ok(B.objetivo > 350000, "sin prorratear, el tope de 29 dias seria el de 7");
+});
+t("factor invalido o ausente vale 1, no cero", () => {
+  // Con factor 0 el tope seria 0 y toda la pantalla saldria excedida.
+  [undefined, null, 0, -3, NaN, "cuatro"].forEach(f => {
+    const B = S.basePresupuestoPeriodo(350000, 350000, f);
+    close(B.objetivo, 350000, 0.01, "factor " + String(f));
+  });
+});
+t("no truena con basura en las cifras", () => {
+  const B = S.basePresupuestoPeriodo(undefined, null, 1);
+  assert.equal(B.objetivo, 0);
+  assert.equal(B.suma, 0);
+  assert.equal(B.base, 0);
+  assert.equal(B.fuente, "categorias");
+});
+
+t("la barra del admin y la tarjeta hacen la MISMA cuenta", () => {
+  // Guardia sobre el fuente: si cada una vuelve a calcular su tope por su cuenta, vuelven a poder
+  // contradecirse — que es exactamente el reporte que origino esto.
+  const cuerpo = (n) => {
+    const i = script.indexOf("function " + n + "(");
+    assert.ok(i > -1, "no encontre " + n);
+    let j = script.indexOf("{", i), d = 0;
+    for (let k = j; k < script.length; k++) {
+      if (script[k] === "{") d++;
+      else if (script[k] === "}") { d--; if (!d) return script.slice(i, k + 1); }
+    }
+    return "";
+  };
+  ["actualizarTotalPresupuesto", "renderDetallePresupuesto"].forEach(n => {
+    const b = cuerpo(n).replace(/\/\/[^\n]*/g, "");
+    assert.ok(b.includes("basePresupuestoPeriodo("), n + " tiene que salir del calculo compartido");
+    // Y tiene que USAR lo que devuelve. Llamarla y despues recalcular por tu cuenta deja el
+    // nombre puesto y la contradiccion intacta, que es lo que hay que impedir.
+    assert.ok(!/\*\s*F\.factor/.test(b), n + " volvio a prorratear por su cuenta");
+  });
 });
 
 console.log("\n== Seguimiento se fusiono en Presupuesto ==");
