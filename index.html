@@ -1374,6 +1374,15 @@ body.snav-min .side-theme span { display:none; }
         <button class="btn btn-light" id="btnBorrarMesCfdi" style="padding:8px 12px;display:none;color:var(--red)" onclick="eliminarMesCfdiSeleccionado()">🗑️ Eliminar este mes</button>
       </div>
       <div id="cfdisStoreBody" style="max-height:220px;overflow:auto;margin-top:10px"></div>
+      <div id="cfdisDescartadosCard" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+        <div style="font-weight:700;color:var(--red);font-size:13px;margin-bottom:4px">🚫 CFDI descartados de la conciliación<span id="descCount" class="dup-badge" style="background:#FFEBEE;color:var(--red);margin-left:8px"></span></div>
+        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px;line-height:1.5">
+          Alguien dijo que esto no es un gasto, así que <strong>no aparece como pendiente, ni en el
+          balance, ni en ningún lado</strong> — y volver a subir el XML no lo revive. Si alguno se
+          descartó por error, devuélvelo aquí.
+        </div>
+        <div id="cfdisDescartadosBody" style="max-height:260px;overflow:auto"></div>
+      </div>
       <div style="border-top:1.5px solid var(--border);margin-top:12px;padding-top:12px">
         <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:4px">💲 Precios desde los CFDI · Sin IA</div>
         <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Cada renglón del CFDI trae su <strong>valor unitario exacto</strong> — es dato fiscal, no una lectura que se pueda equivocar. Aquí se compara contra el catálogo: lo que ya se sabe identificar se actualiza con un clic, y lo que no, queda como lista de trabajo.</div>
@@ -2024,7 +2033,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-30-e";
+const APP_BUILD = "2026-08-31-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -6568,6 +6577,7 @@ async function renderCfdisStore(){
   const btnBorrar=document.getElementById("btnBorrarMesCfdi");
   if(btnBorrar) btnBorrar.style.display = (meses.length && typeof currentRole!=="undefined" && currentRole==="admin") ? "inline-flex" : "none";
   renderTablaMesCfdi();
+  try{ renderDescartados(); }catch(_){}
 }
 // Borra TODO un mes del almacén de la nube de un golpe (solo admin) — para limpieza real, ya que
 // un mes trae 150-200 CFDIs. No toca los gastos capturados; solo los quita del listado.
@@ -6609,6 +6619,46 @@ function nombreMes(m){
   const nombres=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
   return `${nombres[parseInt(mm,10)-1]||mm} ${y}`;
 }
+// Los descartados no viven en ninguna pantalla: el único rastro era un contador que decía
+// cuántos. Aquí se ven, con quién y cuándo, y se pueden devolver — de uno en uno o por lote,
+// porque un descarte en bloque se hizo con un clic y deshacerlo debe costar lo mismo.
+function renderDescartados(){
+  const card = document.getElementById("cfdisDescartadosCard");
+  const body = document.getElementById("cfdisDescartadosBody");
+  if(!card || !body) return;
+  const lista = cfdisDescartados(_cfdisStore);
+  if(!lista.length){ card.style.display = "none"; body.innerHTML = ""; return; }
+  const esAdmin = (typeof currentRole!=="undefined" && currentRole==="admin");
+  const r = resumenDescarte(lista);
+  const cnt = document.getElementById("descCount");
+  if(cnt) cnt.textContent = `${r.n} · ${fmt(r.total)}`;
+  card.style.display = "block";
+  // Agrupados por momento del descarte: es lo que revela un descarte en bloque de un solo clic.
+  const lotes = {};
+  lista.forEach(c=>{ const k = c.ignoradoTs || "—"; (lotes[k] = lotes[k] || []).push(c); });
+  body.innerHTML = Object.keys(lotes).sort().reverse().map(ts=>{
+    const l = lotes[ts], rl = resumenDescarte(l);
+    const cuando = ts !== "—" ? fmtDate(String(ts).slice(0,10)) : "sin fecha";
+    const quien = (l[0] && l[0].ignoradoPor) || "";
+    return `<div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+      <div style="background:#FFF6F5;padding:7px 10px;font-size:11.5px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span><strong>${l.length}</strong> descartado(s) el <strong>${esc(cuando)}</strong>${quien?` por ${esc(quien)}`:""}</span>
+        <span style="font-family:'JetBrains Mono',monospace;color:var(--red)">${fmt(rl.total)}</span>
+        ${esAdmin && l.length>1 ? `<button class="btn btn-light" style="margin-left:auto;padding:3px 10px;font-size:11px" onclick="restaurarLoteDescarte('${escAttrJs(ts)}')">↩︎ Devolver los ${l.length}</button>` : ""}
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <tbody>${l.map(c=>`<tr style="border-top:1px solid var(--border)">
+          <td style="padding:3px 8px;white-space:nowrap">${fmtDate(c.fecha)||"—"}</td>
+          <td style="padding:3px 8px">${esc(c.proveedor||"—")}</td>
+          <td style="padding:3px 8px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--txt2)">${esc(c.rfc||"—")}</td>
+          <td style="padding:3px 8px;text-align:right;font-family:'JetBrains Mono',monospace">${fmt(c.total)}</td>
+          ${esAdmin?`<td style="padding:3px 8px;text-align:right"><button class="btn btn-light" style="padding:2px 9px;font-size:11px;white-space:nowrap" onclick="restaurarCfdi('${escAttrJs(c.id)}')">↩︎ Devolver</button></td>`:""}
+        </tr>`).join("")}</tbody>
+      </table>
+    </div>`;
+  }).join("");
+}
+
 function renderTablaMesCfdi(){
   const sel=document.getElementById("satMesGuardado"), body=document.getElementById("cfdisStoreBody"); if(!body) return;
   const mes=sel?.value||"";
@@ -7405,6 +7455,43 @@ function _cfdiUuidDeEsteFormulario(){
   return _cfdiOrigen.uuid;
 }
 
+// ── El descarte, sus datos y su reverso ────────────────────────────────────
+// Descartar un CFDI lo saca de la conciliación, del balance, de los precios y de todo lo demás.
+// Era una puerta de una sola dirección: no había forma de deshacerlo ni pantalla que dijera qué
+// se había descartado. Un mes entero de un proveedor podía desaparecer con un clic y lo único
+// que quedaba era un contador que decía "N CFDI que descartaste a mano".
+const MARCA_DESCARTE = ["ignorado", "ignoradoPor", "ignoradoTs"];
+
+// Los descartados, del más reciente al más viejo. Puro, para poder probarlo.
+function cfdisDescartados(cfdis){
+  return (cfdis||[])
+    // .filter() ya devuelve un array nuevo, así que ordenar aquí no toca la lista original.
+    .filter(c => c && c.ignorado)
+    .sort((a,b)=> String(b.ignoradoTs||"").localeCompare(String(a.ignoradoTs||"")) ||
+                  String(b.fecha||"").localeCompare(String(a.fecha||"")));
+}
+
+// Cuánto pesa lo que se va a descartar (o lo que ya se descartó). Decir "8 CFDI más" no informa;
+// decir "$31,330.78 entre el 01 y el 28 de agosto" sí.
+function resumenDescarte(lista){
+  const l = (lista||[]).filter(Boolean);
+  const fechas = l.map(c=>c.fecha).filter(Boolean).sort();
+  return {
+    n: l.length,
+    total: Math.round(l.reduce((s,c)=>s+(parseFloat(c.total)||0),0)*100)/100,
+    ini: fechas[0] || "",
+    fin: fechas[fechas.length-1] || "",
+  };
+}
+
+// El CFDI sin la marca. Devuelve una COPIA: quien restaura decide cuándo escribirla.
+function sinMarcaDescarte(cfdi){
+  if(!cfdi) return null;
+  const out = { ...cfdi };
+  MARCA_DESCARTE.forEach(k => { delete out[k]; });
+  return out;
+}
+
 // Descarta CFDIs que no corresponden a un gasto (facturas propias, complementos, etc.). Es un
 // borrado SUAVE: se marca el documento, no se destruye. Así el descarte sobrevive a volver a
 // subir los mismos XML — que es justo lo que hacía que reaparecieran.
@@ -7417,16 +7504,34 @@ async function descartarCfdi(uuid, rfcEmisor, proveedor){
     String(c.uuid||c.folio).toUpperCase()!==clave);
   let objetivos=[clave];
   if(mismoEmisor.length){
-    // Descartar de uno en uno es inviable cuando el mismo emisor trae 15 renglones.
-    const r=confirm(`${proveedor}\n\nHay ${mismoEmisor.length} CFDI más de este mismo emisor pendientes en el periodo.\n\nAceptar = descartar los ${mismoEmisor.length+1}\nCancelar = descartar solo este`);
+    // Descartar de uno en uno es inviable cuando el mismo emisor trae 15 renglones. Pero el
+    // diálogo decía CUÁNTOS, no CUÁLES: "8 CFDI más" no deja ver que ahí van $31,330.78 entre
+    // facturas de combustible y anticipos. Y "Aceptar" —lo que hace Enter— era la opción
+    // destructiva. Ahora se listan folio, fecha e importe, con el total, y la acción por defecto
+    // es la segura.
+    const r0 = resumenDescarte(mismoEmisor);
+    const muestra = mismoEmisor.slice(0,10).map(c=>
+      `  · ${fmtDate(c.fecha)||"—"}  ${fmt(c.total)}  ${_folioDeCfdi(c)||String(c.uuid||c.folio||"").slice(0,8)}`).join("\n");
+    const resto = mismoEmisor.length>10 ? `\n  …y ${mismoEmisor.length-10} más` : "";
+    const r=confirm(
+      `${proveedor}\n\n` +
+      `Además de éste hay ${mismoEmisor.length} CFDI pendientes del mismo emisor, por ${fmt(r0.total)}` +
+      (r0.ini?` (${fmtDate(r0.ini)} al ${fmtDate(r0.fin)})`:"") + `:\n\n${muestra}${resto}\n\n` +
+      `Aceptar  = descartar TODOS (${mismoEmisor.length+1})\n` +
+      `Cancelar = descartar SOLO éste\n\n` +
+      `Se puede deshacer: quedan listados abajo, en «CFDI descartados».`);
     if(r) objetivos=objetivos.concat(mismoEmisor.map(c=>String(c.uuid||c.folio).toUpperCase()));
-  } else if(!confirm(`¿Descartar este CFDI de ${proveedor}?\n\nDeja de aparecer como pendiente y no vuelve aunque se suban otra vez los XML.\nNo afecta tus gastos capturados.`)) return;
+  } else if(!confirm(`¿Descartar este CFDI de ${proveedor}?\n\nDeja de aparecer como pendiente y no vuelve aunque se suban otra vez los XML.\nNo afecta tus gastos capturados.\n\nSe puede deshacer desde «CFDI descartados».`)) return;
   setStatus("satStatus",`Descartando ${objetivos.length} CFDI…`,"loading");
   const marca={ ignorado:true, ignoradoPor:(currentNombre||currentUser?.email||""), ignoradoTs:new Date().toISOString() };
   const enStore=(_cfdisStore||[]).filter(c=>objetivos.includes(String(c.uuid||c.id).toUpperCase()));
   try{
     for(let i=0;i<enStore.length;i+=25){
-      await Promise.all(enStore.slice(i,i+25).map(c=>fbUpdateDoc(CFDIS_COL, c.id, marca)));
+      // FUSIONAR, no reemplazar. fbUpdateDoc mete lo que reciba en el campo `json`, que es donde
+      // vive el CFDI ENTERO: mandarle solo la marca borraba uuid, folio, RFC, proveedor, fecha,
+      // total y conceptos, y dejaba el documento con tres campos. Se recuperaba al volver a subir
+      // el XML —guardarCfdisEnStore reescribe todo— pero mientras tanto el comprobante no existía.
+      await Promise.all(enStore.slice(i,i+25).map(c=>{ const { id, ...datos } = c; return fbUpdateDoc(CFDIS_COL, id, { ...datos, ...marca }); }));
     }
   }catch(e){ setStatus("satStatus","❌ No se pudieron guardar los descartes: "+e.message,"err"); return; }
   enStore.forEach(c=>Object.assign(c, marca));
@@ -7434,8 +7539,54 @@ async function descartarCfdi(uuid, rfcEmisor, proveedor){
   (satCFDIs||[]).forEach(c=>{ if(objetivos.includes(String(c.uuid||c.folio).toUpperCase())) Object.assign(c, marca); });
   reconciliarSiHay();
   try{ renderCfdisStore(); }catch(_){}
+  try{ renderDescartados(); }catch(_){}
   const soloPantalla=objetivos.length-enStore.length;
   setStatus("satStatus",`✅ ${objetivos.length} CFDI descartados.${soloPantalla>0?` (${soloPantalla} venían del Excel y solo se ocultan en esta pantalla)`:""}`,"ok");
+}
+
+// Deshace un descarte. Es lo que faltaba: sin esto, un clic de más costaba editar Firestore a
+// mano, y nadie que no sea programador va a hacer eso con la contabilidad.
+async function restaurarCfdi(id){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede restaurar CFDIs."); return; }
+  const c = (_cfdisStore||[]).find(x=>String(x.id)===String(id));
+  if(!c) return;
+  const quien = c.ignoradoPor ? ` (lo descartó ${c.ignoradoPor})` : "";
+  if(!confirm(`¿Devolver este CFDI a la conciliación?${quien}\n\n${c.proveedor||"—"}\n${fmtDate(c.fecha)||"—"} · ${fmt(c.total)}\n\nVolverá a aparecer como pendiente si no está capturado.`)) return;
+  setStatus("satStatus", `Restaurando ${c.proveedor||"CFDI"}…`, "loading");
+  const limpio = sinMarcaDescarte(c);
+  const { id:_i, ...datos } = limpio;
+  const ok = await fbUpdateDoc(CFDIS_COL, id, datos);
+  if(!ok){ setStatus("satStatus","❌ No se pudo restaurar. No se cambió nada.","err"); return; }
+  const i = (_cfdisStore||[]).findIndex(x=>String(x.id)===String(id));
+  if(i>=0) _cfdisStore[i] = { id, ...datos };
+  (satCFDIs||[]).forEach(x=>{ if(String(x.uuid||x.folio).toUpperCase()===String(c.uuid||id).toUpperCase()) MARCA_DESCARTE.forEach(k=>delete x[k]); });
+  setStatus("satStatus", `✅ Restaurado. Vuelve a conciliar el periodo para verlo.`, "ok");
+  try{ renderDescartados(); }catch(_){}
+  reconciliarSiHay();
+}
+
+// Restaura de golpe todo lo que se descartó en el MISMO momento. Un descarte en bloque se hace
+// con un clic, así que deshacerlo también tiene que poder hacerse con uno.
+async function restaurarLoteDescarte(ts){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede restaurar CFDIs."); return; }
+  const lote = (_cfdisStore||[]).filter(c=>c && c.ignorado && String(c.ignoradoTs||"")===String(ts));
+  if(!lote.length) return;
+  const r = resumenDescarte(lote);
+  if(!confirm(`¿Devolver ${r.n} CFDI a la conciliación?\n\nTotal ${fmt(r.total)}${r.ini?`\nDel ${fmtDate(r.ini)} al ${fmtDate(r.fin)}`:""}\n\nSe descartaron todos juntos el ${fmtDate(String(ts).slice(0,10))}.`)) return;
+  setStatus("satStatus", `Restaurando ${lote.length} CFDI…`, "loading");
+  let fallos = 0;
+  for(let i=0;i<lote.length;i+=25){
+    const res = await Promise.all(lote.slice(i,i+25).map(c=>{
+      const { id, ...datos } = sinMarcaDescarte(c);
+      return fbUpdateDoc(CFDIS_COL, c.id, datos).then(ok=>{ if(ok){ MARCA_DESCARTE.forEach(k=>delete c[k]); } return ok; });
+    }));
+    fallos += res.filter(x=>!x).length;
+  }
+  setStatus("satStatus", fallos
+    ? `⚠️ Se restauraron ${lote.length-fallos} de ${lote.length}. ${fallos} fallaron y siguen descartados.`
+    : `✅ ${lote.length} CFDI restaurados. Vuelve a conciliar el periodo para verlos.`, fallos?"err":"ok");
+  try{ renderDescartados(); }catch(_){}
+  reconciliarSiHay();
 }
 
 // Al volver de capturar, la conciliación en pantalla quedaba vieja y lo recién capturado seguía

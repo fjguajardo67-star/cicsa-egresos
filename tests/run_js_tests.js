@@ -90,7 +90,7 @@ function extractConst(name) {
 // ninguna prueba lo notara.
 const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
-const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS"];
+const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE"];
 
 
 const FUNCS = [
@@ -101,6 +101,7 @@ const FUNCS = [
   "mapaUuidAFolio", "_folioIdentidad", "facturaEnteraYSusPartes",
   "basePresupuestoPeriodo",
   "vigenciaPrecio", "aplicarPrecioDeFactura", "puedeValidarse", "motivoNoValidable",
+  "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
   "pareceMedidaNoIngrediente", "_sepNombres",
@@ -853,6 +854,123 @@ t("no se puede validar recien creado: le falta todo para costear", () => {
 t("un nombre vacio no crea producto", () => {
   assert.equal(S.productoDesdeFaltante("   "), null);
   assert.equal(S.productoDesdeFaltante(null), null);
+});
+
+console.log("\n== descartar un CFDI: lo que se ve y lo que se puede deshacer ==");
+// Descartar saca un CFDI de la conciliacion, del balance y de todo. Era una puerta de una sola
+// direccion: sin pantalla que dijera que se descarto y sin forma de volver. Un mes entero de un
+// proveedor podia desaparecer con un clic — que es exactamente lo que paso con SUPERSERVICIO.
+
+const _c = (u,fe,prov,total,extra) => ({ id:u, uuid:u, fecha:fe, proveedor:prov, rfc:"SPA130228JW5",
+  total, tipo:"I", serie:"FDPAM", folioComp:"2420", ...(extra||{}) });
+const MARCA = { ignorado:true, ignoradoPor:"Francisco", ignoradoTs:"2026-08-29T22:56:15.184Z" };
+
+t("solo lista los descartados", () => {
+  const l = S.cfdisDescartados([
+    _c("a","2026-08-19","SUPERSERVICIO",1400.00, MARCA),
+    _c("b","2026-08-20","SUPERSERVICIO",4930.67),
+    _c("c","2026-08-25","SUPERSERVICIO",2000.04, MARCA),
+  ]);
+  assert.deepEqual(l.map(x=>x.id), ["c","a"], "y del mas reciente al mas viejo por fecha del CFDI");
+});
+t("ordena por cuando se descarto, no por la fecha del comprobante", () => {
+  const l = S.cfdisDescartados([
+    _c("viejo","2026-08-28",  "X",100, { ...MARCA, ignoradoTs:"2026-08-29T22:56:15.184Z" }),
+    _c("nuevo","2026-08-01",  "X",100, { ...MARCA, ignoradoTs:"2026-09-15T10:00:00.000Z" }),
+  ]);
+  assert.deepEqual(l.map(x=>x.id), ["nuevo","viejo"]);
+});
+t("no truena con lista vacia ni con basura", () => {
+  assert.deepEqual(S.cfdisDescartados([]), []);
+  assert.deepEqual(S.cfdisDescartados(null), []);
+  assert.deepEqual(S.cfdisDescartados([null, undefined]), []);
+});
+t("no muta la lista que recibe", () => {
+  const l = [_c("b","2026-08-20","X",1, MARCA), _c("a","2026-08-19","X",1, MARCA)];
+  S.cfdisDescartados(l);
+  assert.equal(l[0].id, "b", "ordenar la original le cambiaria el orden a quien la paso");
+});
+
+t("el resumen dice cuanto y entre que fechas, no solo cuantos", () => {
+  // "8 CFDI mas" no deja ver que ahi van $31,330.78. Ese fue el problema del dialogo.
+  const r = S.resumenDescarte([
+    _c("a","2026-08-01","X",5000.00), _c("b","2026-08-19","X",1400.00),
+    _c("c","2026-08-28","X",2000.04),
+  ]);
+  assert.equal(r.n, 3);
+  close(r.total, 8400.04, 0.01);
+  assert.equal(r.ini, "2026-08-01");
+  assert.equal(r.fin, "2026-08-28");
+});
+t("los centavos no se arrastran", () => {
+  const r = S.resumenDescarte([_c("a","2026-08-01","X",0.1), _c("b","2026-08-02","X",0.2)]);
+  close(r.total, 0.3, 0.001);
+});
+t("el resumen aguanta CFDI sin fecha o sin total", () => {
+  const r = S.resumenDescarte([{ total:100 }, { fecha:"2026-08-05" }, null]);
+  assert.equal(r.n, 2);
+  close(r.total, 100, 0.01);
+  assert.equal(r.ini, "2026-08-05");
+});
+t("resumen de nada es cero, no NaN", () => {
+  const r = S.resumenDescarte([]);
+  assert.equal(r.n, 0); assert.equal(r.total, 0); assert.equal(r.ini, ""); assert.equal(r.fin, "");
+});
+
+t("restaurar quita las TRES marcas y conserva el CFDI entero", () => {
+  // Es el caso real: el documento traia el comprobante completo mas la marca encima.
+  const c = _c("27be33e7","2026-08-19","SUPERSERVICIO PACIFICO AM",1400.00,
+               { ...MARCA, subtotal:1211.81, conceptos:[{desc:"87 Octanos"}] });
+  const r = S.sinMarcaDescarte(c);
+  assert.equal(r.ignorado, undefined);
+  assert.equal(r.ignoradoPor, undefined);
+  assert.equal(r.ignoradoTs, undefined);
+  assert.equal(r.uuid, "27be33e7");
+  close(r.total, 1400.00, 0.01);
+  assert.equal(r.subtotal, 1211.81, "el subtotal no se pierde");
+  assert.equal(r.conceptos.length, 1, "ni los conceptos");
+});
+t("devuelve una COPIA: no toca el original", () => {
+  const c = _c("a","2026-08-19","X",1, MARCA);
+  S.sinMarcaDescarte(c);
+  assert.equal(c.ignorado, true, "quien restaura decide cuando escribir");
+});
+t("restaurar algo que no estaba descartado no rompe nada", () => {
+  const r = S.sinMarcaDescarte(_c("a","2026-08-19","X",1));
+  assert.equal(r.ignorado, undefined);
+  assert.equal(r.uuid, "a");
+});
+t("no truena con null", () => {
+  assert.equal(S.sinMarcaDescarte(null), null);
+});
+
+t("el descarte FUSIONA, no reemplaza", () => {
+  // fbUpdateDoc mete lo que reciba en el campo `json`, donde vive el CFDI entero. Mandarle solo
+  // la marca borraba uuid, folio, RFC, proveedor, fecha, total y conceptos.
+  const i = script.indexOf("async function descartarCfdi(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  assert.ok(!/fbUpdateDoc\(CFDIS_COL,\s*c\.id,\s*marca\)/.test(vivo),
+    "pasarle solo la marca destruye el comprobante");
+  assert.ok(/\.\.\.datos,\s*\.\.\.marca/.test(vivo), "tiene que mandar el documento completo mas la marca");
+});
+t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
+  // Guardia sobre el texto: "8 CFDI mas" no deja ver que ahi van $31,330.78 en combustible y
+  // anticipos. Y tiene que decir que se puede deshacer, porque ahora se puede.
+  const i = script.indexOf("async function descartarCfdi(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
+  assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
+  assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
 });
 
 console.log("\n== de donde sale un precio, y hasta cuando vale ==");
