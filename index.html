@@ -2033,7 +2033,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-31-a";
+const APP_BUILD = "2026-08-31-b";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -7615,53 +7615,86 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
   if(_fueraDeCorte) filtro.omitidos.CORTE = _fueraDeCorte;
   const utiles = filtro.utiles;
   const faltantes=[],diferencias=[],conciliadas=[],duplicados=[];
-  utiles.forEach(cfdi=>{
-    // El gasto capturado desde este CFDI trae su UUID: es la coincidencia más confiable y no
-    // depende de que el folio o el monto se hayan tecleado igual.
-    const _u=cfdi.uuid||cfdi.folio;
-    const matchUuid=_u?gastosCICSA.find(g=>g.cfdiUuid&&g.cfdiUuid===_u):null;
-    // El folio que teclea la persona es el de la FACTURA (serie+folio), no el UUID fiscal.
-    // Antes se comparaba contra cfdi.folio, que casi siempre ES el UUID, y con substrings de 8
-    // caracteres: un folio corto como "245" son dígitos hexadecimales, así que aparecía dentro de
-    // casi cualquier UUID y un MISMO gasto se emparejaba con muchos CFDI distintos. En pantalla
-    // salían cuatro proveedores con importes muy distintos y el mismo "Monto CICSA".
-    // Ahora se usa el mismo criterio que la detección de duplicados: folio canónico y, para
-    // folios de 4+ caracteres, coincidencia por sufijo ("PBAL31598" ≡ "31598").
-    let _folioCfdi = _dupFolioCanon((cfdi.serie||"") + (cfdi.folioComp||""));
-    if(!_folioCfdi && !/^[0-9A-F]{8}-[0-9A-F]{4}-/i.test(String(cfdi.folio||""))) _folioCfdi = _dupFolioCanon(cfdi.folio);
-    const matchFolio = _folioCfdi ? gastosCICSA.find(g=>{
+
+  // El folio de cada comprobante se calcula una sola vez.
+  // El folio que teclea la persona es el de la FACTURA (serie+folio), no el UUID fiscal.
+  // Antes se comparaba contra cfdi.folio, que casi siempre ES el UUID, y con substrings de 8
+  // caracteres: un folio corto como "245" son dígitos hexadecimales, así que aparecía dentro de
+  // casi cualquier UUID y un MISMO gasto se emparejaba con muchos CFDI distintos.
+  // Ahora se usa el mismo criterio que la detección de duplicados: folio canónico y, para
+  // folios de 4+ caracteres, coincidencia por sufijo ("PBAL31598" ≡ "31598").
+  const _pend = utiles.map(cfdi=>{
+    let f = _dupFolioCanon((cfdi.serie||"") + (cfdi.folioComp||""));
+    if(!f && !/^[0-9A-F]{8}-[0-9A-F]{4}-/i.test(String(cfdi.folio||""))) f = _dupFolioCanon(cfdi.folio);
+    return { cfdi, u: cfdi.uuid||cfdi.folio, folio: f, match:null, via:"", mismos:[] };
+  });
+
+  // ── Un gasto le pertenece a UN comprobante ───────────────────────────────
+  // Antes los tres criterios se probaban por CFDI, en el orden en que venían los documentos, y
+  // nada marcaba un gasto como ya usado. Consecuencias reales:
+  //   · Dos facturas del mismo importe emitidas con un minuto de diferencia se daban las DOS por
+  //     capturadas contra el mismo renglón, y la pantalla reportaba cero pendientes. El dinero
+  //     de la segunda desaparecía sin un solo aviso.
+  //   · Un emparejamiento débil (por monto) podía quedarse con el gasto que le tocaba a uno
+  //     fuerte (por UUID), solo porque su CFDI se procesó antes.
+  // Se recorre por CRITERIO, del más confiable al menos, y cada gasto se aparta al usarse.
+  const _usados = new Set();
+  const _libre = g => g && !_usados.has(g.id);
+  const _criterios = [
+    // 1. El gasto capturado desde este CFDI trae su UUID: no depende de cómo se tecleó nada.
+    x => x.u ? gastosCICSA.find(g=>_libre(g) && g.cfdiUuid && g.cfdiUuid===x.u) : null,
+    // 2. El folio de la factura, con equivalencia por sufijo.
+    x => x.folio ? gastosCICSA.find(g=>{
+      if(!_libre(g)) return false;
       const f = _dupFolioCanon(g.factura);
-      return f && _dupFoliosEquivalentes(f, _folioCfdi);
-    }) : null;
-    const matchMonto=gastosCICSA.find(g=>Math.abs(new Date(g.fecha)-new Date(cfdi.fecha))<=3*86400000&&Math.abs(g.importe-cfdi.total)<1);
-    const match=matchUuid||matchFolio||matchMonto;
-    if(!match) faltantes.push(cfdi);
-    else {
+      return !!f && _dupFoliosEquivalentes(f, x.folio);
+    }) : null,
+    // 3. Importe y fecha parecidos — Y EL MISMO PROVEEDOR. Sin esa última condición, una factura
+    //    de gasolina se daba por capturada contra un gasto de pollo de otro proveedor porque
+    //    coincidían en $1 y en tres días. Con cientos de movimientos al mes, que dos importes
+    //    choquen no es raro: es lo esperable.
+    x => gastosCICSA.find(g=> _libre(g)
+      && Math.abs(new Date(g.fecha)-new Date(x.cfdi.fecha))<=3*86400000
+      && Math.abs(g.importe-x.cfdi.total)<1
+      && _dupProvParecidos(g.proveedor, x.cfdi.proveedor)),
+  ];
+  const _VIAS = ["uuid","folio","monto"];
+  _criterios.forEach((buscar, i)=>{
+    _pend.forEach(x=>{
+      if(x.match) return;
+      const m = buscar(x);
+      if(!m) return;
+      x.match = m; x.via = _VIAS[i];
       // Mismo caso que en Auditoría: una factura repartida por categoría son varios renglones con
       // el mismo folio. Comparando solo el renglón que casó primero, una factura bien capturada
-      // salía como diferencia por lo que valen los demás pedazos.
-      // Se juntan por UUID y por folio EQUIVALENTE ("PBAL31598" ≡ "31598"), no por texto
-      // idéntico: el mismo comprobante se teclea de varias formas y con igualdad exacta los
-      // demás pedazos no aparecían.
-      const _mismos = gastosCICSA.filter(g=>{
+      // salía como diferencia por lo que valen los demás pedazos. Todos esos renglones son de
+      // ESTE comprobante, así que todos se apartan.
+      x.mismos = gastosCICSA.filter(g=>{
         if(!g) return false;
-        if(g.id === match.id) return true;
-        if(_u && g.cfdiUuid && g.cfdiUuid === _u) return true;
-        if(!_folioCfdi) return false;
+        if(g.id === m.id) return true;
+        if(x.u && g.cfdiUuid && g.cfdiUuid === x.u) return true;
+        if(!x.folio) return false;
         const gf = _dupFolioCanon(g.factura);
-        return !!gf && _dupFoliosEquivalentes(gf, _folioCfdi);
+        return !!gf && _dupFoliosEquivalentes(gf, x.folio);
       });
-      const _cap = Math.round(_mismos.reduce((a,g)=>a+(parseFloat(g.importe)||0),0)*100)/100;
-      if(Math.abs(_cap-cfdi.total)>1){
-        const _d = {cfdi,gastoCICSA:match,capturado:_cap,gastos:_mismos,diferencia:Math.round((cfdi.total-_cap)*100)/100};
-        // Antes de mostrarlo como diferencia de monto hay que saber si lo es. Ver "Monto CICSA"
-        // al doble sin el folio a la vista manda a revisar el comprobante, que está bien.
-        const _c = clasificarDiferenciaSAT(_d);
-        _d.clase = _c;
-        (_c.tipo === "duplicado" ? duplicados : diferencias).push(_d);
-      }
-      else conciliadas.push(cfdi);
+      x.mismos.forEach(g=>_usados.add(g.id));
+    });
+  });
+
+  _pend.forEach(x=>{
+    if(!x.match){ faltantes.push(x.cfdi); return; }
+    const _cap = Math.round(x.mismos.reduce((a,g)=>a+(parseFloat(g.importe)||0),0)*100)/100;
+    if(Math.abs(_cap-x.cfdi.total)>1){
+      const _d = {cfdi:x.cfdi,gastoCICSA:x.match,capturado:_cap,gastos:x.mismos,via:x.via,diferencia:Math.round((x.cfdi.total-_cap)*100)/100};
+      // Antes de mostrarlo como diferencia de monto hay que saber si lo es. Ver "Monto CICSA"
+      // al doble sin el folio a la vista manda a revisar el comprobante, que está bien.
+      const _c = clasificarDiferenciaSAT(_d);
+      _d.clase = _c;
+      (_c.tipo === "duplicado" ? duplicados : diferencias).push(_d);
     }
+    // La vía queda pegada al CFDI para poder enseñarla: una conciliación por monto es una
+    // suposición, y sin decirlo se ve igual de firme que una por UUID.
+    else { x.cfdi._via = x.via; x.cfdi._gastoId = x.match.id; conciliadas.push(x.cfdi); }
   });
   return{faltantes,diferencias,duplicados,conciliadas,cfdisUtiles:utiles,omitidos:filtro.omitidos,totalSAT:utiles.reduce((s,c)=>s+c.total,0),totalCICSA:gastosCICSA.reduce((s,g)=>s+g.importe,0)};
 }
