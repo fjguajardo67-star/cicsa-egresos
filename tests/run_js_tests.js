@@ -337,14 +337,17 @@ t("findDuplicate: mismo folio+proveedor; mismo prov+importe+fecha; ±3 días", (
   assert.equal(S.findDuplicate("OTRO", 500, "2026-07-01", ""), null);
 });
 t("conciliarSAT: clasifica conciliada / faltante / diferencia", () => {
+  // Los CFDI llevan proveedor: emparejar por monto ahora lo EXIGE. Antes esta prueba pasaba con
+  // comprobantes sin proveedor, que es justo lo que permitia casar una factura de gasolina
+  // contra un gasto de pollo.
   S.state.weeks = [{ id: "1", gastos: [
     { id: "a", proveedor: "X", factura: "ABCD1234-XXXX", importe: 100, fecha: "2026-07-01" },
     { id: "b", proveedor: "Y", factura: "", importe: 200, fecha: "2026-07-05" },
   ]}];
   const r = S.conciliarSAT([
-    { folio: "ABCD1234-YYYY", total: 100, fecha: "2026-07-01" },   // por folio
-    { folio: "ZZZZ", total: 200.5, fecha: "2026-07-06" },          // por monto/fecha
-    { folio: "QQQQ", total: 9999, fecha: "2026-07-01" },           // faltante
+    { folio: "ABCD1234-YYYY", proveedor: "X", total: 100, fecha: "2026-07-01" },   // por folio
+    { folio: "ZZZZ", proveedor: "Y", total: 200.5, fecha: "2026-07-06" },          // por monto/fecha
+    { folio: "QQQQ", proveedor: "Z", total: 9999, fecha: "2026-07-01" },           // faltante
   ], "", "");
   assert.equal(r.conciliadas.length, 2);
   assert.equal(r.faltantes.length, 1);
@@ -854,6 +857,112 @@ t("no se puede validar recien creado: le falta todo para costear", () => {
 t("un nombre vacio no crea producto", () => {
   assert.equal(S.productoDesdeFaltante("   "), null);
   assert.equal(S.productoDesdeFaltante(null), null);
+});
+
+console.log("\n== un gasto le pertenece a UN comprobante ==");
+// Caso SUPERSERVICIO PACIFICO AM, agosto 2026. conciliarSAT emparejaba por monto y fecha SIN
+// mirar el proveedor, y nada apartaba un gasto ya usado. Dos facturas del mismo importe se daban
+// las DOS por capturadas contra el mismo renglon y la pantalla reportaba cero pendientes.
+
+const _sat = (gastos, cfdis) => {
+  S.state.weeks = [{ id:"w", gastos }];
+  return S.conciliarSAT(cfdis, "", "", "");
+};
+const _cf = (folio, prov, fecha, total, extra) => ({
+  folio, uuid:folio, serie:"", folioComp:"", proveedor:prov, rfc:"SPA130228JW5",
+  fecha, total, tipo:"I", ...(extra||{}) });
+
+t("dos facturas del mismo importe y UN gasto: una concilia, la otra FALTA", () => {
+  // FDPAM2477 y FDPAM2478: $4,400.02 cada una, 68 segundos de diferencia, UUID distintos.
+  const r = _sat(
+    [{ id:"g1", proveedor:"SUPERSERVICIO PACIFICO", factura:"", importe:4400.02, fecha:"2026-08-31" }],
+    [_cf("u-2477","SUPERSERVICIO PACIFICO AM","2026-08-31",4400.02),
+     _cf("u-2478","SUPERSERVICIO PACIFICO AM","2026-08-31",4400.02)]);
+  assert.equal(r.conciliadas.length, 1, "solo una puede reclamar el gasto");
+  assert.equal(r.faltantes.length, 1, "la otra tiene que salir como pendiente");
+  close(r.faltantes[0].total, 4400.02, 0.01);
+});
+t("TRES facturas del mismo importe y UN gasto: dos faltan", () => {
+  // FDPT4457, 4474 y 4516: $2,000.04 cada una, a 1, 2 y 3 dias entre si — todas dentro de la
+  // ventana de +-3 dias. Con un solo gasto capturado las tres se daban por conciliadas.
+  const r = _sat(
+    [{ id:"g1", proveedor:"SUPERSERVICIO PACIFICO", factura:"", importe:2000.04, fecha:"2026-08-25" }],
+    [_cf("u-4457","SUPERSERVICIO PACIFICO AM","2026-08-25",2000.04),
+     _cf("u-4474","SUPERSERVICIO PACIFICO AM","2026-08-26",2000.04),
+     _cf("u-4516","SUPERSERVICIO PACIFICO AM","2026-08-28",2000.04)]);
+  assert.equal(r.conciliadas.length, 1);
+  assert.equal(r.faltantes.length, 2);
+  close(r.faltantes.reduce((a,c)=>a+c.total,0), 4000.08, 0.01, "$4,000.08 que antes se perdian");
+});
+t("mismo importe y fecha pero OTRO proveedor: no concilia", () => {
+  // FDPAM2420 ($1,400.00 de gasolina) contra un gasto de pollo de $1,400.00 a un dia.
+  const r = _sat(
+    [{ id:"g1", proveedor:"POLLO BAL", factura:"PBAL-9001", importe:1400.00, fecha:"2026-08-18" }],
+    [_cf("u-2420","SUPERSERVICIO PACIFICO AM","2026-08-19",1400.00)]);
+  assert.equal(r.faltantes.length, 1, "la gasolina no la respalda un gasto de pollo");
+  assert.equal(r.conciliadas.length, 0);
+});
+t("el mismo proveedor escrito distinto SI concilia", () => {
+  // La guardia no puede ser tan estricta que rompa lo que funciona: el nombre se teclea de
+  // muchas formas y _dupProvParecidos ya tolera eso.
+  const r = _sat(
+    [{ id:"g1", proveedor:"SUPERSERVICIO PACIFICO", factura:"", importe:1400.00, fecha:"2026-08-19" }],
+    [_cf("u-2420","SUPERSERVICIO PACIFICO AM","2026-08-19",1400.00)]);
+  assert.equal(r.conciliadas.length, 1);
+});
+t("un CFDI sin proveedor no concilia por monto", () => {
+  // Si no se puede verificar de quien es, suponerlo es lo que costo $16,330.78.
+  const r = _sat(
+    [{ id:"g1", proveedor:"POLLO BAL", factura:"", importe:100, fecha:"2026-07-01" }],
+    [_cf("u-x", "", "2026-07-01", 100)]);
+  assert.equal(r.faltantes.length, 1);
+});
+
+t("gana el criterio mas fuerte, no el que llegue primero", () => {
+  // El CFDI del monto se procesa ANTES, pero el gasto trae el cfdiUuid del otro: ese vinculo es
+  // explicito y no puede perderlo por orden de documento.
+  const r = _sat(
+    [{ id:"g1", proveedor:"SUPERSERVICIO PACIFICO", factura:"", importe:1000, fecha:"2026-08-10", cfdiUuid:"u-B" }],
+    [_cf("u-A","SUPERSERVICIO PACIFICO AM","2026-08-10",1000),
+     _cf("u-B","SUPERSERVICIO PACIFICO AM","2026-08-10",1000)]);
+  assert.equal(r.conciliadas.length, 1);
+  assert.equal(r.conciliadas[0].uuid, "u-B", "el del UUID se queda con el gasto");
+  assert.equal(r.faltantes[0].uuid, "u-A");
+});
+t("y el folio le gana al monto", () => {
+  const r = _sat(
+    [{ id:"g1", proveedor:"SUPERSERVICIO PACIFICO", factura:"FDPAM2425", importe:4930.67, fecha:"2026-08-20" }],
+    [_cf("u-A","SUPERSERVICIO PACIFICO AM","2026-08-20",4930.67),
+     _cf("u-B","SUPERSERVICIO PACIFICO AM","2026-08-20",4930.67,{serie:"FDPAM",folioComp:"2425"})]);
+  assert.equal(r.conciliadas.length, 1);
+  assert.equal(r.conciliadas[0].uuid, "u-B");
+});
+
+t("una factura repartida en tres categorias sigue conciliando por la SUMA", () => {
+  // Aqui SI es correcto que varios gastos sean del mismo comprobante. Lo que se prohibio es lo
+  // contrario: que varios comprobantes reclamen el mismo gasto.
+  const r = _sat([
+    { id:"g1", proveedor:"ONUS", factura:"FCPF4010508626", importe:29038.36, fecha:"2026-07-06" },
+    { id:"g2", proveedor:"ONUS", factura:"FCPF4010508626", importe:4996.00,  fecha:"2026-07-06" },
+    { id:"g3", proveedor:"ONUS", factura:"FCPF4010508626", importe:100.00,   fecha:"2026-07-06" },
+  ], [_cf("u-onus","ONUS COMERCIAL","2026-07-06",34134.36,{serie:"FCPF",folioComp:"4010508626"})]);
+  assert.equal(r.conciliadas.length, 1, "los tres pedazos suman el total del comprobante");
+  assert.equal(r.faltantes.length, 0);
+});
+t("la conciliacion dice por que via caso", () => {
+  // Una conciliacion por monto es una suposicion; sin decirlo se ve igual de firme que una por
+  // UUID. Ese dato es tambien el diagnostico de meses anteriores.
+  const r = _sat(
+    [{ id:"g1", proveedor:"SUPERSERVICIO PACIFICO", factura:"", importe:1400.00, fecha:"2026-08-19" }],
+    [_cf("u-2420","SUPERSERVICIO PACIFICO AM","2026-08-19",1400.00)]);
+  assert.equal(r.conciliadas[0]._via, "monto");
+  assert.equal(r.conciliadas[0]._gastoId, "g1");
+});
+t("no truena sin gastos ni sin CFDI", () => {
+  assert.equal(_sat([], [_cf("u","X","2026-08-01",100)]).faltantes.length, 1);
+  const v = _sat([{ id:"g1", proveedor:"X", factura:"", importe:1, fecha:"2026-08-01" }], []);
+  assert.equal(v.faltantes.length, 0);
+  assert.equal(v.conciliadas.length, 0);
 });
 
 console.log("\n== descartar un CFDI: lo que se ve y lo que se puede deshacer ==");
