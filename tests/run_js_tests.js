@@ -101,7 +101,7 @@ const FUNCS = [
   "mapaUuidAFolio", "_folioIdentidad", "facturaEnteraYSusPartes",
   "basePresupuestoPeriodo",
   "vigenciaPrecio", "aplicarPrecioDeFactura", "puedeValidarse", "motivoNoValidable",
-  "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte",
+  "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte", "cfdiIncompleto",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
   "pareceMedidaNoIngrediente", "_sepNombres",
@@ -1080,6 +1080,96 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== el CFDI al que el descarte viejo le borro los datos ==");
+// El descarte anterior a v2026-08-31-a reemplazaba el documento entero por la marca. Lo que
+// quedo en la nube son comprobantes de TRES campos: ignorado, ignoradoPor, ignoradoTs. Sin
+// fecha, sin importe, sin RFC, sin UUID en el campo. Se ven en pantalla y hay que tratarlos
+// como lo que son: sin datos, no como un CFDI de importe cero.
+const _MUTILADO = { id:"27be33e7-fe08-494f-b936-be8985cb1b09", ignorado:true, ignoradoPor:"Francisco", ignoradoTs:"2026-09-01T10:00:00.000Z" };
+
+t("un CFDI sin fecha ni importe esta incompleto", () => {
+  assert.equal(S.cfdiIncompleto(_MUTILADO), true);
+});
+t("un CFDI entero no lo esta", () => {
+  assert.equal(S.cfdiIncompleto(_c("a","2026-08-19","SUPERSERVICIO PACIFICO AM",1400.00)), false);
+});
+t("un comprobante de importe cero SI tiene datos", () => {
+  // Cero es un importe; ausente no lo es. Confundirlos borraria comprobantes legitimos.
+  assert.equal(S.cfdiIncompleto(_c("a","2026-08-19","X",0)), false);
+});
+t("sin importe no hay nada que conciliar", () => {
+  assert.equal(S.cfdiIncompleto({ fecha:"2026-08-19", proveedor:"X" }), true);
+});
+t("sin fecha pero CON importe sigue contando", () => {
+  // Se mira el importe, no la fecha. Un CFDI sin fecha todavia se empareja por UUID o por folio
+  // y sigue siendo dinero real: sacarlo de la pantalla lo desapareceria.
+  assert.equal(S.cfdiIncompleto({ total:1400, proveedor:"X" }), false);
+});
+t("null esta incompleto y no truena", () => {
+  assert.equal(S.cfdiIncompleto(null), true);
+});
+
+t("un CFDI mutilado NUNCA entra a la conciliacion", () => {
+  // Si entrara, saldria como pendiente sin nada que ver y ademas envenenaria el total: sumar
+  // undefined da NaN y el balance entero se vuelve NaN.
+  const sinMarca = { id:_MUTILADO.id };
+  const r = S.filtrarCfdisConciliables([sinMarca, _c("b","2026-08-19","X",1400)], "");
+  assert.equal(r.utiles.length, 1, "solo el que tiene datos");
+  assert.equal(r.utiles[0].uuid, "b");
+  assert.equal(r.omitidos.SIN_DATOS, 1);
+});
+t("el total del SAT no se vuelve NaN por un mutilado", () => {
+  const r = S.filtrarCfdisConciliables([{ id:"x" }, _c("b","2026-08-19","X",1400)], "");
+  const total = r.utiles.reduce((s,c)=>s+c.total, 0);
+  assert.ok(Number.isFinite(total), "un solo comprobante sin importe borraba el balance entero");
+  close(total, 1400, 0.01);
+});
+t("descartado gana a sin datos: es lo que explica por que esta asi", () => {
+  const r = S.filtrarCfdisConciliables([_MUTILADO], "");
+  assert.equal(r.omitidos.DESCARTADO, 1);
+  assert.equal(r.omitidos.SIN_DATOS, undefined);
+});
+
+t("el resumen cuenta cuantos perdieron los datos", () => {
+  const r = S.resumenDescarte([_MUTILADO, _c("b","2026-08-19","X",1400)]);
+  assert.equal(r.n, 2);
+  assert.equal(r.sinDatos, 1, "decir '2 - $1,400' sin mas hace leer 1,400 como el total de los dos");
+  close(r.total, 1400, 0.01);
+});
+
+t("la pantalla de descartados no puede escribir $NaN", () => {
+  const i = script.indexOf("function renderDescartados(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  // El importe se puede seguir pintando: lo que no puede es pintarse SIN preguntar antes si el
+  // comprobante lo tiene. fmt(undefined) imprime "$NaN" en una pantalla de contabilidad.
+  const guarda = vivo.indexOf("cfdiIncompleto(");
+  const pinta  = vivo.indexOf("fmt(c.total)");
+  assert.ok(guarda > -1, "hay que distinguir el que perdio los datos");
+  assert.ok(pinta === -1 || guarda < pinta, "se pregunta ANTES de imprimir el importe");
+  assert.ok(/c\.id/.test(vivo), "y ensenar el UUID, que es lo unico que le queda");
+});
+t("y dice como recuperarlos", () => {
+  const i = html.indexOf('id="descAvisoSinDatos"');
+  assert.ok(i > -1, "sin aviso, el contador no sabe que hacer con seis renglones vacios");
+  const b = html.slice(i, i + 900);
+  assert.ok(/XML/.test(b), "volver a subir el XML es lo que devuelve los datos");
+});
+t("los omitidos por falta de datos se nombran", () => {
+  const i = script.indexOf("function pintarCfdisOmitidos(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(b.includes('"SIN_DATOS"'), "un CFDI omitido sin decir por que es un CFDI perdido");
 });
 
 console.log("\n== de donde sale un precio, y hasta cuando vale ==");

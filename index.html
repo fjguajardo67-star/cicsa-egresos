@@ -1381,6 +1381,13 @@ body.snav-min .side-theme span { display:none; }
           balance, ni en ningún lado</strong> — y volver a subir el XML no lo revive. Si alguno se
           descartó por error, devuélvelo aquí.
         </div>
+        <div id="descAvisoSinDatos" style="display:none;background:#FFFBF2;border:1px solid var(--do);border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:12px;line-height:1.5">
+          <strong>⚠ Algunos perdieron sus datos.</strong> Se descartaron con una versión anterior
+          que, en vez de marcarlos, reemplazaba el comprobante por la marca. De esos solo queda el
+          UUID. <strong>Vuelve a subir los XML de esos meses</strong> y recuperan fecha, proveedor,
+          RFC e importe; el descarte se respeta, no reviven solos. Mientras tanto quedan fuera de
+          la conciliación, para que un importe ausente no descuadre el total del periodo.
+        </div>
         <div id="cfdisDescartadosBody" style="max-height:260px;overflow:auto"></div>
       </div>
       <div style="border-top:1.5px solid var(--border);margin-top:12px;padding-top:12px">
@@ -2033,7 +2040,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-08-31-b";
+const APP_BUILD = "2026-09-03-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -6631,7 +6638,10 @@ function renderDescartados(){
   const esAdmin = (typeof currentRole!=="undefined" && currentRole==="admin");
   const r = resumenDescarte(lista);
   const cnt = document.getElementById("descCount");
-  if(cnt) cnt.textContent = `${r.n} · ${fmt(r.total)}`;
+  // Sin la segunda parte, "6 · $232,000.00" se lee como el total de los seis.
+  if(cnt) cnt.textContent = `${r.n} · ${fmt(r.total)}` + (r.sinDatos ? ` · ${r.sinDatos} sin datos` : "");
+  const avi = document.getElementById("descAvisoSinDatos");
+  if(avi) avi.style.display = r.sinDatos ? "block" : "none";
   card.style.display = "block";
   // Agrupados por momento del descarte: es lo que revela un descarte en bloque de un solo clic.
   const lotes = {};
@@ -6643,17 +6653,31 @@ function renderDescartados(){
     return `<div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
       <div style="background:#FFF6F5;padding:7px 10px;font-size:11.5px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <span><strong>${l.length}</strong> descartado(s) el <strong>${esc(cuando)}</strong>${quien?` por ${esc(quien)}`:""}</span>
-        <span style="font-family:'JetBrains Mono',monospace;color:var(--red)">${fmt(rl.total)}</span>
+        <span style="font-family:'JetBrains Mono',monospace;color:var(--red)">${fmt(rl.total)}${rl.sinDatos?` <span style="color:var(--txt2)">+${rl.sinDatos} sin datos</span>`:""}</span>
         ${esAdmin && l.length>1 ? `<button class="btn btn-light" style="margin-left:auto;padding:3px 10px;font-size:11px" onclick="restaurarLoteDescarte('${escAttrJs(ts)}')">↩︎ Devolver los ${l.length}</button>` : ""}
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:12px">
-        <tbody>${l.map(c=>`<tr style="border-top:1px solid var(--border)">
+        <tbody>${l.map(c=>{
+          // Al que perdió los datos no se le puede pintar fecha, proveedor ni importe: no los
+          // tiene. fmt(undefined) escribía "$NaN" en una pantalla de contabilidad. Lo único que
+          // le queda es el UUID —que es la llave del documento— y con eso se recupera: volver a
+          // subir el XML de ese mes reescribe todos los campos y conserva el descarte.
+          const roto = cfdiIncompleto(c);
+          if(roto) return `<tr style="border-top:1px solid var(--border);background:#FFFBF2">
+            <td colspan="4" style="padding:5px 8px;font-size:11.5px;color:var(--txt2)">
+              <span style="color:var(--do);font-weight:600">⚠ sin datos</span> ·
+              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px">${esc(c.id||"—")}</span>
+              <span style="display:block;margin-top:2px">Se perdieron al descartarlo con una versión anterior. Vuelve a subir el XML de ese mes y reaparecen; el descarte se respeta.</span>
+            </td>
+            ${esAdmin?`<td style="padding:3px 8px;text-align:right"><button class="btn btn-light" style="padding:2px 9px;font-size:11px;white-space:nowrap" onclick="restaurarCfdi('${escAttrJs(c.id)}')">↩︎ Devolver</button></td>`:""}
+          </tr>`;
+          return `<tr style="border-top:1px solid var(--border)">
           <td style="padding:3px 8px;white-space:nowrap">${fmtDate(c.fecha)||"—"}</td>
           <td style="padding:3px 8px">${esc(c.proveedor||"—")}</td>
           <td style="padding:3px 8px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--txt2)">${esc(c.rfc||"—")}</td>
           <td style="padding:3px 8px;text-align:right;font-family:'JetBrains Mono',monospace">${fmt(c.total)}</td>
           ${esAdmin?`<td style="padding:3px 8px;text-align:right"><button class="btn btn-light" style="padding:2px 9px;font-size:11px;white-space:nowrap" onclick="restaurarCfdi('${escAttrJs(c.id)}')">↩︎ Devolver</button></td>`:""}
-        </tr>`).join("")}</tbody>
+        </tr>`;}).join("")}</tbody>
       </table>
     </div>`;
   }).join("");
@@ -7411,6 +7435,10 @@ function filtrarCfdisConciliables(cfdis, rfcEmpresa){
   const marcar=(k)=>{ omitidos[k]=(omitidos[k]||0)+1; };
   (cfdis||[]).forEach(c=>{
     if(c.ignorado){ marcar("DESCARTADO"); return; }   // el usuario ya dijo que no es un gasto
+    // Un comprobante sin importe no se puede conciliar con nada, y dejarlo pasar no era solo
+    // inútil: totalSAT los suma, y sumar un importe ausente convierte en NaN el total del periodo
+    // entero. Un documento roto borraba el balance completo de la pantalla.
+    if(cfdiIncompleto(c)){ marcar("SIN_DATOS"); return; }
     const t=(c.tipo||"").toUpperCase().slice(0,1);
     // El tipo se revisa ANTES que "propio": los recibos de nómina los emite SIEMPRE la propia
     // empresa, así que al revisar primero el emisor 58 recibos de nómina se reportaban como
@@ -7471,6 +7499,20 @@ function cfdisDescartados(cfdis){
                   String(b.fecha||"").localeCompare(String(a.fecha||"")));
 }
 
+// Un comprobante SIN IMPORTE. Es la forma que dejó el descarte anterior a v2026-08-31-a:
+// reemplazaba el documento entero por la marca, así que en la nube quedaron comprobantes de tres
+// campos (ignorado, ignoradoPor, ignoradoTs) y nada más.
+// Se mira el importe y no la fecha a propósito. Sin fecha un CFDI todavía se puede sumar y se
+// puede emparejar por UUID o por folio; el criterio de aquí siempre fue "mejor de más que de
+// menos", y exigir fecha sacaría de la pantalla comprobantes que sí son dinero real. Sin importe,
+// en cambio, no hay nada que conciliar Y hay un daño concreto: totalSAT los suma, y sumar un
+// importe ausente convierte en NaN el total del periodo completo.
+// Ojo con la diferencia: importe CERO es un dato; importe AUSENTE no lo es.
+function cfdiIncompleto(c){
+  if(!c) return true;
+  return !Number.isFinite(parseFloat(c.total));
+}
+
 // Cuánto pesa lo que se va a descartar (o lo que ya se descartó). Decir "8 CFDI más" no informa;
 // decir "$31,330.78 entre el 01 y el 28 de agosto" sí.
 function resumenDescarte(lista){
@@ -7479,6 +7521,9 @@ function resumenDescarte(lista){
   return {
     n: l.length,
     total: Math.round(l.reduce((s,c)=>s+(parseFloat(c.total)||0),0)*100)/100,
+    // Los que perdieron los datos se cuentan aparte: si no, "6 · $232,000.00" se lee como el
+    // total de los seis, cuando cinco de ellos no se sabe cuánto valían.
+    sinDatos: l.filter(cfdiIncompleto).length,
     ini: fechas[0] || "",
     fin: fechas[fechas.length-1] || "",
   };
@@ -7551,7 +7596,16 @@ async function restaurarCfdi(id){
   const c = (_cfdisStore||[]).find(x=>String(x.id)===String(id));
   if(!c) return;
   const quien = c.ignoradoPor ? ` (lo descartó ${c.ignoradoPor})` : "";
-  if(!confirm(`¿Devolver este CFDI a la conciliación?${quien}\n\n${c.proveedor||"—"}\n${fmtDate(c.fecha)||"—"} · ${fmt(c.total)}\n\nVolverá a aparecer como pendiente si no está capturado.`)) return;
+  // Devolver uno que perdió los datos no se los devuelve: sigue sin fecha ni importe, así que
+  // queda fuera de la conciliación igual. Prometerle que "vuelve a aparecer como pendiente"
+  // sería mentirle.
+  if(cfdiIncompleto(c)){
+    if(!confirm(`Este CFDI perdió sus datos al descartarse${quien.replace(" (lo descartó"," (fue")}.\n\n`+
+                `${c.id||""}\n\nDevolverlo NO recupera fecha, proveedor ni importe, así que seguirá `+
+                `fuera de la conciliación.\n\nLo que sí los recupera es volver a subir el XML de ese mes.\n\n`+
+                `¿Quitarle el descarte de todas formas?`)) return;
+  }
+  else if(!confirm(`¿Devolver este CFDI a la conciliación?${quien}\n\n${c.proveedor||"—"}\n${fmtDate(c.fecha)||"—"} · ${fmt(c.total)}\n\nVolverá a aparecer como pendiente si no está capturado.`)) return;
   setStatus("satStatus", `Restaurando ${c.proveedor||"CFDI"}…`, "loading");
   const limpio = sinMarcaDescarte(c);
   const { id:_i, ...datos } = limpio;
@@ -7711,6 +7765,7 @@ function pintarCfdisOmitidos(om){
   const etiquetas=[["PROPIO","factura que emitió tu empresa (es un ingreso)","facturas que emitió tu empresa (son ingresos)"],
                    ["CORTE","CFDI del periodo ya cerrado","CFDI del periodo ya cerrado"],
                    ["DESCARTADO","CFDI que descartaste a mano","CFDI que descartaste a mano"],
+                   ["SIN_DATOS","CFDI sin importe (hay que volver a subir su XML)","CFDI sin importe (hay que volver a subir sus XML)"],
                    ["P","complemento de pago","complementos de pago"],
                    ["E","nota de crédito","notas de crédito"],
                    ["N","recibo de nómina","recibos de nómina"],
