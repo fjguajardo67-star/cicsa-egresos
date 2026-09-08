@@ -101,7 +101,8 @@ const FUNCS = [
   "mapaUuidAFolio", "_folioIdentidad", "facturaEnteraYSusPartes",
   "basePresupuestoPeriodo",
   "vigenciaPrecio", "aplicarPrecioDeFactura", "puedeValidarse", "motivoNoValidable",
-  "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte",
+  "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte", "cfdiIncompleto",
+  "_b64ABytes", "_liberarAdjunto", "_gmailHuella", "_encolarMiniatura",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
   "pareceMedidaNoIngrediente", "_sepNombres",
@@ -153,6 +154,10 @@ const FUNCS = [
 const sandbox = {
   state: { weeks: [], activeWeek: null, budget: {} }, console,
   _gmailRevisados: null,
+  // _b64ABytes decodifica base64: en el navegador atob es global, en un contexto de vm no.
+  atob, Uint8Array,
+  // La cola de miniaturas vive en una variable de modulo; el sandbox se la presta.
+  _colaMiniaturas: Promise.resolve(),
   // Stubs para consolidarFacturaDividida (efectos de UI/persistencia fuera de alcance del test).
   confirm: () => true, alert: () => {}, save: () => {}, marcarBorrado: () => {},
   renderRevisionDuplicados: () => {},
@@ -1080,6 +1085,191 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== la memoria que se come el buzon de Gmail ==");
+// La leyenda de "uso elevado de memoria" del navegador solo salia al bajar Gmail. Tres causas,
+// todas en la lista de adjuntos: la miniatura de una foto se decodificaba a tamano completo,
+// cada PDF dejaba vivo un documento de pdf.js, y los ya procesados seguian cargando su archivo.
+
+t("_b64ABytes devuelve los bytes, no una cadena", () => {
+  const b = S._b64ABytes(Buffer.from("hola").toString("base64"));
+  assert.ok(b instanceof Uint8Array);
+  assert.deepEqual([...b], [104, 111, 108, 97]);
+});
+t("_b64ABytes con vacio da un arreglo vacio, no truena", () => {
+  assert.equal(S._b64ABytes("").length, 0);
+  assert.equal(S._b64ABytes(null).length, 0);
+});
+
+t("liberar un adjunto le quita el archivo", () => {
+  const it = { filename:"f.pdf", msg_id:"m1", data_b64:"QUJD" };
+  S._liberarAdjunto(it);
+  assert.equal(it.data_b64, undefined, "el archivo entero se queda en RAM si no se suelta");
+});
+t("pero GUARDA la huella antes de soltarlo", () => {
+  // registrarGmailRevisado calcula la huella desde data_b64. Soltarlo sin guardarla dejaba sin
+  // registro el "ya revisada" del equipo, y la factura le reaparecia a todos.
+  const it = { filename:"f.pdf", msg_id:"m1", data_b64:"QUJD" };
+  const esperada = S._gmailHuella("QUJD");
+  S._liberarAdjunto(it);
+  assert.equal(it._huella, esperada);
+  assert.ok(esperada, "la huella no puede salir vacia");
+});
+t("una huella ya calculada no se recalcula ni se pierde", () => {
+  const it = { _huella:"yaEstaba", data_b64:"QUJD" };
+  S._liberarAdjunto(it);
+  assert.equal(it._huella, "yaEstaba");
+});
+t("liberar dos veces no rompe nada", () => {
+  const it = { data_b64:"QUJD" };
+  S._liberarAdjunto(it); const h = it._huella;
+  S._liberarAdjunto(it);
+  assert.equal(it._huella, h, "la huella sobrevive");
+});
+t("liberar null no truena", () => {
+  assert.doesNotThrow(() => S._liberarAdjunto(null));
+});
+
+t("la miniatura de una foto NO se pinta con el archivo entero", () => {
+  // <img src="data:...{foto completa}"> decodifica la imagen a su tamano real aunque se vea en
+  // 60 pixeles: una foto de 12 MP son ~48 MB de bitmap vivos por miniatura.
+  const i = script.indexOf("async function renderGmailInbox(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(!/<img src="data:\$\{item\.mime_type\};base64,\$\{item\.data_b64\}"/.test(b),
+    "el navegador guarda el bitmap completo mientras el <img> este en pantalla");
+});
+t("el PDF de la miniatura se cierra al terminar", () => {
+  // pdf.js no libera el documento solo: cada miniatura dejaba vivo el archivo mas su worker.
+  const i = script.indexOf("async function renderGmailInbox(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/\.destroy\(\)/.test(b), "sin destroy() el PDF entero se queda en memoria");
+});
+tAsyncQ("las miniaturas no arrancan todas a la vez", async () => {
+  // Con 80 adjuntos se abrian 80 documentos de pdf.js en el mismo instante. La prueba mira el
+  // COMPORTAMIENTO: la segunda no puede empezar antes de que termine la primera.
+  const orden = [];
+  const tarea = (n) => async () => {
+    orden.push("inicia" + n);
+    await new Promise(r => setTimeout(r, 10));
+    orden.push("termina" + n);
+  };
+  S._encolarMiniatura(tarea(1));
+  S._encolarMiniatura(tarea(2));
+  await S._encolarMiniatura(tarea(3));
+  assert.deepEqual(orden, ["inicia1","termina1","inicia2","termina2","inicia3","termina3"]);
+});
+tAsyncQ("una miniatura que truena no atora la cola", async () => {
+  const hechas = [];
+  S._encolarMiniatura(async () => { throw new Error("PDF corrupto"); });
+  await S._encolarMiniatura(async () => { hechas.push("siguiente"); });
+  assert.deepEqual(hechas, ["siguiente"], "un adjunto malo dejaba sin miniatura a todos los de abajo");
+});
+t("a IndexedDB solo va lo pendiente", () => {
+  // Clonar los ya procesados —con sus archivos completos— en cada clic es un pico de memoria
+  // por algo que fetchGmail descarta de todos modos.
+  const i = script.indexOf("function guardarGmailItemsLocal(");
+  const b = script.slice(i, i + 400);
+  assert.ok(/_done/.test(b), "los procesados no tienen por que guardarse");
+});
+
+console.log("\n== el CFDI al que el descarte viejo le borro los datos ==");
+// El descarte anterior a v2026-08-31-a reemplazaba el documento entero por la marca. Lo que
+// quedo en la nube son comprobantes de TRES campos: ignorado, ignoradoPor, ignoradoTs. Sin
+// fecha, sin importe, sin RFC, sin UUID en el campo. Se ven en pantalla y hay que tratarlos
+// como lo que son: sin datos, no como un CFDI de importe cero.
+const _MUTILADO = { id:"27be33e7-fe08-494f-b936-be8985cb1b09", ignorado:true, ignoradoPor:"Francisco", ignoradoTs:"2026-09-01T10:00:00.000Z" };
+
+t("un CFDI sin fecha ni importe esta incompleto", () => {
+  assert.equal(S.cfdiIncompleto(_MUTILADO), true);
+});
+t("un CFDI entero no lo esta", () => {
+  assert.equal(S.cfdiIncompleto(_c("a","2026-08-19","SUPERSERVICIO PACIFICO AM",1400.00)), false);
+});
+t("un comprobante de importe cero SI tiene datos", () => {
+  // Cero es un importe; ausente no lo es. Confundirlos borraria comprobantes legitimos.
+  assert.equal(S.cfdiIncompleto(_c("a","2026-08-19","X",0)), false);
+});
+t("sin importe no hay nada que conciliar", () => {
+  assert.equal(S.cfdiIncompleto({ fecha:"2026-08-19", proveedor:"X" }), true);
+});
+t("sin fecha pero CON importe sigue contando", () => {
+  // Se mira el importe, no la fecha. Un CFDI sin fecha todavia se empareja por UUID o por folio
+  // y sigue siendo dinero real: sacarlo de la pantalla lo desapareceria.
+  assert.equal(S.cfdiIncompleto({ total:1400, proveedor:"X" }), false);
+});
+t("null esta incompleto y no truena", () => {
+  assert.equal(S.cfdiIncompleto(null), true);
+});
+
+t("un CFDI mutilado NUNCA entra a la conciliacion", () => {
+  // Si entrara, saldria como pendiente sin nada que ver y ademas envenenaria el total: sumar
+  // undefined da NaN y el balance entero se vuelve NaN.
+  const sinMarca = { id:_MUTILADO.id };
+  const r = S.filtrarCfdisConciliables([sinMarca, _c("b","2026-08-19","X",1400)], "");
+  assert.equal(r.utiles.length, 1, "solo el que tiene datos");
+  assert.equal(r.utiles[0].uuid, "b");
+  assert.equal(r.omitidos.SIN_DATOS, 1);
+});
+t("el total del SAT no se vuelve NaN por un mutilado", () => {
+  const r = S.filtrarCfdisConciliables([{ id:"x" }, _c("b","2026-08-19","X",1400)], "");
+  const total = r.utiles.reduce((s,c)=>s+c.total, 0);
+  assert.ok(Number.isFinite(total), "un solo comprobante sin importe borraba el balance entero");
+  close(total, 1400, 0.01);
+});
+t("descartado gana a sin datos: es lo que explica por que esta asi", () => {
+  const r = S.filtrarCfdisConciliables([_MUTILADO], "");
+  assert.equal(r.omitidos.DESCARTADO, 1);
+  assert.equal(r.omitidos.SIN_DATOS, undefined);
+});
+
+t("el resumen cuenta cuantos perdieron los datos", () => {
+  const r = S.resumenDescarte([_MUTILADO, _c("b","2026-08-19","X",1400)]);
+  assert.equal(r.n, 2);
+  assert.equal(r.sinDatos, 1, "decir '2 - $1,400' sin mas hace leer 1,400 como el total de los dos");
+  close(r.total, 1400, 0.01);
+});
+
+t("la pantalla de descartados no puede escribir $NaN", () => {
+  const i = script.indexOf("function renderDescartados(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  // El importe se puede seguir pintando: lo que no puede es pintarse SIN preguntar antes si el
+  // comprobante lo tiene. fmt(undefined) imprime "$NaN" en una pantalla de contabilidad.
+  const guarda = vivo.indexOf("cfdiIncompleto(");
+  const pinta  = vivo.indexOf("fmt(c.total)");
+  assert.ok(guarda > -1, "hay que distinguir el que perdio los datos");
+  assert.ok(pinta === -1 || guarda < pinta, "se pregunta ANTES de imprimir el importe");
+  assert.ok(/c\.id/.test(vivo), "y ensenar el UUID, que es lo unico que le queda");
+});
+t("y dice como recuperarlos", () => {
+  const i = html.indexOf('id="descAvisoSinDatos"');
+  assert.ok(i > -1, "sin aviso, el contador no sabe que hacer con seis renglones vacios");
+  const b = html.slice(i, i + 900);
+  assert.ok(/XML/.test(b), "volver a subir el XML es lo que devuelve los datos");
+});
+t("los omitidos por falta de datos se nombran", () => {
+  const i = script.indexOf("function pintarCfdisOmitidos(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(b.includes('"SIN_DATOS"'), "un CFDI omitido sin decir por que es un CFDI perdido");
 });
 
 console.log("\n== de donde sale un precio, y hasta cuando vale ==");
