@@ -102,6 +102,7 @@ const FUNCS = [
   "basePresupuestoPeriodo",
   "vigenciaPrecio", "aplicarPrecioDeFactura", "puedeValidarse", "motivoNoValidable",
   "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte", "cfdiIncompleto",
+  "_b64ABytes", "_liberarAdjunto", "_gmailHuella", "_encolarMiniatura",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
   "pareceMedidaNoIngrediente", "_sepNombres",
@@ -153,6 +154,10 @@ const FUNCS = [
 const sandbox = {
   state: { weeks: [], activeWeek: null, budget: {} }, console,
   _gmailRevisados: null,
+  // _b64ABytes decodifica base64: en el navegador atob es global, en un contexto de vm no.
+  atob, Uint8Array,
+  // La cola de miniaturas vive en una variable de modulo; el sandbox se la presta.
+  _colaMiniaturas: Promise.resolve(),
   // Stubs para consolidarFacturaDividida (efectos de UI/persistencia fuera de alcance del test).
   confirm: () => true, alert: () => {}, save: () => {}, marcarBorrado: () => {},
   renderRevisionDuplicados: () => {},
@@ -1080,6 +1085,101 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== la memoria que se come el buzon de Gmail ==");
+// La leyenda de "uso elevado de memoria" del navegador solo salia al bajar Gmail. Tres causas,
+// todas en la lista de adjuntos: la miniatura de una foto se decodificaba a tamano completo,
+// cada PDF dejaba vivo un documento de pdf.js, y los ya procesados seguian cargando su archivo.
+
+t("_b64ABytes devuelve los bytes, no una cadena", () => {
+  const b = S._b64ABytes(Buffer.from("hola").toString("base64"));
+  assert.ok(b instanceof Uint8Array);
+  assert.deepEqual([...b], [104, 111, 108, 97]);
+});
+t("_b64ABytes con vacio da un arreglo vacio, no truena", () => {
+  assert.equal(S._b64ABytes("").length, 0);
+  assert.equal(S._b64ABytes(null).length, 0);
+});
+
+t("liberar un adjunto le quita el archivo", () => {
+  const it = { filename:"f.pdf", msg_id:"m1", data_b64:"QUJD" };
+  S._liberarAdjunto(it);
+  assert.equal(it.data_b64, undefined, "el archivo entero se queda en RAM si no se suelta");
+});
+t("pero GUARDA la huella antes de soltarlo", () => {
+  // registrarGmailRevisado calcula la huella desde data_b64. Soltarlo sin guardarla dejaba sin
+  // registro el "ya revisada" del equipo, y la factura le reaparecia a todos.
+  const it = { filename:"f.pdf", msg_id:"m1", data_b64:"QUJD" };
+  const esperada = S._gmailHuella("QUJD");
+  S._liberarAdjunto(it);
+  assert.equal(it._huella, esperada);
+  assert.ok(esperada, "la huella no puede salir vacia");
+});
+t("una huella ya calculada no se recalcula ni se pierde", () => {
+  const it = { _huella:"yaEstaba", data_b64:"QUJD" };
+  S._liberarAdjunto(it);
+  assert.equal(it._huella, "yaEstaba");
+});
+t("liberar dos veces no rompe nada", () => {
+  const it = { data_b64:"QUJD" };
+  S._liberarAdjunto(it); const h = it._huella;
+  S._liberarAdjunto(it);
+  assert.equal(it._huella, h, "la huella sobrevive");
+});
+t("liberar null no truena", () => {
+  assert.doesNotThrow(() => S._liberarAdjunto(null));
+});
+
+t("la miniatura de una foto NO se pinta con el archivo entero", () => {
+  // <img src="data:...{foto completa}"> decodifica la imagen a su tamano real aunque se vea en
+  // 60 pixeles: una foto de 12 MP son ~48 MB de bitmap vivos por miniatura.
+  const i = script.indexOf("async function renderGmailInbox(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(!/<img src="data:\$\{item\.mime_type\};base64,\$\{item\.data_b64\}"/.test(b),
+    "el navegador guarda el bitmap completo mientras el <img> este en pantalla");
+});
+t("el PDF de la miniatura se cierra al terminar", () => {
+  // pdf.js no libera el documento solo: cada miniatura dejaba vivo el archivo mas su worker.
+  const i = script.indexOf("async function renderGmailInbox(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/\.destroy\(\)/.test(b), "sin destroy() el PDF entero se queda en memoria");
+});
+tAsyncQ("las miniaturas no arrancan todas a la vez", async () => {
+  // Con 80 adjuntos se abrian 80 documentos de pdf.js en el mismo instante. La prueba mira el
+  // COMPORTAMIENTO: la segunda no puede empezar antes de que termine la primera.
+  const orden = [];
+  const tarea = (n) => async () => {
+    orden.push("inicia" + n);
+    await new Promise(r => setTimeout(r, 10));
+    orden.push("termina" + n);
+  };
+  S._encolarMiniatura(tarea(1));
+  S._encolarMiniatura(tarea(2));
+  await S._encolarMiniatura(tarea(3));
+  assert.deepEqual(orden, ["inicia1","termina1","inicia2","termina2","inicia3","termina3"]);
+});
+tAsyncQ("una miniatura que truena no atora la cola", async () => {
+  const hechas = [];
+  S._encolarMiniatura(async () => { throw new Error("PDF corrupto"); });
+  await S._encolarMiniatura(async () => { hechas.push("siguiente"); });
+  assert.deepEqual(hechas, ["siguiente"], "un adjunto malo dejaba sin miniatura a todos los de abajo");
+});
+t("a IndexedDB solo va lo pendiente", () => {
+  // Clonar los ya procesados —con sus archivos completos— en cada clic es un pico de memoria
+  // por algo que fetchGmail descarta de todos modos.
+  const i = script.indexOf("function guardarGmailItemsLocal(");
+  const b = script.slice(i, i + 400);
+  assert.ok(/_done/.test(b), "los procesados no tienen por que guardarse");
 });
 
 console.log("\n== el CFDI al que el descarte viejo le borro los datos ==");

@@ -2040,7 +2040,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-03-a";
+const APP_BUILD = "2026-09-08-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -10229,6 +10229,57 @@ function exportarReporteExcel(){
 // GMAIL
 // ═══════════════════════════════════════════════════════════════════════════
 let gmailItems=[];
+
+// ── Lo que hacía que el navegador avisara "uso elevado de memoria" ─────────
+// Pasaba SOLO al bajar Gmail, y no por el tamaño de la descarga: por lo que la lista de
+// adjuntos dejaba vivo después. Tres cosas, arregladas aquí abajo.
+
+// Los bytes de un base64. Estaba escrito tres veces con el mismo bucle; una sola versión evita
+// que se arregle en un lado y se quede mal en los otros.
+function _b64ABytes(b64){
+  const s = atob(String(b64||""));
+  const b = new Uint8Array(s.length);
+  for(let i=0;i<s.length;i++) b[i]=s.charCodeAt(i);
+  return b;
+}
+
+// Suelta el archivo de un adjunto ya procesado. Un PDF o una foto pesan cientos de KB en base64
+// y se quedaban en `gmailItems` para siempre, aunque el adjunto ya no se muestre ni se pueda
+// abrir (los `_done` no se pintan).
+// La huella se calcula ANTES de soltarlo y se guarda: registrarGmailRevisado la saca de
+// data_b64, y sin ella no se escribe el "ya revisada" del equipo — la factura le reaparecería
+// a todos. Ese era el riesgo real de liberar sin más.
+function _liberarAdjunto(item){
+  if(!item) return;
+  if(!item._huella) item._huella = _gmailHuella(item.data_b64);
+  delete item.data_b64;
+}
+
+// Las miniaturas se generan de una en una. Antes cada PDF de la lista arrancaba su propio
+// pdf.js en el mismo instante: con 80 adjuntos eran 80 documentos abiertos a la vez.
+let _colaMiniaturas = Promise.resolve();
+function _encolarMiniatura(fn){ _colaMiniaturas = _colaMiniaturas.then(fn).catch(()=>{}); return _colaMiniaturas; }
+
+// Miniatura de una imagen SIN quedarse con el bitmap completo en RAM.
+// `<img src="data:...">` decodifica la foto a su tamaño real aunque se muestre en 60 píxeles, y
+// el navegador conserva ese bitmap mientras el elemento esté en pantalla: una foto de 12 MP son
+// ~48 MB, y veinte facturas fotografiadas llenaban un giga. Aquí se decodifica UNA vez ya
+// reducida, se recorta al cuadro y se cierra el bitmap: quedan unos 8 KB por miniatura.
+const GMAIL_THUMB_PX = 120;   // el doble de los 60 de pantalla, para que no se vea borrosa
+async function _miniaturaImagen(b64, mime){
+  const blob = new Blob([_b64ABytes(b64)], { type: mime || "image/jpeg" });
+  let bmp;
+  // resizeWidth solo (sin alto) conserva la proporción al decodificar.
+  try{ bmp = await createImageBitmap(blob, { resizeWidth: GMAIL_THUMB_PX*2, resizeQuality:"low" }); }
+  catch(_){ bmp = await createImageBitmap(blob); }   // navegador que no acepta las opciones
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = GMAIL_THUMB_PX;
+  // Recorte centrado: es lo que hacía object-fit:cover.
+  const lado = Math.min(bmp.width, bmp.height);
+  cv.getContext("2d").drawImage(bmp, (bmp.width-lado)/2, (bmp.height-lado)/2, lado, lado, 0, 0, GMAIL_THUMB_PX, GMAIL_THUMB_PX);
+  try{ bmp.close(); }catch(_){}
+  return cv.toDataURL("image/jpeg", 0.7);
+}
 // Factura de Gmail mandada a Capturar y todavía sin guardar. Se registra como "capturada" para
 // el equipo solo cuando el gasto existe (ver guardarGasto).
 let _gmailPendienteCaptura=null;
@@ -10272,7 +10323,10 @@ async function idbGet(key){
     return val;
   }catch(e){ console.warn("idbGet:",key,e); return undefined; }
 }
-function guardarGmailItemsLocal(){ idbSet(GMAIL_PENDING_KEY, gmailItems); }
+// A IndexedDB va SOLO lo pendiente. Los ya procesados no hacen falta al recargar —fetchGmail
+// los descarta de todos modos— y arrastrarlos significaba clonar sus archivos completos en cada
+// clic, con el pico de memoria que eso implica.
+function guardarGmailItemsLocal(){ idbSet(GMAIL_PENDING_KEY, gmailItems.filter(i=>!i._done)); }
 async function restaurarGmailItemsLocal(){
   try{
     let items=await idbGet(GMAIL_PENDING_KEY);
@@ -10330,6 +10384,9 @@ async function fetchGmail(includeSeen=false){
     // anterior, en vez de reemplazarlos — así no se pierden si quedaron a medias. Se deduplica
     // por nombre de archivo (que incluye el msg_id) para que "incluir ya revisadas" no muestre
     // dos veces lo que ya estaba en la lista.
+    // Los procesados se van, y con ellos su archivo. Sin esto, escanear tres veces seguidas
+    // acumulaba las tres tandas completas en memoria.
+    gmailItems.forEach(i=>{ if(i._done) _liberarAdjunto(i); });
     const previos=gmailItems.filter(i=>!i._done), vistos=new Set(previos.map(i=>i.filename));
     const nuevos=(data.items||[]).filter(i=>!vistos.has(i.filename));
     gmailItems=[...previos, ...nuevos];
@@ -10363,7 +10420,7 @@ async function renderGmailInbox(){
     div.style.cssText=`display:flex;gap:14px;align-items:flex-start;padding:14px;border-bottom:1px solid var(--border);${item._isDup?'opacity:0.6;background:#FFF8F6;':''}`;
     const isImg=item.mime_type.startsWith("image/"),isPDF=item.mime_type==="application/pdf",isXML=item.filename.toLowerCase().endsWith(".xml");
     const thumbId=`thumb_gmail_${idx}`;
-    let thumbContent=isImg?`<img src="data:${item.mime_type};base64,${item.data_b64}" alt="preview" style="width:100%;height:100%;object-fit:cover">`:isXML?`<div style="text-align:center;padding:4px"><div style="font-size:20px">📋</div><div style="font-size:9px;color:var(--txt2);font-weight:600">XML</div></div>`:isPDF?`<canvas id="${thumbId}" style="width:60px;height:60px"></canvas>`:`<span style="font-size:28px">📄</span>`;
+    let thumbContent=isImg?`<div id="${thumbId}" style="width:100%;height:100%;background:var(--bg2)"></div>`:isXML?`<div style="text-align:center;padding:4px"><div style="font-size:20px">📋</div><div style="font-size:9px;color:var(--txt2);font-weight:600">XML</div></div>`:isPDF?`<canvas id="${thumbId}" style="width:60px;height:60px"></canvas>`:`<span style="font-size:28px">📄</span>`;
     div.innerHTML=`<div class="thumb-wrap" style="width:60px;height:60px;flex-shrink:0;overflow:hidden;cursor:pointer" onclick="verAdjuntoGmail(${idx})" title="Ver completo">${thumbContent}</div>
       <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px;color:var(--vd);margin-bottom:2px">${esc(item.filename)}${item._isDup?'<span class="dup-badge">⚠ Posible duplicado</span>':''}</div>
       <div style="font-size:11px;color:var(--txt2);margin-bottom:2px">De: ${esc(item.sender)}</div>
@@ -10375,7 +10432,31 @@ async function renderGmailInbox(){
         :`<button class="btn btn-green" style="padding:7px 14px;font-size:12px" onclick="gmailProcessItem(${idx})">🤖 Leer con IA</button><button class="btn btn-red" style="padding:7px 14px;font-size:12px" onclick="gmailSkipItem(${idx})">🗑️ Eliminar</button>`}
       </div>`;
     list.appendChild(div);
-    if(isPDF&&item.data_b64)(async()=>{try{pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";const raw=atob(item.data_b64),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);const pdfDoc=await pdfjsLib.getDocument({data:bytes}).promise,page=await pdfDoc.getPage(1),vp=page.getViewport({scale:0.3}),canvas=document.getElementById(thumbId);if(!canvas)return;canvas.width=vp.width;canvas.height=vp.height;await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;}catch(e){const c=document.getElementById(thumbId);if(c)c.outerHTML=`<span style="font-size:28px">📄</span>`;}})();
+    // La miniatura de una foto se arma reducida (ver _miniaturaImagen). El `<img>` con el
+    // archivo entero adentro era lo que disparaba el aviso de memoria del navegador.
+    if(isImg&&item.data_b64) _encolarMiniatura(async()=>{
+      const el=document.getElementById(thumbId); if(!el) return;   // la lista ya se repintó
+      try{
+        const mini=await _miniaturaImagen(item.data_b64, item.mime_type);
+        const el2=document.getElementById(thumbId); if(!el2) return;
+        el2.outerHTML=`<img src="${mini}" alt="preview" style="width:100%;height:100%;object-fit:cover">`;
+      }catch(e){ const c=document.getElementById(thumbId); if(c) c.outerHTML=`<span style="font-size:28px">🖼️</span>`; }
+    });
+    if(isPDF&&item.data_b64) _encolarMiniatura(async()=>{
+      if(!document.getElementById(thumbId)) return;   // no vale la pena abrirlo si ya no está
+      let pdfDoc=null;
+      try{
+        pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        pdfDoc=await pdfjsLib.getDocument({data:_b64ABytes(item.data_b64)}).promise;
+        const page=await pdfDoc.getPage(1), vp=page.getViewport({scale:0.3});
+        const canvas=document.getElementById(thumbId); if(!canvas) return;
+        canvas.width=vp.width; canvas.height=vp.height;
+        await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
+      }catch(e){ const c=document.getElementById(thumbId); if(c)c.outerHTML=`<span style="font-size:28px">📄</span>`; }
+      // pdf.js NO libera el documento solo: cada miniatura dejaba vivo el archivo completo más
+      // su worker, y con 80 adjuntos eso solo crecía.
+      finally{ if(pdfDoc) try{ await pdfDoc.destroy(); }catch(_){} }
+    });
   });
 }
 
@@ -10394,7 +10475,7 @@ function verAdjuntoGmail(idx){
   }
   if(item.mime_type==="application/pdf"){
     try{
-      const raw=atob(item.data_b64), bytes=new Uint8Array(raw.length);
+      const bytes=_b64ABytes(item.data_b64);
       for(let i=0;i<raw.length;i++) bytes[i]=raw.charCodeAt(i);
       const blob=new Blob([bytes],{type:"application/pdf"});
       window.open(URL.createObjectURL(blob), "_blank");
@@ -10416,7 +10497,18 @@ async function gmailProcessItem(idx){
     capturedB64=capturedDataURL.split(",")[1];
     capturedFile.type=(capturedDataURL.match(/data:([^;]+)/)||[])[1]||"image/jpeg";
   }
-  else if(item.mime_type==="application/pdf"){try{pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";const raw=atob(item.data_b64),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);const pdfDoc=await pdfjsLib.getDocument({data:bytes}).promise,page=await pdfDoc.getPage(1),vp=page.getViewport({scale:1.5}),canvas=document.createElement("canvas");canvas.width=vp.width;canvas.height=vp.height;await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;capturedDataURL=canvas.toDataURL("image/jpeg",0.85);}catch(e){capturedDataURL=null;}}
+  else if(item.mime_type==="application/pdf"){
+    let pdfDoc=null;
+    try{
+      pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      pdfDoc=await pdfjsLib.getDocument({data:_b64ABytes(item.data_b64)}).promise;
+      const page=await pdfDoc.getPage(1), vp=page.getViewport({scale:1.5}), canvas=document.createElement("canvas");
+      canvas.width=vp.width; canvas.height=vp.height;
+      await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
+      capturedDataURL=canvas.toDataURL("image/jpeg",0.85);
+    }catch(e){ capturedDataURL=null; }
+    finally{ if(pdfDoc) try{ await pdfDoc.destroy(); }catch(_){} }
+  }
   else capturedDataURL=null;
   gmailItems[idx]._done=true;
   guardarGmailItemsLocal();
@@ -10476,6 +10568,9 @@ function gmailSkipItem(idx){
   gmailItems[idx]._done=true;
   guardarGmailItemsLocal();
   registrarGmailRevisado(item,"descartado");
+  // Descartado y fuera de la lista: su archivo ya no se va a mostrar ni a leer. Soltarlo aquí
+  // es lo que hace que revisar un buzón grande no vaya subiendo la memoria clic a clic.
+  _liberarAdjunto(item);
   const el=document.getElementById(`gmail-item-${idx}`); if(el) el.remove();
 }
 
