@@ -2040,7 +2040,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-08-a";
+const APP_BUILD = "2026-09-09-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2136,11 +2136,24 @@ async function escribirPrecios(preciosActuales){
   return !!(r && r.ok);
 }
 
+// Pedir el token es la llamada MÁS frágil de una lectura, no la menos: sale a la red de Google
+// justo cuando el token está por vencer. Aun así era la única sin reintento — fbListCollection
+// reintenta con cuidado cada página de Firestore, pero si el que parpadeaba era este primer paso
+// todo se caía con "auth/network-request-failed" y al usuario se le decía que recargara la
+// página. Lo usan las 13 lecturas y escrituras de Firestore, así que el parpadeo se llevaba por
+// delante lo que estuviera haciendo.
 async function fbAuthHeader() {
-  if(typeof auth !== 'undefined' && auth.currentUser) {
-    return { 'Authorization': 'Bearer ' + await auth.currentUser.getIdToken() };
+  if(typeof auth === 'undefined' || !auth.currentUser) return {};
+  let ultimo = null;
+  for(let intento=1; intento<=3; intento++){
+    try{ return { 'Authorization': 'Bearer ' + await auth.currentUser.getIdToken() }; }
+    catch(e){ ultimo = e; }
+    if(intento < 3) await new Promise(res=>setTimeout(res, 400*intento));
   }
-  return {};
+  // Se propaga el fallo en vez de devolver {}: sin encabezado la petición sale sin sesión y
+  // Firestore responde 401, que en pantalla se lee como "no tienes permiso" — mandando a buscar
+  // el problema a las reglas de seguridad cuando lo que hubo fue una falla de red.
+  throw new Error("no se pudo renovar la sesión con Firebase (3 intentos): " + ((ultimo && ultimo.message) || "error de red"));
 }
 
 // ── Colecciones reales de Firestore (Catálogo de Productos — Fase 1) ──────
@@ -7406,8 +7419,29 @@ async function procesarSAT(){
 // TERCERO es un gasto por capturar. Sin este filtro la conciliación pedía capturar los
 // complementos de pago y las propias facturas de venta.
 const RFC_PROPIO_KEY = "cicsa_rfc_propio";
-function rfcPropio(){ try{ return (localStorage.getItem(RFC_PROPIO_KEY)||"").trim().toUpperCase(); }catch(_){ return ""; } }
-function guardarRfcPropio(v){ try{ localStorage.setItem(RFC_PROPIO_KEY,(v||"").trim().toUpperCase()); }catch(_){} }
+// El RFC de la empresa es un dato de la EMPRESA, no de este navegador. Vivía solo en
+// localStorage: quien lo escribía lo tenía, y cualquier otro admin —u otro equipo, u otro
+// navegador, o el mismo después de limpiar el historial— abría el Balance y veía "lo facturado
+// sale en cero" sin manera de saber por qué. Ahora también viaja en el estado compartido, que es
+// lo que sí llega a los demás; localStorage queda como copia local para no depender de que el
+// estado ya haya cargado.
+function rfcPropio(){
+  let local = "";
+  try{ local = (localStorage.getItem(RFC_PROPIO_KEY)||"").trim().toUpperCase(); }catch(_){}
+  if(local) return local;
+  const compartido = (typeof state!=="undefined" && state && state.rfcPropio) ? String(state.rfcPropio) : "";
+  return compartido.trim().toUpperCase();
+}
+function guardarRfcPropio(v){
+  const rfc=(v||"").trim().toUpperCase();
+  try{ localStorage.setItem(RFC_PROPIO_KEY, rfc); }catch(_){}
+  // Al estado compartido solo se escribe algo real. mergeEstados deja ganar al dispositivo local
+  // en los escalares, así que un "" viajando le pisaría el RFC bueno a todos los demás.
+  if(rfc && typeof state!=="undefined" && state){
+    state.rfcPropio = rfc;
+    try{ save(); }catch(_){}
+  }
+}
 function onRfcPropioChange(){
   const inp=document.getElementById("satRfcPropio"); if(!inp) return;
   guardarRfcPropio(inp.value);
