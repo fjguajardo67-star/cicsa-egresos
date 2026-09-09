@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS"];
+const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
 const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE"];
 
@@ -103,6 +103,7 @@ const FUNCS = [
   "vigenciaPrecio", "aplicarPrecioDeFactura", "puedeValidarse", "motivoNoValidable",
   "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte", "cfdiIncompleto",
   "_b64ABytes", "_liberarAdjunto", "_gmailHuella", "_encolarMiniatura",
+  "fbAuthHeader", "rfcPropio", "guardarRfcPropio",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
   "pareceMedidaNoIngrediente", "_sepNombres",
@@ -158,6 +159,8 @@ const sandbox = {
   atob, Uint8Array,
   // La cola de miniaturas vive en una variable de modulo; el sandbox se la presta.
   _colaMiniaturas: Promise.resolve(),
+  // Los reintentos de fbAuthHeader esperan entre intento e intento.
+  setTimeout,
   // Stubs para consolidarFacturaDividida (efectos de UI/persistencia fuera de alcance del test).
   confirm: () => true, alert: () => {}, save: () => {}, marcarBorrado: () => {},
   renderRevisionDuplicados: () => {},
@@ -1085,6 +1088,63 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== el token de Firebase tambien se reintenta ==");
+// fbListCollection reintenta con cuidado cada pagina de Firestore, pero el PRIMER paso —pedir el
+// token— no se reintentaba. Un parpadeo de red ahi tiraba la lectura entera y al usuario se le
+// decia "recarga la pagina". Es justo la llamada mas fragil: sale a la red de Google cuando el
+// token esta por vencer.
+tAsyncQ("un parpadeo de red al pedir el token no tira la lectura", async () => {
+  let intentos = 0;
+  S.auth = { currentUser: { getIdToken: async () => {
+    intentos++;
+    if(intentos < 3) throw new Error("auth/network-request-failed");
+    return "TOKEN_BUENO";
+  } } };
+  const h = await S.fbAuthHeader();
+  assert.equal(h.Authorization, "Bearer TOKEN_BUENO");
+  assert.equal(intentos, 3, "tiene que haber reintentado");
+  S.auth = { currentUser: { getIdToken: async () => "TOKEN" } };
+});
+tAsyncQ("si de plano no hay red, el error sale — no un token vacio", async () => {
+  S.auth = { currentUser: { getIdToken: async () => { throw new Error("auth/network-request-failed"); } } };
+  await assert.rejects(() => S.fbAuthHeader(), /red|network/i,
+    "devolver {} en silencio produce un 401 que se lee como 'no tienes permiso'");
+  S.auth = { currentUser: { getIdToken: async () => "TOKEN" } };
+});
+tAsyncQ("sin sesion iniciada no se reintenta nada", async () => {
+  S.auth = { currentUser: null };
+  assert.deepEqual(await S.fbAuthHeader(), {});
+  S.auth = { currentUser: { getIdToken: async () => "TOKEN" } };
+});
+
+console.log("\n== el RFC de la empresa es de la EMPRESA, no del navegador ==");
+// Vivia solo en localStorage: quien lo escribia lo tenia, y cualquier otro admin —u otro equipo,
+// u otro navegador— abria el Balance y veia "lo facturado sale en cero" sin saber por que.
+t("si este navegador no lo tiene, se toma del estado compartido", () => {
+  S.localStorage.removeItem("cicsa_rfc_propio");
+  S.state.rfcPropio = "CIC010101AAA";
+  assert.equal(S.rfcPropio(), "CIC010101AAA");
+});
+t("guardarlo lo deja en los dos lados", () => {
+  S.state.rfcPropio = undefined;
+  S.localStorage.removeItem("cicsa_rfc_propio");
+  S.guardarRfcPropio(" cic010101aaa ");
+  assert.equal(S.localStorage.getItem("cicsa_rfc_propio"), "CIC010101AAA", "normalizado y local");
+  assert.equal(S.state.rfcPropio, "CIC010101AAA", "y compartido, que es lo que ven los demas");
+});
+t("un RFC vacio NO viaja al estado compartido", () => {
+  // mergeEstados deja ganar al dispositivo local en los escalares: un "" viajando le pisaria
+  // el RFC bueno a todos los demas.
+  S.state.rfcPropio = "CIC010101AAA";
+  S.guardarRfcPropio("");
+  assert.equal(S.state.rfcPropio, "CIC010101AAA", "no se puede borrar el de los demas sin querer");
+});
+t("sin RFC en ningun lado devuelve vacio, no undefined", () => {
+  S.state.rfcPropio = undefined;
+  S.localStorage.removeItem("cicsa_rfc_propio");
+  assert.equal(S.rfcPropio(), "");
 });
 
 console.log("\n== la memoria que se come el buzon de Gmail ==");
@@ -3956,8 +4016,11 @@ t("pistaFallo nombra el 403 como lo que es, y no adivina de mas", () => {
 
 // Prueba de fuego: un 403 de verdad, no un objeto inventado. Si fbUpdateDoc vuelve a dejar de
 // mirar r.ok, esto falla.
+// fbAuthHeader ya NO se stubea, por lo mismo que fbDeleteDoc: la declaracion del stub le ganaba
+// a la funcion real extraida de index.html, asi que sus reintentos no se probaban. Con
+// auth.currentUser del sandbox, la real devuelve un encabezado y es igual de inofensiva aqui.
 vm.runInContext("let _fallosEscritura = []; const FB_BASE='x'; const FB_KEY='k';" +
-  "async function fbAuthHeader(){ return {}; } function pintarAvisoFallos(){}", sandbox);
+  "function pintarAvisoFallos(){}", sandbox);
 const _leerFallos = () => vm.runInContext("_fallosEscritura", sandbox);
 const _resetFallos = () => vm.runInContext("_fallosEscritura = [];", sandbox);
 const _conRespuesta = (resp) => { sandbox.fetch = async () => resp; };
