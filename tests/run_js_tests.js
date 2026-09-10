@@ -88,9 +88,9 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "CORTES_VERSIONES_OK", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
+const CONSTS = ["CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
-const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE"];
+const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK"];
 
 
 const FUNCS = [
@@ -104,6 +104,7 @@ const FUNCS = [
   "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte", "cfdiIncompleto",
   "_b64ABytes", "_liberarAdjunto", "_gmailHuella", "_encolarMiniatura",
   "fbAuthHeader", "rfcPropio", "guardarRfcPropio",
+  "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
   "pareceMedidaNoIngrediente", "_sepNombres",
@@ -1088,6 +1089,72 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== la v4 de Manejo de Cortes ==");
+// La v4 es identica a la v3 salvo por un campo nuevo: egresos[].proveedor. No trae dinero nuevo
+// (aportaciones sigue existiendo y la aritmetica del archivo cuadra), asi que se acepta. Lo que
+// NO se puede repetir es lo que paso con la v3: un campo nuevo que la pantalla ignora en
+// silencio. Aqui el campo se usa.
+const _V4 = JSON.parse(fs.readFileSync(path.join(__dirname, "fixture_cortes_v4.json"), "utf8"));
+
+t("un archivo v4 real se acepta", () => {
+  const r = S.validarArchivoCortes(_V4);
+  assert.deepEqual(r.errores, [], "el archivo del 29 ago al 01 sep no tiene por que rechazarse");
+  assert.ok(r.ok);
+});
+t("la v4 no cambio la forma: sigue cuadrando sola", () => {
+  // Si Manejo de Cortes hubiera movido el significado de un campo, estas cuentas —las mismas que
+  // usa avisosControlCortes— dejarian de dar.
+  const s = (arr,k) => (arr||[]).reduce((a,x)=>a+(parseFloat(x[k])||0),0);
+  const ef = s(_V4.cortes,"boletos25")+s(_V4.cortes,"contratistas")+s(_V4.cortes,"otrosIngresos");
+  close(ef, _V4.totales.efectivo, 0.01);
+  close(s(_V4.egresos,"monto"), _V4.totales.egresos, 0.01);
+  close(_V4.saldoInicial + ef - s(_V4.egresos,"monto"), _V4.conteo.total, 0.01);
+  assert.deepEqual(S.avisosControlCortes(_V4), [], "un archivo sano no tiene por que levantar avisos");
+});
+t("la v4 no trae ningun campo con dinero que la app ignore", () => {
+  // Guardia contra el error de la v3: aportaciones llego, la pantalla solo AVISABA, y el saldo
+  // salia corto. Si una version futura agrega otra llave arriba, esta prueba lo cuenta.
+  const CONOCIDAS = ["version","app","periodo","emitido","saldoInicial","cortes","egresos","aportaciones","conteo","totales"];
+  assert.deepEqual(Object.keys(_V4).filter(k=>!CONOCIDAS.includes(k)), [],
+    "una llave nueva de nivel superior puede traer dinero: revisala antes de aceptar la version");
+});
+t("las versiones viejas se siguen aceptando", () => {
+  assert.ok(S.CORTES_VERSIONES_OK.includes(1));
+  assert.ok(S.CORTES_VERSIONES_OK.includes(3));
+  assert.ok(S.CORTES_VERSIONES_OK.includes(4));
+});
+t("una version que NO existe se sigue rechazando", () => {
+  const r = S.validarArchivoCortes({ ..._V4, version: 99 });
+  assert.ok(r.errores.some(e=>/no reconocida/i.test(e)), "el candado tiene que seguir cerrado");
+});
+
+t("el proveedor del egreso se usa cuando viene", () => {
+  // Hasta la v3 el proveedor se DEDUCIA del concepto, que es texto libre: "COMPRA SAMS TELERAS"
+  // acababa siendo el nombre del proveedor. La v4 lo manda aparte.
+  assert.equal(S.proveedorDeEgresoCorte({ proveedor:"SAMS CLUB", concepto:"COMPRA SAMS TELERAS" }),
+               S.canonizarProveedor("SAMS CLUB"));
+});
+t("y si viene vacio se sigue deduciendo del concepto", () => {
+  // Es el caso de TODOS los renglones de este archivo y de todo v1-v3: no puede romperse.
+  assert.equal(S.proveedorDeEgresoCorte({ proveedor:"", concepto:"COMPRA SAMS TELERAS" }),
+               S.canonizarProveedor("COMPRA SAMS TELERAS"));
+  assert.equal(S.proveedorDeEgresoCorte({ concepto:"RENTA CASA ING FRANCISCO" }),
+               S.canonizarProveedor("RENTA CASA ING FRANCISCO"));
+});
+t("un proveedor de puros espacios cuenta como vacio", () => {
+  assert.equal(S.proveedorDeEgresoCorte({ proveedor:"   ", concepto:"PAGO PEGADO DE BOLETOS" }),
+               S.canonizarProveedor("PAGO PEGADO DE BOLETOS"));
+});
+t("sin nada, no truena", () => {
+  assert.equal(S.proveedorDeEgresoCorte(null), S.canonizarProveedor(""));
+});
+t("la importacion usa la funcion, no el concepto pelado", () => {
+  const i = script.indexOf("function aplicarImportacionCortes(");
+  const b = i > -1 ? script.slice(i, i + 6000) : script;
+  assert.ok(!/proveedor:\s*canonizarProveedor\(e\.concepto/.test(b),
+    "asi se ignoraba el campo nuevo de la v4");
 });
 
 console.log("\n== el token de Firebase tambien se reintenta ==");

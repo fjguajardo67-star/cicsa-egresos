@@ -2040,7 +2040,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-09-a";
+const APP_BUILD = "2026-09-10-a";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -12305,7 +12305,13 @@ function guardarRetiro() {
 // 53 egresos) contra este mismo validador: pasa sin un solo error, y sus totales cuadran al
 // centavo. Lo único nuevo es 'aportaciones', que aquí no se importa — se avisa abajo en vez de
 // tragárselo en silencio.
-const CORTES_VERSIONES_OK = [1, 2, 3];
+// Cada versión de Manejo de Cortes agregó un campo, nunca cambió el significado de los que ya
+// había — por eso el lector es agnóstico a la versión y lee todo por nombre.
+// La v3 trajo `aportaciones` y la v4 trae `egresos[].proveedor`. Antes de aceptar una versión
+// nueva hay que ver QUÉ agregó: con la v3 esta pantalla solo AVISABA de las aportaciones en vez
+// de sumarlas, y el saldo salía corto por esa cantidad sin que nada lo dijera. Un campo nuevo
+// que se ignora en silencio es el error que no se puede repetir.
+const CORTES_VERSIONES_OK = [1, 2, 3, 4];
 const CORTES_STORAGE_PREFIJO = "cortes";
 function _esFechaISO(s){ return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
 function _esNum(x){ return typeof x === "number" && isFinite(x); }
@@ -12385,6 +12391,16 @@ function avisosControlCortes(obj){
     if(Math.abs(cont.total - aEntregar) >= 0.01) av.push(`El efectivo contado (${fmt(cont.total)}) difiere del efectivo a entregar calculado (${fmt(aEntregar)}) por ${fmt(Math.abs(cont.total-aEntregar))}. Es una diferencia a resolver, no un error del archivo.`);
   }
   return av;
+}
+
+// El proveedor de un egreso de caja. Hasta la v3 el archivo no lo traía y había que DEDUCIRLO
+// del concepto, que es texto libre escrito por la cajera: "COMPRA SAMS TELERAS" acababa siendo
+// el nombre de un proveedor, y así se llenó el catálogo de nombres que no son proveedores.
+// La v4 lo manda aparte. Cuando venga se usa; cuando no —todo v1-v3, y también los renglones de
+// v4 que lo traigan vacío— se sigue deduciendo igual que siempre.
+function proveedorDeEgresoCorte(e){
+  const explicito = String((e && e.proveedor) || "").trim();
+  return canonizarProveedor(explicito || String((e && e.concepto) || ""));
 }
 
 // Folios ya presentes en el estado, para no volver a importar lo mismo. Los cortes importados
@@ -13020,7 +13036,7 @@ function construirImportacionCortes(d, previos, autor, base){
       nR++;
     } else {   // gasto en efectivo
       const monto = parseFloat(e.monto)||0;
-      gastos.push({ id:nuevoId(), proveedor:canonizarProveedor(e.concepto||""), fecha:e.fecha,
+      gastos.push({ id:nuevoId(), proveedor:proveedorDeEgresoCorte(e), fecha:e.fecha,
         factura:String(e.comprobante||"").trim(), importe:monto, montoCaja:monto,
         categoria:canonizarCategoria(e._cat||"Otro"), notas:e.autoriza?("Autoriza: "+e.autoriza):"", esOtro:false,
         respaldo:null, formaPago:"caja_cortes", vencimiento:"", estadoPago:"pagado",
