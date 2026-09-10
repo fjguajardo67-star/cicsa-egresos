@@ -1,0 +1,385 @@
+{
+  "version": 4,
+  "app": "cicsa-cortes-caja",
+  "periodo": {
+    "ini": "2026-08-29",
+    "fin": "2026-09-01"
+  },
+  "emitido": "2026-09-10T21:00:06.476Z",
+  "saldoInicial": -1212.58,
+  "cortes": [
+    {
+      "folio": "RCE-2026-00285",
+      "fecha": "2026-08-29",
+      "cajera": "ANDREA",
+      "turno": "RUTA 2",
+      "boletos25": 875,
+      "contratistas": 160,
+      "otrosIngresos": 55,
+      "terminal": 0,
+      "total": 1090
+    },
+    {
+      "folio": "RCE-2026-00286",
+      "fecha": "2026-08-29",
+      "cajera": "JOVANNI",
+      "turno": "RUTA 1",
+      "boletos25": 550,
+      "contratistas": 160,
+      "otrosIngresos": 120,
+      "terminal": 0,
+      "total": 830
+    },
+    {
+      "folio": "RCE-2026-00287",
+      "fecha": "2026-08-29",
+      "cajera": "ERIKA",
+      "turno": "1ERO",
+      "boletos25": 1950,
+      "contratistas": 960,
+      "otrosIngresos": 5830,
+      "terminal": 80,
+      "total": 8740
+    },
+    {
+      "folio": "RCE-2026-00288",
+      "fecha": "2026-08-29",
+      "cajera": "DIEGO",
+      "turno": "RUTA 3",
+      "boletos25": 550,
+      "contratistas": 240,
+      "otrosIngresos": 0,
+      "terminal": 0,
+      "total": 790
+    },
+    {
+      "folio": "RCE-2026-00289",
+      "fecha": "2026-08-29",
+      "cajera": "JANE",
+      "turno": "2DO",
+      "boletos25": 2050,
+      "contratistas": 480,
+      "otrosIngresos": 1240,
+      "terminal": 0,
+      "total": 3770
+    },
+    {
+      "folio": "RCE-2026-00290",
+      "fecha": "2026-08-29",
+      "cajera": "CLAUDIA",
+      "turno": "3ERO",
+      "boletos25": 350,
+      "contratistas": 80,
+      "otrosIngresos": 165,
+      "terminal": 0,
+      "total": 595
+    },
+    {
+      "folio": "RCE-2026-00291",
+      "fecha": "2026-08-30",
+      "cajera": "MARLEN",
+      "turno": "1ERO",
+      "boletos25": 1050,
+      "contratistas": 560,
+      "otrosIngresos": 800,
+      "terminal": 80,
+      "total": 2410
+    },
+    {
+      "folio": "RCE-2026-00292",
+      "fecha": "2026-08-30",
+      "cajera": "DIEGO",
+      "turno": "RUTA 1",
+      "boletos25": 1000,
+      "contratistas": 0,
+      "otrosIngresos": 160,
+      "terminal": 0,
+      "total": 1160
+    },
+    {
+      "folio": "RCE-2026-00293",
+      "fecha": "2026-08-30",
+      "cajera": "JANE",
+      "turno": "2DO",
+      "boletos25": 1325,
+      "contratistas": 1120,
+      "otrosIngresos": 905,
+      "terminal": 160,
+      "total": 3350
+    },
+    {
+      "folio": "RCE-2026-00294",
+      "fecha": "2026-08-30",
+      "cajera": "DIEGO",
+      "turno": "RUTA 3",
+      "boletos25": 75,
+      "contratistas": 80,
+      "otrosIngresos": 60,
+      "terminal": 0,
+      "total": 215
+    },
+    {
+      "folio": "RCE-2026-00295",
+      "fecha": "2026-08-30",
+      "cajera": "ESMERALDA",
+      "turno": "3ERO",
+      "boletos25": 425,
+      "contratistas": 0,
+      "otrosIngresos": 415,
+      "terminal": 0,
+      "total": 840
+    },
+    {
+      "folio": "RCE-2026-00296",
+      "fecha": "2026-08-31",
+      "cajera": "JOVANNI",
+      "turno": "RUTA 1",
+      "boletos25": 775,
+      "contratistas": 240,
+      "otrosIngresos": 63,
+      "terminal": 0,
+      "total": 1078
+    },
+    {
+      "folio": "RCE-2026-00297",
+      "fecha": "2026-08-31",
+      "cajera": "ERIKA",
+      "turno": "RUTA 2",
+      "boletos25": 1325,
+      "contratistas": 0,
+      "otrosIngresos": 65,
+      "terminal": 0,
+      "total": 1390
+    },
+    {
+      "folio": "RCE-2026-00298",
+      "fecha": "2026-08-31",
+      "cajera": "MARLEN",
+      "turno": "1ERO",
+      "boletos25": 5400,
+      "contratistas": 2240,
+      "otrosIngresos": 3075,
+      "terminal": 160,
+      "total": 10715
+    },
+    {
+      "folio": "RCE-2026-00299",
+      "fecha": "2026-08-31",
+      "cajera": "JOVANNI",
+      "turno": "RUTA 3",
+      "boletos25": 825,
+      "contratistas": 0,
+      "otrosIngresos": 180,
+      "terminal": 0,
+      "total": 1005
+    },
+    {
+      "folio": "RCE-2026-00300",
+      "fecha": "2026-08-31",
+      "cajera": "JANE",
+      "turno": "2DO",
+      "boletos25": 1925,
+      "contratistas": 640,
+      "otrosIngresos": 2335,
+      "terminal": 0,
+      "total": 4900
+    },
+    {
+      "folio": "RCE-2026-00301",
+      "fecha": "2026-08-31",
+      "cajera": "CLAUDIA",
+      "turno": "3ERO",
+      "boletos25": 475,
+      "contratistas": 320,
+      "otrosIngresos": 36,
+      "terminal": 130,
+      "total": 831
+    },
+    {
+      "folio": "RCE-2026-00302",
+      "fecha": "2026-09-01",
+      "cajera": "ERIKA",
+      "turno": "RUTA 1",
+      "boletos25": 750,
+      "contratistas": 480,
+      "otrosIngresos": 30,
+      "terminal": 0,
+      "total": 1260
+    },
+    {
+      "folio": "RCE-2026-00303",
+      "fecha": "2026-09-01",
+      "cajera": "DIEGO",
+      "turno": "RUTA 2",
+      "boletos25": 750,
+      "contratistas": 80,
+      "otrosIngresos": 10,
+      "terminal": 0,
+      "total": 840
+    },
+    {
+      "folio": "RCE-2026-00304",
+      "fecha": "2026-09-01",
+      "cajera": "MARLEN",
+      "turno": "1ERO",
+      "boletos25": 5875,
+      "contratistas": 2320,
+      "otrosIngresos": 3325,
+      "terminal": 240,
+      "total": 11520
+    },
+    {
+      "folio": "RCE-2026-00305",
+      "fecha": "2026-09-01",
+      "cajera": "JANE",
+      "turno": "2DO",
+      "boletos25": 1825,
+      "contratistas": 1280,
+      "otrosIngresos": 2295,
+      "terminal": 0,
+      "total": 5400
+    },
+    {
+      "folio": "RCE-2026-00306",
+      "fecha": "2026-09-01",
+      "cajera": "KARLA",
+      "turno": "RUTA 3",
+      "boletos25": 450,
+      "contratistas": 880,
+      "otrosIngresos": 55,
+      "terminal": 0,
+      "total": 1385
+    },
+    {
+      "folio": "RCE-2026-00307",
+      "fecha": "2026-09-01",
+      "cajera": "CLAUDIA",
+      "turno": "3ERO",
+      "boletos25": 400,
+      "contratistas": 160,
+      "otrosIngresos": 15,
+      "terminal": 0,
+      "total": 575
+    }
+  ],
+  "egresos": [
+    {
+      "folio": "EGR-2026-00043",
+      "fecha": "2026-08-31",
+      "proveedor": "",
+      "concepto": "ADELANTO DE NOMINA MARLEN",
+      "comprobante": "131867",
+      "autoriza": "DIANA IBARRA",
+      "monto": 1000,
+      "clase": "gasto"
+    },
+    {
+      "folio": "EGR-2026-00044",
+      "fecha": "2026-09-01",
+      "proveedor": "",
+      "concepto": "COMPRA SAMS TELERAS",
+      "comprobante": "ICAJG472779",
+      "autoriza": "DIANA IBARRA",
+      "monto": 110.46,
+      "clase": "gasto"
+    },
+    {
+      "folio": "EGR-2026-00045",
+      "fecha": "2026-09-01",
+      "proveedor": "",
+      "concepto": "COMPRA SAMS",
+      "comprobante": "ICSJG472781",
+      "autoriza": "DIANA IBARRA",
+      "monto": 22552,
+      "clase": "gasto"
+    },
+    {
+      "folio": "EGR-2026-00046",
+      "fecha": "2026-09-01",
+      "proveedor": "",
+      "concepto": "PAGO PEGADO DE BOLETOS",
+      "comprobante": "00001",
+      "autoriza": "DIANA IBARRA",
+      "monto": 2650,
+      "clase": "gasto"
+    },
+    {
+      "folio": "EGR-2026-00047",
+      "fecha": "2026-09-01",
+      "proveedor": "",
+      "concepto": "ADELANTO DE NOMINA NORA SOLORIO",
+      "comprobante": "131868",
+      "autoriza": "DIANA IBARRA",
+      "monto": 3000,
+      "clase": "gasto"
+    },
+    {
+      "folio": "EGR-2026-00048",
+      "fecha": "2026-09-01",
+      "proveedor": "",
+      "concepto": "RENTA CASA ING FRANCISCO",
+      "comprobante": "00001",
+      "autoriza": "FRANCISCO GUAJARDO",
+      "monto": 15555,
+      "clase": "gasto"
+    }
+  ],
+  "aportaciones": [],
+  "conteo": {
+    "capturado": true,
+    "denominaciones": [
+      {
+        "denominacion": 500,
+        "cantidad": 20,
+        "total": 10000
+      },
+      {
+        "denominacion": 200,
+        "cantidad": 26,
+        "total": 5200
+      },
+      {
+        "denominacion": 100,
+        "cantidad": 26,
+        "total": 2600
+      },
+      {
+        "denominacion": 50,
+        "cantidad": 13,
+        "total": 650
+      },
+      {
+        "denominacion": 20,
+        "cantidad": 4,
+        "total": 80
+      },
+      {
+        "denominacion": 10,
+        "cantidad": 7,
+        "total": 70
+      },
+      {
+        "denominacion": 5,
+        "cantidad": 1,
+        "total": 5
+      },
+      {
+        "denominacion": 1,
+        "cantidad": 3,
+        "total": 3
+      }
+    ],
+    "monedasSueltas": 0.96,
+    "total": 18608.96
+  },
+  "totales": {
+    "boletos25": 30975,
+    "contratistas": 12480,
+    "otrosIngresos": 21234,
+    "terminal": 850,
+    "efectivo": 64689,
+    "egresos": 44867.46,
+    "aportaciones": 0,
+    "efectivoAEntregar": 18608.96
+  }
+}
