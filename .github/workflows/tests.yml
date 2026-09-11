@@ -1,0 +1,23 @@
+name: Pruebas de CICSA
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip check
+      - run: node tests/run_js_tests.js
+      - run: node tests/security_sync_tests.js
+      - run: python -m unittest discover -s tests -p 'test*.py'
+      # Proceso separado: las pruebas heredadas de Gmail sustituyen módulos de Google.
+      - run: python tests/backend_authorization_checks.py

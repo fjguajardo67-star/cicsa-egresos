@@ -4,8 +4,9 @@ Servidor local v3.0
 """
 import anthropic, base64, json, os, sys, threading, webbrowser, signal, shutil
 from pathlib import Path
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, g
 from flask_cors import CORS
+from auth_cicsa import approved_member, ADMIN_ENDPOINTS
 
 
 try:
@@ -30,25 +31,23 @@ app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 # (quemando tokens de Anthropic de la cuenta) y bajar las facturas de Gmail. El frontend
 # manda "Authorization: Bearer <idToken>" (usuario logueado en Firebase) y aquí se verifica
 # la firma contra los certificados públicos de Google — no requiere service account; usa
-# google-auth, que ya es dependencia del módulo de Gmail. En uso local no aplica.
-from functools import wraps
+# google-auth, que ya es dependencia del módulo de Gmail. También se exige en local.
+from functools import wraps, partial
 FIREBASE_PROJECT_ID = "cicsa-egresos"
 _google_verifier_request = None
 
 def require_auth(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        if not IS_RAILWAY:
-            return fn(*args, **kwargs)
         authz = request.headers.get("Authorization", "")
-        if not authz.startswith("Bearer "):
+        if not authz.startswith("Bearer ") or not authz[7:].strip() or len(authz) > 8192:
             return jsonify({"error": "Sesión requerida — inicia sesión y vuelve a intentar."}), 401
         try:
             global _google_verifier_request
             import google.auth.transport.requests as _gareq
             from google.oauth2 import id_token as _gid
             if _google_verifier_request is None:
-                _google_verifier_request = _gareq.Request()
+                _google_verifier_request = partial(_gareq.Request(), timeout=10)
             claims = _gid.verify_firebase_token(
                 authz[len("Bearer "):], _google_verifier_request,
                 audience=FIREBASE_PROJECT_ID, clock_skew_in_seconds=10)
@@ -56,6 +55,15 @@ def require_auth(fn):
                 raise ValueError("token inválido")
         except Exception:
             return jsonify({"error": "Sesión inválida o expirada — vuelve a iniciar sesión."}), 401
+        try:
+            g.member = approved_member(claims, authz[7:])
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 403
+        except Exception:
+            app.logger.warning("No se pudo verificar la autorización del usuario")
+            return jsonify({"error": "No se pudo comprobar tu acceso. Intenta de nuevo."}), 503
+        if fn.__name__ in ADMIN_ENDPOINTS and g.member["role"] != "admin":
+            return jsonify({"error": "Esta acción requiere una cuenta administradora."}), 403
         return fn(*args, **kwargs)
     return wrapper
 
@@ -430,6 +438,7 @@ def gmail_debug():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/gmail-status", methods=["GET"])
+@require_auth
 def gmail_status():
     from pathlib import Path
     # En Railway no hay archivos locales — Gmail se autoriza vía la variable de entorno
@@ -448,6 +457,7 @@ def gmail_status():
 # del servidor si traía más gastos. En producción la fuente durable es Firestore (con auth),
 # así que aquí se apagan; el frontend ya tolera su ausencia (timeout + fallback a Firestore).
 @app.route("/save-state", methods=["POST"])
+@require_auth
 def save_state():
     if IS_RAILWAY:
         return jsonify({"error": "deshabilitado en producción — el estado vive en Firestore"}), 404
@@ -465,6 +475,7 @@ def save_state():
 
 # ── /load-state  (restore state from local file) ──────────────────────────────
 @app.route("/load-state", methods=["GET"])
+@require_auth
 def load_state():
     if IS_RAILWAY:
         return jsonify({"error": "deshabilitado en producción — el estado vive en Firestore"}), 404
@@ -750,7 +761,7 @@ def precios_ingredientes_options():
 # ── /status ────────────────────────────────────────────────────────────────────
 @app.route("/status")
 def status():
-    return jsonify({"ok":True, "api_key_set":bool(os.environ.get("ANTHROPIC_API_KEY")), "version":"3.0"})
+    return jsonify({"ok":True, "api_key_set":bool(os.environ.get("ANTHROPIC_API_KEY")), "version":"3.0", "security_release":"authorization-v1"})
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def load_api_key():
