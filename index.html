@@ -598,6 +598,8 @@ body.snav-min .side-theme span { display:none; }
 :root[data-theme="dark"] #page-resumen #rsAvisoSemana .go { color:var(--dk-gold) !important; }
 :root[data-theme="dark"] #buildBadge { background:var(--dk-surface2); border-color:var(--dk-border); color:var(--dk-ink2); }
 </style>
+<link rel="stylesheet" href="assets/workspace.css?v=20260911-3">
+<script src="assets/workspace.js" integrity="sha384-KPZJPA9xLRf7T354MrqOF9ZpbxkfCh/RqFLg/UtG0qp+x6HDQEQ8VNq8CKyV5mju" defer></script>
 </head>
 <body>
 <div id="avisoFallos" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:100000;background:var(--red);color:#fff;padding:10px 14px;font-size:12.5px;box-shadow:0 -2px 10px rgba(0,0,0,.25)"></div>
@@ -2064,9 +2066,11 @@ const SERVER = IS_LOCAL
 const _fetchSinAuth = window.fetch.bind(window);
 window.fetch = async function(url, opts){
   try {
-    if(typeof url === "string" && url.startsWith(SERVER) && typeof auth !== "undefined" && auth.currentUser){
+    if(typeof url === "string" && new URL(url, location.href).origin === new URL(SERVER).origin && typeof auth !== "undefined" && auth.currentUser){
       const token = await auth.currentUser.getIdToken();
-      opts = { ...(opts||{}), headers: { ...((opts||{}).headers||{}), "Authorization": "Bearer " + token } };
+      const headers = new Headers(opts?.headers || {});
+      headers.set("Authorization", "Bearer " + token);
+      opts = { ...(opts||{}), headers, signal: opts?.signal || AbortSignal.timeout(100000) };
     }
   } catch(e){ /* sin sesión → la llamada sale sin token y el servidor decide */ }
   return _fetchSinAuth(url, opts);
@@ -2467,12 +2471,23 @@ async function cargarThumbReal(gastoId, url, wrapElId){
   } catch(e){ console.warn("cargarThumbReal error:", e); }
 }
 
-async function fbGet(path) {
-  const r = await fetch(`${FB_BASE}/${path}?key=${FB_KEY}`, { headers: await fbAuthHeader() });
-  if(!r.ok) return null;
+let _syncBase = null;
+async function fbGetSnapshot(path) {
+  const r = await fetch(`${FB_BASE}/${path}?key=${FB_KEY}`, {
+    headers: await fbAuthHeader(), signal: AbortSignal.timeout(15000)
+  });
+  if(r.status===404) return {data:null, exists:false, updateTime:null};
+  if(!r.ok) throw new Error(`No se pudo leer ${path} (${r.status}). No se sobrescribirá la nube.`);
   const d = await r.json();
-  if(d.fields?.json?.stringValue) return JSON.parse(d.fields.json.stringValue);
-  return null;
+  const data = d.fields?.json?.stringValue ? JSON.parse(d.fields.json.stringValue) : null;
+  if(!d.updateTime) throw new Error("No se recibió la versión del documento.");
+  return {data, exists:true, updateTime:d.updateTime};
+}
+async function fbGet(path) {
+  const snapshot = await fbGetSnapshot(path);
+  if(path==='estado/cicsa' && _syncBase===null && snapshot.data)
+    _syncBase=JSON.parse(JSON.stringify(snapshot.data));
+  return snapshot.data;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2533,8 +2548,14 @@ function pintarAvisoFallos(){
     </div>`;
 }
 
-async function fbSet(path, data) {
-  const r = await fetch(`${FB_BASE}/${path}?key=${FB_KEY}`, {
+async function fbSet(path, data, expected) {
+  if(path==='estado/cicsa' && !expected)
+    throw new Error("El guardado necesita una versión de la nube. Sincroniza e intenta de nuevo.");
+  const precondition = expected ? (expected.exists
+    ? '&currentDocument.updateTime='+encodeURIComponent(expected.updateTime)
+    : '&currentDocument.exists=false') : '';
+  const r = await fetch(`${FB_BASE}/${path}?key=${FB_KEY}${precondition}`, {
+    signal: AbortSignal.timeout(15000),
     method: 'PATCH',
     headers: {'Content-Type': 'application/json', ...(await fbAuthHeader())},
     body: JSON.stringify({
@@ -2545,6 +2566,10 @@ async function fbSet(path, data) {
     })
   });
   // Antes no se miraba r.ok: un 403 pasaba por guardado bueno.
+  if(r && (r.status===409 || r.status===412)){
+    const error=new Error("Otra persona guardó cambios. Se volverá a leer la versión más reciente.");
+    error.conflict=true; throw error;
+  }
   if(r && r.ok === false){
     const pista = pistaFallo(r.status);
     _anotarFallo(`guardar ${path}`, `el servidor respondió ${r.status}${pista?" — "+pista:""}`);
@@ -2593,7 +2618,7 @@ function resumenEstado(st){
 
 async function guardarRespaldo(id, st){
   const meta = resumenEstado(st);
-  const r = await fetch(`${FB_BASE}/${RESPALDOS_COL}/${encodeURIComponent(id)}?key=${FB_KEY}`, {
+  const r = await fetch(`${FB_BASE}/${RESPALDOS_COL}/${encodeURIComponent(id)}?key=${FB_KEY}&currentDocument.exists=false`, {
     method: "PATCH",
     headers: {"Content-Type":"application/json", ...(await fbAuthHeader())},
     body: JSON.stringify({ fields: {
@@ -2602,6 +2627,7 @@ async function guardarRespaldo(id, st){
       meta: { stringValue: JSON.stringify(meta) },
     }})
   });
+  if(r.status===409 || r.status===412) return meta;
   if(!r.ok) throw new Error(`Firestore respondió ${r.status}`);
   await indiceAgregar({ id, ts:new Date().toISOString(), ...meta });
   return meta;
@@ -2696,8 +2722,11 @@ async function migrarRespaldosViejos(){
     for(const id of viejos){
       const st = await fbGet("estado/"+id);
       // Solo se borra el original si la copia nueva quedó bien.
-      if(_estadoValido(st)){ await guardarRespaldo(id, st); movidos++; }
-      await fbDeleteDoc("estado", id);
+      if(_estadoValido(st)){
+        await guardarRespaldo(id, st);
+        await fbDeleteDoc("estado", id);
+        movidos++;
+      }
     }
     if(movidos) console.log(`Respaldos mudados a la colección propia: ${movidos}`);
     return movidos;
@@ -2736,12 +2765,17 @@ async function respaldoAutomatico(){
 // que dos capturas simultáneas no se pisen), pero al restaurar eso es justo lo contrario de lo
 // que se quiere: la fusión resucitaría lo que el respaldo no trae.
 async function escribirEstadoDirecto(st){
-  clearTimeout(_syncTimer); _syncPending = false;
-  let vueltas = 0;
-  while(_syncing && vueltas++ < 100) await new Promise(r=>setTimeout(r, 100));   // deja terminar el que ya iba
-  state = st;
-  localStorage.setItem("cicsa_egresos", JSON.stringify(state));
-  await fbSet("estado/cicsa", state);
+  clearTimeout(_syncTimer);
+  _restoring=true;
+  try{
+    let waits=0;
+    while(_syncing && waits++<150) await new Promise(r=>setTimeout(r,100));
+    if(_syncing) throw new Error("Hay un guardado en curso. Espera a que termine antes de restaurar.");
+    const snapshot=await fbGetSnapshot("estado/cicsa");
+    await fbSet("estado/cicsa",st,snapshot);
+    state=st; _syncBase=JSON.parse(JSON.stringify(st)); _syncPending=false;
+    localStorage.setItem("cicsa_egresos",JSON.stringify(state));
+  }finally{ _restoring=false; }
 }
 
 // Una sola puerta para recargar: deja el punto de recarga en un lugar nombrado y aislable.
@@ -2931,39 +2965,70 @@ function refrescarVistaActual(forzar){
 
 // Guardado a Firestore serializado + con rebote: lee-fusiona-escribe, uno a la vez, para que
 // dos guardados rápidos (o de dos dispositivos) no se pisen.
-let _syncTimer=null, _syncing=false, _syncPending=false, _syncUltimo=0;
-function programarSync(){ _syncPending=true; clearTimeout(_syncTimer); _syncTimer=setTimeout(ejecutarSync, 350); }
+let _syncTimer=null, _syncing=false, _syncPending=false, _syncUltimo=0, _restoring=false;
+function programarSync(){
+  _syncPending=true;
+  clearTimeout(_syncTimer); _syncTimer=setTimeout(ejecutarSync,350);
+  if(typeof actualizarEstadoCaptura==='function') actualizarEstadoCaptura();
+}
+function fusionTresVias(base, local, remote, path="estado"){
+  const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+  if(same(local,base)) return remote;
+  if(same(remote,base) || same(local,remote)) return local;
+  if(Array.isArray(base)&&Array.isArray(local)&&Array.isArray(remote) &&
+     [...base,...local,...remote].every(x=>x&&typeof x==='object'&&x.id!=null)){
+    const map=a=>new Map(a.map(x=>[String(x.id),x]));
+    const b=map(base),l=map(local),r=map(remote),out=[];
+    for(const id of new Set([...b.keys(),...l.keys(),...r.keys()])){
+      const value=fusionTresVias(b.get(id),l.get(id),r.get(id),path+"."+id);
+      if(value!==undefined) out.push(value);
+    }
+    return out;
+  }
+  if(base && local && remote &&
+     [base,local,remote].every(x=>typeof x==='object'&&!Array.isArray(x))){
+    const out={};
+    for(const key of new Set([...Object.keys(base),...Object.keys(local),...Object.keys(remote)])){
+      const value=fusionTresVias(base[key],local[key],remote[key],path+"."+key);
+      if(value!==undefined) out[key]=value;
+    }
+    return out;
+  }
+  throw new Error("Conflicto en "+path+". Conservamos tus cambios en este dispositivo; revisa antes de sincronizar.");
+}
 async function ejecutarSync(){
-  if(_syncing || !_syncPending) return;
+  if(_syncing || _restoring || !_syncPending) return;
   _syncing=true; _syncPending=false;
+  let failed=false;
   try{
-    let remote=null;
-    try{ remote = await fbGet('estado/cicsa'); }catch(_){}
-    const _antes = _firmaEstado(state);
-    const _remotoJson = remote ? JSON.stringify(remote) : null;
-    if(remote && Array.isArray(remote.weeks)) state = mergeEstados(remote, state);
-    const _trajoAlgo = _firmaEstado(state) !== _antes;
-    const _localJson = JSON.stringify(state);
-    // Un temporizador llama a save() cada minuto haya cambios o no, así que la mayoría de las
-    // vueltas suben exactamente lo mismo que ya está en la nube. Escribir de más no cuesta
-    // dinero a este volumen, pero cada escritura es otra oportunidad de que dos dispositivos
-    // choquen: se lee, se fusiona y se escribe SIN comprobar que nadie escribió en medio, así
-    // que el segundo en llegar puede borrar lo que el primero acababa de agregar. Menos
-    // escrituras, ventana más estrecha.
-    // Se compara el estado serializado completo, no la firma de pantalla: esa sólo mira
-    // weeks/budget/cajaSaldoInicial y dejaría fuera cosas como los excluidos o los borrados.
-    if(hayQueSubir(_remotoJson, _localJson)) await fbSet('estado/cicsa', state);
-    localStorage.setItem("cicsa_egresos", _localJson);
-    _syncUltimo = Date.now();
-    // Solo se repinta si la nube trajo algo que no teníamos.
-    if(_trajoAlgo) refrescarVistaActual();
-    pintarSyncBadge();
+    for(let attempt=0;attempt<3;attempt++){
+      const snapshot=await fbGetSnapshot('estado/cicsa');
+      const local=JSON.parse(JSON.stringify(state));
+      const remote=snapshot.data;
+      const merged=remote ? (_syncBase ? fusionTresVias(_syncBase,local,remote) : mergeEstados(remote,local)) : local;
+      if(JSON.stringify(merged)!==JSON.stringify(remote)){
+        try{ await fbSet('estado/cicsa',merged,snapshot); }
+        catch(e){ if(e.conflict&&attempt<2) continue; throw e; }
+      }
+      const changedDuringWrite=JSON.stringify(state)!==JSON.stringify(local);
+      _syncBase=JSON.parse(JSON.stringify(merged));
+      if(changedDuringWrite){
+        state=fusionTresVias(local,state,merged);
+        _syncPending=true;
+      }else state=merged;
+      localStorage.setItem("cicsa_egresos",JSON.stringify(state));
+      _syncUltimo=Date.now();
+      if(JSON.stringify(local)!==JSON.stringify(state)) refrescarVistaActual();
+      pintarSyncBadge();
+      break;
+    }
   }catch(e){
-    console.warn("sync error:", e);
-    try{ await fbSet('estado/cicsa', state); }catch(_){}   // al menos sube lo local
+    failed=true; _syncPending=true;
+    _anotarFallo("sincronizar gastos",e.message||"No se pudo guardar. Intenta de nuevo.");
   }finally{
     _syncing=false;
-    if(_syncPending) ejecutarSync();
+    if(typeof actualizarEstadoCaptura==='function') actualizarEstadoCaptura();
+    if(_syncPending&&!failed) programarSync();
   }
 }
 
@@ -3024,7 +3089,7 @@ function save() {
   // Firestore con lee-fusiona-escribe (no pisa lo que otro dispositivo haya capturado).
   programarSync();
 }
-setInterval(()=>{ if(state.weeks&&state.weeks.length>0) save(); }, 60000);
+setInterval(()=>{ if(!document.hidden && state.weeks?.length) programarSync(); },60000);
 
 // Cuánto hace que este dispositivo habló con la nube. Antes no había forma de saberlo: si otro
 // capturaba algo, no aparecía y no había manera de distinguir "no hay nada" de "no me he
@@ -3704,15 +3769,18 @@ async function handleFile(file){
     preview.src=capturedDataURL; preview.style.display="block";
   } else if(file.type==="application/pdf"){
     const ab=await file.arrayBuffer();
-    capturedB64=btoa(String.fromCharCode(...new Uint8Array(ab)));
+    capturedB64=(await _leerArchivoDataURL(file)).split(",")[1];
     try {
       pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-      const pdfDoc=await pdfjsLib.getDocument({data:ab}).promise;
+      const loadingTask=pdfjsLib.getDocument({data:ab,isEvalSupported:false});
+      try {
+      const pdfDoc=await loadingTask.promise;
       const page=await pdfDoc.getPage(1);
       const vp=page.getViewport({scale:1.5});
       const canvas=document.createElement("canvas"); canvas.width=vp.width; canvas.height=vp.height;
       await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
       capturedDataURL=canvas.toDataURL("image/jpeg",0.85); preview.src=capturedDataURL; preview.style.display="block";
+      } finally { await loadingTask.destroy(); }
     } catch(e){ capturedDataURL=null; preview.style.display="none"; }
   } else { preview.style.display="none"; capturedDataURL=null; capturedB64=null; }
   document.getElementById("btnLeer").disabled=false;
@@ -4225,6 +4293,7 @@ function guardarGasto(){
   document.getElementById("fCategoria").selectedIndex=0;
   document.getElementById("otroField").style.display="none";
   document.getElementById("fFecha").value=todayStr();
+  document.dispatchEvent(new CustomEvent("cicsa:gasto-registrado", {detail:{id:gasto.id}}));
 }
 
 function guardarManual(){
@@ -10409,11 +10478,13 @@ function resumenGmail(enRango, nuevas, yaRevisadas, dias){
          (yaRevisadas ? ` · ${yaRevisadas} ya revisadas antes (puedes ocultarlas o “Leer igual”)` : "") + ".";
 }
 
-async function fetchGmail(includeSeen=false){
+let gmailNextPage = null;
+async function fetchGmail(includeSeen=false, continuar=false){
+  if(!continuar) gmailNextPage=null;
   document.getElementById("btnGmailFetch").disabled=true;
   setStatus("gmailStatus", includeSeen?"📬 Revisando Gmail (incluyendo ya revisadas)…":"📬 Revisando Gmail…","loading");
   document.getElementById("gmailInboxCard").style.display="none";
-  try{const days=parseInt(document.getElementById("gmailDays").value,10)||30,resp=await fetch(SERVER+"/gmail-fetch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({days_back:days, include_seen:includeSeen})}),data=await resp.json();if(!resp.ok)throw new Error(data.error||"Error");
+  try{const days=parseInt(document.getElementById("gmailDays").value,10)||30,resp=await fetch(SERVER+"/gmail-fetch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({days_back:days, include_seen:includeSeen, page_token:continuar?gmailNextPage:null})}),data=await resp.json();if(!resp.ok)throw new Error(data.error||"Error");
     // Los nuevos se agregan a los que ya estaban pendientes (no procesados) de un escaneo
     // anterior, en vez de reemplazarlos — así no se pierden si quedaron a medias. Se deduplica
     // por nombre de archivo (que incluye el msg_id) para que "incluir ya revisadas" no muestre
@@ -10424,14 +10495,21 @@ async function fetchGmail(includeSeen=false){
     const previos=gmailItems.filter(i=>!i._done), vistos=new Set(previos.map(i=>i.filename));
     const nuevos=(data.items||[]).filter(i=>!vistos.has(i.filename));
     gmailItems=[...previos, ...nuevos];
+    gmailNextPage=data.next_page_token || null;
+    let siguiente=document.getElementById("gmailNextPage");
+    if(!siguiente){siguiente=document.createElement("button");siguiente.id="gmailNextPage";siguiente.className="btn btn-light";document.getElementById("btnGmailFetch").after(siguiente);}
+    siguiente.textContent="Cargar siguientes correos";siguiente.hidden=!gmailNextPage;siguiente.disabled=false;
+    siguiente.onclick=()=>{siguiente.disabled=true;fetchGmail(includeSeen,true);};
     guardarGmailItemsLocal();
     await cargarGmailRevisados(true);   // fresco: otro del equipo pudo revisarlas hace un minuto
     const _marcados = filterGmailDuplicates(gmailItems);
     const _yaRev = _marcados.filter(i=>i._isDup).length;
     setStatus("gmailStatus", resumenGmail(gmailItems.length, _marcados.length - _yaRev, _yaRev, days), "ok");
+    if(data.failed_messages>0 || (data.complete===false && !gmailNextPage)){setStatus("gmailStatus","La revisión está incompleta. Algunos correos no pudieron cargarse; vuelve a consultar antes de dar el buzón por revisado.","err");}
+    if(gmailNextPage){document.getElementById("gmailStatus").append(document.createTextNode(" Hay más correos; carga la siguiente página."));}
     if(gmailItems.length){ renderGmailInbox(); document.getElementById("gmailInboxCard").style.display="block"; }
   }catch(err){setStatus("gmailStatus","❌ "+err.message,"err");}
-  document.getElementById("btnGmailFetch").disabled=false;
+  document.getElementById("btnGmailFetch").disabled=false; const nextPageButton=document.getElementById("gmailNextPage"); if(nextPageButton) nextPageButton.disabled=false;
 }
 
 async function renderGmailInbox(){
@@ -10481,7 +10559,7 @@ async function renderGmailInbox(){
       let pdfDoc=null;
       try{
         pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-        pdfDoc=await pdfjsLib.getDocument({data:_b64ABytes(item.data_b64)}).promise;
+        pdfDoc=await pdfjsLib.getDocument({data:_b64ABytes(item.data_b64),isEvalSupported:false}).promise;
         const page=await pdfDoc.getPage(1), vp=page.getViewport({scale:0.3});
         const canvas=document.getElementById(thumbId); if(!canvas) return;
         canvas.width=vp.width; canvas.height=vp.height;
@@ -10510,9 +10588,11 @@ function verAdjuntoGmail(idx){
   if(item.mime_type==="application/pdf"){
     try{
       const bytes=_b64ABytes(item.data_b64);
-      for(let i=0;i<raw.length;i++) bytes[i]=raw.charCodeAt(i);
+
       const blob=new Blob([bytes],{type:"application/pdf"});
-      window.open(URL.createObjectURL(blob), "_blank");
+      const url=URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener");
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
     }catch(e){ alert("❌ No se pudo abrir el PDF: "+e.message); }
     return;
   }
@@ -10535,7 +10615,7 @@ async function gmailProcessItem(idx){
     let pdfDoc=null;
     try{
       pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-      pdfDoc=await pdfjsLib.getDocument({data:_b64ABytes(item.data_b64)}).promise;
+      pdfDoc=await pdfjsLib.getDocument({data:_b64ABytes(item.data_b64),isEvalSupported:false}).promise;
       const page=await pdfDoc.getPage(1), vp=page.getViewport({scale:1.5}), canvas=document.createElement("canvas");
       canvas.width=vp.width; canvas.height=vp.height;
       await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
@@ -11082,7 +11162,7 @@ auth.onAuthStateChanged(async user => {
     // Rediseño F2: el chat arranca ABIERTO en pantallas grandes, salvo que este
     // dispositivo lo haya cerrado antes (preferencia en localStorage).
     try{
-      if(window.innerWidth>900 && !_chatOpen && localStorage.getItem("cicsa_chat_open")!=="0") toggleChat();
+      if(window.innerWidth>900 && !_chatOpen && localStorage.getItem("cicsa_chat_open")==="1") toggleChat();
     }catch(_){}
     iniciarActividadTracker();   // registra actividad solo si es operativo
 

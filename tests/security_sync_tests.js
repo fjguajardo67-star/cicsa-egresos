@@ -1,0 +1,23 @@
+/* Prueba la implementación real de la fusión, no una copia del algoritmo. */
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const html=fs.readFileSync(require('path').join(__dirname,'../index.html'),'utf8');
+const start=html.indexOf('function fusionTresVias('),end=html.indexOf('async function ejecutarSync()',start);
+assert(start>0 && end>start);
+const context={};vm.createContext(context);vm.runInContext(html.slice(start,end),context);
+const merge=(b,l,r)=>JSON.parse(JSON.stringify(context.fusionTresVias(b,l,r)));
+assert.deepStrictEqual(merge({a:1,b:1},{a:2,b:1},{a:1,b:3}),{a:2,b:3});
+assert.throws(()=>merge({a:1},{a:2},{a:3}),/Conflicto/);
+assert.deepStrictEqual(merge([{id:'1',importe:1}],[{id:'1',importe:2}],[{id:'1',importe:1},{id:'2',importe:3}]),[{id:'1',importe:2},{id:'2',importe:3}]);
+assert.deepStrictEqual(merge([{id:'1'}],[],[{id:'1'}]),[]);
+assert.throws(()=>merge([{id:'1',importe:1}],[],[{id:'1',importe:2}]),/Conflicto/);
+assert.deepStrictEqual(merge([], [{id:'a'}], [{id:'b'}]),[{id:'a'},{id:'b'}]);
+assert.throws(()=>merge({budget:10},{budget:20},{budget:30}),/Conflicto/);
+assert.deepStrictEqual(merge({a:1},{a:2},{a:2}),{a:2});
+const code=html.match(/<script>([\s\S]*)<\/script>/)[1];new vm.Script(code);
+const sources=[...html.matchAll(/pdfjsLib.getDocument\(([^\n]+)/g)];
+assert(sources.length===3 && sources.every(m=>m[1].includes('isEvalSupported:false')));
+assert(html.includes('currentDocument.updateTime=') && html.includes('attempt<3'));
+const asset=fs.readFileSync(require('path').join(__dirname,'../assets/workspace.js'));
+const digest=require('crypto').createHash('sha384').update(asset).digest('base64');
+assert(html.includes('sha384-'+digest),'SRI del módulo visual debe coincidir');
+console.log('12 comprobaciones de sincronización, PDF, sintaxis e integridad: correctas.');
