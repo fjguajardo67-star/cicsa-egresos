@@ -20,7 +20,7 @@ let stage='sesion';
   do{
     stage='listar_metadatos';
     const queryParams=new URLSearchParams({prefix:'cortes/',maxResults:'100',
-      fields:'items(name,metageneration,metadata/firebaseStorageDownloadTokens),nextPageToken'});
+      fields:'items(name,generation,metageneration,metadata/firebaseStorageDownloadTokens),nextPageToken'});
     if(pageToken) queryParams.set('pageToken',pageToken);
     const res=await client.get(`/b/${bucket}/o`,{...quiet,queryParams});
     for(const item of res.body.items||[]){
@@ -32,7 +32,8 @@ let stage='sesion';
         stage='retirar_enlace';
         await client.patch(`/b/${bucket}/o/${encodeURIComponent(item.name)}`,
           {metadata:{firebaseStorageDownloadTokens:null}},
-          {...quiet,queryParams:new URLSearchParams({ifMetagenerationMatch:String(item.metageneration),fields:'name,metageneration'})});
+          {...quiet,queryParams:new URLSearchParams({ifGenerationMatch:String(item.generation),
+            ifMetagenerationMatch:String(item.metageneration),fields:'name,metageneration'})});
         revoked++;
         stage='verificar_enlace_retirado';
         // No imprime ni registra URL, token ni contenido. Descarta el cuerpo inmediatamente.

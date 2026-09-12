@@ -41,6 +41,9 @@ async function main() {
   if (!legacy?.updateTime || !legacy.fields?.json?.stringValue) throw new Error('ORIGEN_INCOMPLETO');
   const original = JSON.parse(legacy.fields.json.stringValue);
   const parts = financial.split(original);
+  const indexDoc = await get('respaldos/_indice');
+  const previousIndex = indexDoc?.fields?.json?.stringValue ? JSON.parse(indexDoc.fields.json.stringValue) : [];
+  if (!Array.isArray(previousIndex)) throw new Error('INDICE_INVALIDO');
   // Comparación por contenido, no por orden de propiedades.
   const { isDeepStrictEqual } = require('node:util');
   const roundtrip = financial.compose(parts.operation, parts.budget, parts.cash);
@@ -76,8 +79,16 @@ async function main() {
   stage = 'commit_atomico';
   const ts = new Date().toISOString();
   const backup = `respaldos/respaldo-${ts.slice(0,10)}-antes-finanzas-v2`;
+  const meta = { semanas:original.weeks.length,
+    gastos:original.weeks.reduce((n,w)=>n+(w.gastos||[]).length,0),
+    cortes:original.weeks.reduce((n,w)=>n+(w.cortes||[]).length,0),
+    importe:Math.round(original.weeks.reduce((n,w)=>n+(w.gastos||[]).reduce((t,g)=>t+(parseFloat(g.importe)||0),0),0)*100)/100 };
+  const indexEntry = { id:backup.split('/')[1], ts, ...meta };
   const writes = [{ verify: `${base}/estado/cicsa`, currentDocument:{updateTime:legacy.updateTime} },
-    { update:{ name:`${base}/${backup}`, fields:legacy.fields }, currentDocument:{exists:false} },
+    { update:{ name:`${base}/${backup}`, fields:{...legacy.fields,ts:{stringValue:ts},meta:{stringValue:JSON.stringify(meta)}} }, currentDocument:{exists:false} },
+    { update:{name:`${base}/respaldos/_indice`,fields:{
+      json:{stringValue:JSON.stringify([indexEntry,...previousIndex])},ts:{stringValue:ts}
+    }},currentDocument:indexDoc ? {updateTime:indexDoc.updateTime} : {exists:false} },
     ...['operation','budget','cash'].map(scope=>({
       update:{name:`${base}/${financial.PATHS[scope]}`,fields:financial.envelope(parts[scope])},
       currentDocument:{exists:false}

@@ -15,7 +15,7 @@ function sandbox(role='admin'){
     _sessionGeneration:1,_financialReady:false,_syncBase:null,_syncPending:false,_syncing:false,_restoring:false,
     _legacyRecovery:null,state:{weeks:[],budget:{}},console,
     localStorage:{getItem:k=>m.get(k)||null,setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)},
-    programarSync:()=>{context._syncPending=true;},respaldoAutomatico:()=>{},
+    programarSync:()=>{context._syncPending=true;},respaldoAutomatico:()=>{},migrarCategorias:()=>{},
     descargarRecuperacionLocal:()=>{},alert:()=>{},_anotarFallo:()=>{},
     refrescarVistaActual:()=>{},pintarSyncBadge:()=>{},Date,JSON,Map,Set};
   vm.createContext(context);

@@ -3239,6 +3239,7 @@ async function initState() {
   }
   _financialReady=true;
   if(!state.activeWeek&&state.weeks.length) state.activeWeek=state.weeks[state.weeks.length-1].id;
+  migrarCategorias();
   guardarCacheOperativa();
   if(!CicsaFinancialAccess.equal(state,_syncBase)) programarSync();
   respaldoAutomatico();
@@ -11179,8 +11180,7 @@ auth.onAuthStateChanged(async user => {
     } catch(e) {
       // Antes, si la lectura fallaba se asumía "operativo" y se dejaba entrar. Con las reglas
       // nuevas esa persona queda dentro de una app donde TODO falla con permiso denegado y sin
-      // decirle por qué. Mejor decirlo y que reintente. El dueño entra igual —se identifica por
-      // UID, no por su registro— para que un fallo de red no lo deje fuera de su propia app.
+      // decirle por qué. También el dueño debe verificar su acceso; un error no concede rol.
       {
         console.warn("onAuthStateChanged: no se pudo leer usuarios/", e);
         await auth.signOut();
@@ -11223,8 +11223,7 @@ auth.onAuthStateChanged(async user => {
       }
     }
 
-    // Init app — initState() consulta Flask/Firestore ANTES de decidir si hace falta
-    // crear una semana nueva, para no sobreescribir datos reales con un estado vacío.
+    // Verificar lectura de operación y documentos financieros antes de habilitar la app.
     try {
       await initState();
       document.getElementById('loginScreen').classList.add('hidden');
