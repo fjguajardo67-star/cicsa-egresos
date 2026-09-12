@@ -5,7 +5,7 @@ import requests
 
 PROJECT = "cicsa-egresos"
 OWNER_UID = "NVapfgY8pshXwYbMq7Wz28ry3pC3"
-ADMIN_ENDPOINTS = frozenset({"gmail_renovar", "gmail_debug", "gmail_reset_seen"})
+ADMIN_ENDPOINTS = frozenset({"gmail_renovar", "gmail_debug", "gmail_reset_seen", "save_state", "load_state"})
 
 
 def approved_member(claims, token):

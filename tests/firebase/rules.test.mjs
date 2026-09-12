@@ -2,7 +2,9 @@ import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, setLogLevel } from 'firebase/firestore';
+import { doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, setLogLevel, writeBatch } from 'firebase/firestore';
+import { createMockUserToken } from '@firebase/util';
+import financial from '../../assets/financial-access.js';
 import { ref, uploadBytes, getMetadata, updateMetadata, deleteObject, listAll } from 'firebase/storage';
 
 const PROJECT = 'demo-cicsa-rules';
@@ -188,10 +190,15 @@ test('Facturas: límites de tamaño y archivo vacío', async () => {
 
 test('Cortes: reimportación JSON permitida; borrado y formatos controlados', async () => {
   const path = 'cortes/2026-09-01_2026-09-07.json';
-  await assertSucceeds(upload('staff', path, 'application/json'));
-  await assertSucceeds(upload('staff', path, 'application/json'));
-  await assertFails(upload('staff', path, 'text/html'));
-  await assertFails(upload('staff', path, 'application/json', new Uint8Array(5 * 1024 * 1024)));
+  await assertSucceeds(upload('admin', path, 'application/json'));
+  await assertSucceeds(upload('admin', path, 'application/json'));
+  for(const uid of ['staff','legacy',null,'outsider','inactiveAdmin']) {
+    await assertFails(upload(uid,path,'application/json'));
+    await assertFails(getMetadata(ref(storage(uid),path)));
+    await assertFails(listAll(ref(storage(uid),'cortes')));
+  }
+  await assertFails(upload('admin', path, 'text/html'));
+  await assertFails(upload('admin', path, 'application/json', new Uint8Array(5 * 1024 * 1024)));
   await assertFails(deleteObject(ref(storage('staff'), path)));
   await assertSucceeds(deleteObject(ref(storage('admin'), path)));
 });
@@ -213,4 +220,86 @@ test('Dueño: excepción de arranque, pero no ignora desactivación explícita',
   await assertFails(upload(OWNER, file()));
   await assertFails(setDoc(doc(db(OWNER), 'usuarios/reactivado'), { rol: 'admin' }));
   await assertSucceeds(getDoc(doc(db(OWNER), `usuarios/${OWNER}`)));
+});
+
+test('Finanzas v2: migración y permisos reales incluso saltándose la interfaz', async t => {
+  const seed={weeks:[{id:'s1',label:'Semana',gastos:[{id:'g1',importe:10}],
+    cortes:[{id:'c1',efectivo:90}],retiros:[],aportaciones:[]}],budget:{Gas:100},
+    cajaSaldoInicial:{'2026-09-01':{valor:900}},cortesIgnorados:[],cortesImportaciones:[]};
+  const parts=financial.split(seed);
+  const record2=value=>({schema:2,json:JSON.stringify(value),ts:'2026-09-11'});
+  await env.withSecurityRulesDisabled(async c=>{
+    for(const scope of ['operation','budget','cash'])
+      await setDoc(doc(c.firestore(),financial.PATHS[scope]),record2(parts[scope]));
+    await setDoc(doc(c.firestore(),financial.PATHS.marker),{version:2});
+    await setDoc(doc(c.firestore(),'estado/respaldo-antiguo'),record);
+    await setDoc(doc(c.firestore(),`usuarios/${OWNER}`),{rol:'admin',activo:true});
+  });
+  await t.test('operativo lee presupuesto y gastos, no Caja ni histórico ni índices',async()=>{
+    for(const uid of ['staff','legacy']){
+      await assertSucceeds(getDoc(doc(db(uid),'operacion/cicsa')));
+      await assertSucceeds(getDoc(doc(db(uid),'finanzas/presupuesto')));
+      for(const p of ['finanzas/caja','estado/cicsa','estado/respaldo-antiguo','respaldos/_indice','respaldos/copia'])
+        await assertFails(getDoc(doc(db(uid),p)));
+      await assertFails(getDocs(collection(db(uid),'estado')));
+      await assertFails(getDocs(collection(db(uid),'finanzas')));
+    }
+  });
+  await t.test('operativo no cambia presupuesto, saldos ni marcador; tampoco borra y recrea',async()=>{
+    for(const p of ['finanzas/caja','finanzas/presupuesto','configuracion/seguridadFinanciera','estado/cicsa']){
+      await assertFails(setDoc(doc(db('staff'),p),record2({fraude:true})));
+      await assertFails(deleteDoc(doc(db('staff'),p)));
+    }
+    await assertFails(deleteDoc(doc(db('staff'),'operacion/cicsa')));
+    await assertFails(setDoc(doc(db('staff'),'operacion/otro'),record2(parts.operation)));
+    await assertFails(setDoc(doc(db('staff'),'respaldos/falso-completo'),record));
+    await assertFails(setDoc(doc(db('admin'),'estado/cicsa'),record));
+    await assertFails(deleteDoc(doc(db('admin'),financial.PATHS.marker)));
+  });
+  await t.test('usuarios ajenos, inactivos y perfiles inválidos no leen v2',async()=>{
+    for(const uid of [null,'outsider','inactive','inactiveAdmin','badRole','badActive'])
+      for(const p of Object.values(financial.PATHS)){
+        await assertFails(getDoc(doc(db(uid),p)));
+        await assertFails(setDoc(doc(db(uid),p),record2(parts.operation)));
+      }
+  });
+  await t.test('commit mixto no autorizado falla entero: ni gastos parciales',async()=>{
+    const staff=db('staff'),batch=writeBatch(staff);
+    batch.set(doc(staff,'operacion/cicsa'),record2({weeks:[]}));
+    batch.set(doc(staff,'finanzas/caja'),record2({weeks:[]}));
+    await assertFails(batch.commit());
+    assert.equal((await getDoc(doc(staff,'operacion/cicsa'))).data().json,JSON.stringify(parts.operation));
+  });
+  await t.test('respaldo operativo separado e inmutable, completo solo admin',async()=>{
+    await assertSucceeds(setDoc(doc(db('staff'),'respaldos_operacion/diario'),record2(parts.operation)));
+    await assertFails(getDoc(doc(db('staff'),'respaldos_operacion/diario')));
+    await assertSucceeds(getDoc(doc(db('admin'),'respaldos_operacion/diario')));
+    await assertFails(setDoc(doc(db('staff'),'respaldos_operacion/diario'),record2({weeks:[]})));
+    await assertSucceeds(setDoc(doc(db('admin'),'respaldos/completo-v2'),record));
+  });
+  await t.test('transporte REAL de la app: lectura transaccional, CAS y escritura por rol',async()=>{
+    const store=uid=>financial.createStore({
+      base:`http://127.0.0.1:8180/v1/projects/${PROJECT}/databases/(default)/documents`,key:'demo-key',
+      headers:async()=>({Authorization:'Bearer '+createMockUserToken({sub:uid},PROJECT)}),isAdmin:()=>uid==='admin'
+    });
+    const admin=store('admin'),staff=store('staff');
+    const a=await admin.read(),s=await staff.read();
+    assert.deepEqual(a.data,seed);
+    assert.equal(s.data.cajaSaldoInicial,undefined);
+    assert.equal(s.data.weeks[0].cortes,undefined);
+    const forged=financial.clone(s.data); forged.budget.Gas=1; forged.cajaSaldoInicial={fraude:999};
+    forged.weeks[0].cortes=[{id:'falso'}]; forged.weeks[0].gastos.push({id:'g2',importe:20});
+    await staff.write(forged,s);
+    const saved=await admin.read();
+    assert.equal(saved.data.budget.Gas,100);
+    assert.equal(saved.data.cajaSaldoInicial['2026-09-01'].valor,900);
+    assert.equal(saved.data.weeks[0].cortes[0].id,'c1');
+    assert.equal(saved.data.weeks[0].gastos.length,2);
+    await assert.rejects(admin.write(seed,a),e=>e.conflict);
+    const modified=financial.clone(saved.data); modified.budget.Gas=200;
+    modified.cajaSaldoInicial['2026-09-01'].valor=800;
+    await admin.write(modified,saved);
+    assert.equal((await staff.read()).data.budget.Gas,200);
+    assert.equal((await admin.read()).data.cajaSaldoInicial['2026-09-01'].valor,800);
+  });
 });

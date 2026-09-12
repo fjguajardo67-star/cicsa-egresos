@@ -1,7 +1,6 @@
 // CICSA — reglas desplegables con firebase deploy --only firestore:rules.
 // Usuarios heredados sin activo/rol conservan acceso operativo.
-// El presupuesto continúa dentro del JSON de estado/cicsa: su aislamiento
-// administrativo requiere la migración de datos pendiente del hallazgo W12.
+// Finanzas v2: documentos separados, activados mediante migración atómica.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -34,6 +33,35 @@ service cloud.firestore {
       return data.get('activo', true) is bool
         && data.get('rol', 'operativo') in ['admin', 'operativo'];
     }
+    function finanzasSeparadas() {
+      return exists(/databases/$(database)/documents/configuracion/seguridadFinanciera);
+    }
+    function estadoV2() {
+      return request.resource.data.keys().hasOnly(['schema', 'json', 'ts'])
+        && request.resource.data.schema == 2
+        && request.resource.data.json is string
+        && request.resource.data.json.size() < 1000000
+        && request.resource.data.ts is string;
+    }
+    match /configuracion/seguridadFinanciera {
+      allow get: if esUsuario();
+      // Solo la migración con IAM crea el marcador; nadie desde el navegador lo revierte.
+      allow write: if false;
+    }
+    match /operacion/cicsa {
+      allow get: if esUsuario() && finanzasSeparadas();
+      allow update: if esUsuario() && finanzasSeparadas() && estadoV2();
+      // La migración crea los documentos. No se pueden borrar/recrear desde clientes.
+    }
+    match /finanzas/{doc} {
+      allow get: if finanzasSeparadas() &&
+        ((doc == 'presupuesto' && esUsuario()) || (doc == 'caja' && esAdmin()));
+      allow update: if doc in ['presupuesto', 'caja'] && finanzasSeparadas() && esAdmin() && estadoV2();
+    }
+    match /respaldos_operacion/{doc} {
+      allow read, delete: if esAdmin();
+      allow create: if esUsuario() && finanzasSeparadas() && estadoV2();
+    }
 
     // CICSA Menú consulta este documento concreto sin iniciar sesión.
     match /datos/{doc} {
@@ -45,8 +73,8 @@ service cloud.firestore {
     // Mantener lectura de respaldos históricos para su migración por el admin.
     // La aplicación actual solo guarda estado/cicsa; no se borran datos al publicar.
     match /estado/{doc} {
-      allow read: if esUsuario();
-      allow create, update: if doc == 'cicsa' && esUsuario();
+      allow read: if esAdmin() || (!finanzasSeparadas() && esUsuario());
+      allow create, update: if doc == 'cicsa' && !finanzasSeparadas() && esUsuario();
       allow delete: if esAdmin();
     }
 
@@ -81,10 +109,10 @@ service cloud.firestore {
     // Todos pueden crear el respaldo diario; solo el índice se actualiza.
     // El contenido completo y el listado de copias se reservan al administrador.
     match /respaldos/{doc} {
-      allow get: if esAdmin() || (doc == '_indice' && esUsuario());
+      allow get: if esAdmin() || (!finanzasSeparadas() && doc == '_indice' && esUsuario());
       allow list: if esAdmin();
-      allow create: if esUsuario();
-      allow update: if doc == '_indice' && esUsuario();
+      allow create: if esAdmin() || (!finanzasSeparadas() && esUsuario());
+      allow update: if doc == '_indice' && (esAdmin() || (!finanzasSeparadas() && esUsuario()));
       allow delete: if esAdmin();
     }
     match /actividad/{uid} {

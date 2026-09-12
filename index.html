@@ -2031,6 +2031,7 @@ body.snav-min .side-theme span { display:none; }
 
 
 
+<script src="assets/financial-access.js" integrity="sha384-hVH0NwkEAIx0+F7xL7jF3hol59UcXCwwZ1Hbd56Gh/4XvD8dAV8CFbqBrYeujYoy"></script>
 <script>
 (function(){var a=document.querySelector(".login-logo img"),b=document.querySelector("[data-logo-copy]");if(a&&b&&!b.getAttribute("src"))b.src=a.src;})();
 
@@ -2042,7 +2043,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-10-a";
+const APP_BUILD = "2026-09-11-finanzas-v2";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2472,7 +2473,35 @@ async function cargarThumbReal(gastoId, url, wrapElId){
 }
 
 let _syncBase = null;
+let _financialReady = false;
+let _sessionGeneration = 0;
+let _legacyRecovery = null;
+const _financialStore = CicsaFinancialAccess.createStore({ base: FB_BASE, key: FB_KEY,
+  headers: fbAuthHeader, isAdmin: () => currentRole === 'admin' });
+function guardarCacheOperativa(){
+  if(!currentUser || !_financialReady) return;
+  // Nunca persiste Caja, ni siquiera en el navegador de un administrador.
+  localStorage.setItem('cicsa_operacion_v2_'+currentUser.uid, JSON.stringify({
+    version:2, uid:currentUser.uid, data:CicsaFinancialAccess.operational(state),
+    base:_syncBase ? CicsaFinancialAccess.operational(_syncBase) : null
+  }));
+  localStorage.removeItem('cicsa_egresos');
+}
+function descargarRecuperacionLocal(){
+  if(_legacyRecovery) descargarEstadoComoArchivo(_legacyRecovery,'cicsa-copia-local-anterior.json');
+}
+async function cerrarSesionSegura(){
+  if(_financialReady && (_syncPending || _syncing)){
+    await ejecutarSync();
+    if(_syncPending || _syncing){
+      alert('Todavía hay cambios sin guardar. Sincroniza antes de cerrar sesión.');
+      return;
+    }
+  }
+  await auth.signOut();
+}
 async function fbGetSnapshot(path) {
+  if(path==='estado/cicsa') return _financialStore.read(); // ruta virtual, nunca lee el JSON antiguo
   const r = await fetch(`${FB_BASE}/${path}?key=${FB_KEY}`, {
     headers: await fbAuthHeader(), signal: AbortSignal.timeout(15000)
   });
@@ -2549,6 +2578,7 @@ function pintarAvisoFallos(){
 }
 
 async function fbSet(path, data, expected) {
+  if(path==='estado/cicsa') return _financialStore.write(data, expected);
   if(path==='estado/cicsa' && !expected)
     throw new Error("El guardado necesita una versión de la nube. Sincroniza e intenta de nuevo.");
   const precondition = expected ? (expected.exists
@@ -2617,6 +2647,7 @@ function resumenEstado(st){
 }
 
 async function guardarRespaldo(id, st){
+  if(currentRole !== 'admin') throw new Error('Solo el administrador puede guardar respaldos completos.');
   const meta = resumenEstado(st);
   const r = await fetch(`${FB_BASE}/${RESPALDOS_COL}/${encodeURIComponent(id)}?key=${FB_KEY}&currentDocument.exists=false`, {
     method: "PATCH",
@@ -2736,6 +2767,21 @@ async function migrarRespaldosViejos(){
 // Una copia al día, la toma quien entre primero. No hace falta que sea el admin: si dependiera
 // de que él abra la app, habría días sin respaldo.
 async function respaldoAutomatico(){
+  if(!_financialReady) return;
+  if(currentRole !== 'admin') {
+    // Copia operativa diaria separada: nunca se confunde con un respaldo completo.
+    try {
+      const snapshot = await _financialStore.read();
+      const safe = CicsaFinancialAccess.operational(snapshot.data);
+      if(!safe.weeks.some(w=>(w.gastos||[]).length)) return;
+      const r = await fetch(`${FB_BASE}/respaldos_operacion/${todayStr()}?key=${FB_KEY}&currentDocument.exists=false`, {
+        method:'PATCH', headers:{'Content-Type':'application/json', ...(await fbAuthHeader())},
+        signal:AbortSignal.timeout(15000), body:JSON.stringify({fields:CicsaFinancialAccess.envelope(safe)})
+      });
+      if(!r.ok && ![409,412].includes(r.status)) throw new Error(`Respaldo operativo: ${r.status}`);
+    } catch(e) { _anotarFallo('respaldo operativo',e.message); }
+    return;
+  }
   try{
     const ahora = resumenEstado(state);
     if(ahora.gastos === 0) return;                   // nada que respaldar todavía
@@ -2765,6 +2811,7 @@ async function respaldoAutomatico(){
 // que dos capturas simultáneas no se pisen), pero al restaurar eso es justo lo contrario de lo
 // que se quiere: la fusión resucitaría lo que el respaldo no trae.
 async function escribirEstadoDirecto(st){
+  if(currentRole !== 'admin' || !_financialReady) throw new Error('Se necesita una sesión administrativa verificada.');
   clearTimeout(_syncTimer);
   _restoring=true;
   try{
@@ -2774,7 +2821,7 @@ async function escribirEstadoDirecto(st){
     const snapshot=await fbGetSnapshot("estado/cicsa");
     await fbSet("estado/cicsa",st,snapshot);
     state=st; _syncBase=JSON.parse(JSON.stringify(st)); _syncPending=false;
-    localStorage.setItem("cicsa_egresos",JSON.stringify(state));
+    guardarCacheOperativa();
   }finally{ _restoring=false; }
 }
 
@@ -2997,33 +3044,43 @@ function fusionTresVias(base, local, remote, path="estado"){
   throw new Error("Conflicto en "+path+". Conservamos tus cambios en este dispositivo; revisa antes de sincronizar.");
 }
 async function ejecutarSync(){
-  if(_syncing || _restoring || !_syncPending) return;
+  if(_syncing || _restoring || !_syncPending || !_financialReady || !currentUser) return;
+  const session = _sessionGeneration;
   _syncing=true; _syncPending=false;
   let failed=false;
   try{
     for(let attempt=0;attempt<3;attempt++){
       const snapshot=await fbGetSnapshot('estado/cicsa');
-      const local=JSON.parse(JSON.stringify(state));
+      if(session!==_sessionGeneration) return;
+      const local=CicsaFinancialAccess.forRole(state, snapshot.data, currentRole==='admin');
+      if(currentRole!=='admin') state=local;
       const remote=snapshot.data;
-      const merged=remote ? (_syncBase ? fusionTresVias(_syncBase,local,remote) : mergeEstados(remote,local)) : local;
+      const base = _syncBase && CicsaFinancialAccess.forRole(_syncBase, snapshot.data, currentRole==='admin');
+      const merged=remote ? (base ? fusionTresVias(base,local,remote) : mergeEstados(remote,local)) : local;
       if(JSON.stringify(merged)!==JSON.stringify(remote)){
         try{ await fbSet('estado/cicsa',merged,snapshot); }
         catch(e){ if(e.conflict&&attempt<2) continue; throw e; }
       }
+      if(session!==_sessionGeneration) return;
       const changedDuringWrite=JSON.stringify(state)!==JSON.stringify(local);
       _syncBase=JSON.parse(JSON.stringify(merged));
       if(changedDuringWrite){
         state=fusionTresVias(local,state,merged);
         _syncPending=true;
       }else state=merged;
-      localStorage.setItem("cicsa_egresos",JSON.stringify(state));
+      guardarCacheOperativa();
       _syncUltimo=Date.now();
       if(JSON.stringify(local)!==JSON.stringify(state)) refrescarVistaActual();
       pintarSyncBadge();
       break;
     }
   }catch(e){
+    if(session!==_sessionGeneration) return;
     failed=true; _syncPending=true;
+    if(e.denied){ _financialReady=false; state={weeks:[],budget:{}}; _syncBase=null;
+      document.getElementById('loginScreen').classList.remove('hidden');
+      document.getElementById('loginError').textContent='Tu acceso cambió. Recarga e inicia sesión otra vez.';
+    }
     _anotarFallo("sincronizar gastos",e.message||"No se pudo guardar. Intenta de nuevo.");
   }finally{
     _syncing=false;
@@ -3078,14 +3135,9 @@ function contarMovimientos(st){
 }
 
 function save() {
-  const json = JSON.stringify(state);
-  localStorage.setItem("cicsa_egresos", json);
-  // Persistencia local (Flask de desarrollo). En producción /save-state está deshabilitado a
-  // propósito (fix de seguridad) y devolvía 404 + "network lost" en cada guardado — puro ruido.
-  // Firebase es SIEMPRE la fuente durable; ahí se guarda de verdad.
-  if(IS_LOCAL && SERVER_AVAILABLE){
-    fetch(SERVER+"/save-state",{method:"POST",headers:{"Content-Type":"application/json"},body:json}).catch(()=>{});
-  }
+  if(!_financialReady || !currentUser) throw new Error('Espera a que termine la verificación de acceso.');
+  state=CicsaFinancialAccess.forRole(state,_syncBase,currentRole==='admin');
+  guardarCacheOperativa();
   // Firestore con lee-fusiona-escribe (no pisa lo que otro dispositivo haya capturado).
   programarSync();
 }
@@ -3131,17 +3183,17 @@ async function sincronizarAhora(){
   }catch(e){ console.warn("sincronizarAhora:", e); }
   pintarSyncBadge();
 }
-window.addEventListener("beforeunload",()=>{
-  const json=JSON.stringify(state);
-  localStorage.setItem("cicsa_egresos",json);
-  if(IS_LOCAL && navigator.sendBeacon){ const blob=new Blob([json],{type:"application/json"}); navigator.sendBeacon(SERVER+"/save-state",blob); }
+window.addEventListener("beforeunload",event=>{
+  guardarCacheOperativa();
+  // Caja pendiente vive solamente en memoria; advertir antes de cerrar/reiniciar.
+  if(_financialReady && currentRole==='admin' && (_syncPending || _syncing)){
+    event.preventDefault(); event.returnValue='';
+  }
 });
 
 function load() {
-  const raw=localStorage.getItem("cicsa_egresos");
-  if(raw){ try{ state=JSON.parse(raw); }catch(e){} }
-  if(!state.budget) state.budget={...DEFAULT_BUDGET};
-  if(!state.weeks)  state.weeks=[];
+  // El arranque solo ocurre después de leer los documentos autorizados.
+  return null;
 }
 
 // Se ejecuta una sola vez al iniciar sesión. A diferencia del load() viejo, consulta el
@@ -3151,33 +3203,44 @@ function load() {
 // Antes, load() creaba y GUARDABA una semana vacía de inmediato si no había nada en caché,
 // lo que podía sobreescribir datos reales en Firestore antes de siquiera consultarlos.
 async function initState() {
-  load();
-  let gotRemote = false;
-
-  // Al cargar se FUSIONA remoto + local (unión por id, respetando tombstones) en vez de elegir
-  // uno por conteo — así ningún movimiento capturado en cualquier lado se pierde al abrir.
-  if(IS_LOCAL){
+  const session=_sessionGeneration;
+  _financialReady=false;
+  const snapshot=await _financialStore.read(); // error => no caché, no semana vacía, no escrituras
+  if(session!==_sessionGeneration) throw new Error('La sesión cambió. Vuelve a ingresar.');
+  state=CicsaFinancialAccess.clone(snapshot.data);
+  _syncBase=CicsaFinancialAccess.clone(snapshot.data);
+  const raw=localStorage.getItem('cicsa_operacion_v2_'+currentUser.uid);
+  if(raw){
     try {
-      const r=await fetch(SERVER+"/load-state",{signal:AbortSignal.timeout(2500)});
-      const d=await r.json();
-      if(d.ok && d.state && Array.isArray(d.state.weeks)){ state=mergeEstados(d.state, state); gotRemote=true; }
-    } catch(e){ /* Flask local no disponible */ }
+      const cached=JSON.parse(raw);
+      if(cached.version===2 && cached.uid===currentUser.uid && cached.base){
+        const merged=fusionTresVias(CicsaFinancialAccess.operational(cached.base),
+          CicsaFinancialAccess.operational(cached.data),CicsaFinancialAccess.operational(state));
+        state=CicsaFinancialAccess.compose(merged,snapshot.parts.budget,snapshot.parts.cash);
+      }
+    } catch(e){
+      // No sustituir una captura pendiente por el remoto si hay un conflicto.
+      throw new Error('Hay cambios locales en conflicto. Conservamos la caché; solicita una revisión antes de continuar.');
+    }
   }
-
-  try {
-    const fbState = await fbGet('estado/cicsa');
-    if(fbState && Array.isArray(fbState.weeks)){ state=mergeEstados(fbState, state); gotRemote=true; }
-  } catch(e){ console.warn("initState: Firebase load error:", e); }
-
-  if(!state.budget) state.budget={...DEFAULT_BUDGET};
-  if(!state.weeks)  state.weeks=[];
-  if(!state.activeWeek&&state.weeks.length>0) state.activeWeek=state.weeks[state.weeks.length-1].id;
-  migrarCategorias();
-  // Solo si de verdad no hay NADA en ningún lado (ni local, ni Flask, ni Firestore) se crea
-  // una semana nueva.
-  if(state.weeks.length===0) createNewWeek(true);
-  localStorage.setItem("cicsa_egresos", JSON.stringify(state));
-  // Sin await: el respaldo no debe retrasar la entrada a la app.
+  const legacy=localStorage.getItem('cicsa_egresos');
+  if(legacy){
+    try {
+      const old=JSON.parse(legacy);
+      _legacyRecovery=currentRole==='admin' ? old : CicsaFinancialAccess.operational(old);
+      if(!CicsaFinancialAccess.equal(CicsaFinancialAccess.operational(old),CicsaFinancialAccess.operational(state)) ||
+         (currentRole==='admin' && !CicsaFinancialAccess.equal(CicsaFinancialAccess.split(old),CicsaFinancialAccess.split(state)))){
+        // No fusionar a ciegas una caché antigua sin versión base.
+        descargarRecuperacionLocal();
+        alert('Se descargó una copia local anterior para revisión. La nube no se sobrescribió. Consérvala si tenías capturas sin sincronizar.');
+      }
+    } catch(e){ console.warn('No se pudo preparar la copia local anterior.'); }
+    localStorage.removeItem('cicsa_egresos');
+  }
+  _financialReady=true;
+  if(!state.activeWeek&&state.weeks.length) state.activeWeek=state.weeks[state.weeks.length-1].id;
+  guardarCacheOperativa();
+  if(!CicsaFinancialAccess.equal(state,_syncBase)) programarSync();
   respaldoAutomatico();
 }
 
@@ -11082,6 +11145,11 @@ function puedeEntrar(tieneRegistro, uid){
 }
 
 auth.onAuthStateChanged(async user => {
+  _sessionGeneration++;
+  _financialReady=false;
+  clearTimeout(_syncTimer);
+  _syncPending=false;
+  _syncBase=null;
   if(user) {
     currentUser = user;
     // Get role + display name from Firestore
@@ -11096,7 +11164,9 @@ auth.onAuthStateChanged(async user => {
       // desde la consola de Firebase, así que se cierra aquí y en las reglas.
       // El dueño se exceptúa por UID: es el único que debe poder recrear su propio registro
       // (ensureAdminRecord, más abajo), porque si no nadie podría dar de alta a nadie.
-      if(!puedeEntrar(snap.exists, user.uid)){
+      if(!puedeEntrar(snap.exists, user.uid) || (snap.exists &&
+        (snap.data().activo !== undefined && snap.data().activo !== true ||
+        !['admin','operativo'].includes(snap.data().rol ?? 'operativo')))){
         await auth.signOut();
         const _err = document.getElementById("loginError");
         if(_err) _err.textContent = "Esta cuenta no está dada de alta en CICSA Egresos. Pídele al administrador que te agregue.";
@@ -11111,19 +11181,17 @@ auth.onAuthStateChanged(async user => {
       // nuevas esa persona queda dentro de una app donde TODO falla con permiso denegado y sin
       // decirle por qué. Mejor decirlo y que reintente. El dueño entra igual —se identifica por
       // UID, no por su registro— para que un fallo de red no lo deje fuera de su propia app.
-      if(user.uid !== ADMIN_UID){
+      {
         console.warn("onAuthStateChanged: no se pudo leer usuarios/", e);
         await auth.signOut();
         const _err = document.getElementById("loginError");
         if(_err) _err.textContent = "No pudimos verificar tu acceso. Revisa tu conexión e intenta de nuevo.";
         return;
       }
-      currentRole = "admin";
-      currentNombre = (user.email||"").split("@")[0];
     }
 
     // Hide login, show app
-    document.getElementById("loginScreen").classList.add("hidden");
+    // Mantener el bloqueo hasta verificar también los documentos financieros.
 
     // Update user chip
     const chip = document.getElementById("userChip");
@@ -11157,7 +11225,15 @@ auth.onAuthStateChanged(async user => {
 
     // Init app — initState() consulta Flask/Firestore ANTES de decidir si hace falta
     // crear una semana nueva, para no sobreescribir datos reales con un estado vacío.
-    (async()=>{ await initState(); renderAll(); checkServer(); })();
+    try {
+      await initState();
+      document.getElementById('loginScreen').classList.add('hidden');
+      renderAll(); checkServer();
+    } catch(e) {
+      document.getElementById('loginScreen').classList.remove('hidden');
+      document.getElementById('loginError').textContent=e.message || 'No se pudo verificar el acceso. Recarga para reintentar.';
+      return;
+    }
     initChat();
     // Rediseño F2: el chat arranca ABIERTO en pantallas grandes, salvo que este
     // dispositivo lo haya cerrado antes (preferencia en localStorage).
@@ -11167,6 +11243,9 @@ auth.onAuthStateChanged(async user => {
     iniciarActividadTracker();   // registra actividad solo si es operativo
 
   } else {
+    const hadSession=!!currentUser;
+    state={weeks:[],budget:{}};
+    _legacyRecovery=null;
     if(_actTimer){ clearInterval(_actTimer); _actTimer = null; }
     _actActivo = false;
     currentUser = null;
@@ -11175,6 +11254,7 @@ auth.onAuthStateChanged(async user => {
     pararChat();
     document.getElementById("loginScreen").classList.remove("hidden");
     document.getElementById("userChip").style.display = "none";
+    if(hadSession) location.reload(); // elimina también DOM y memoria de Caja del usuario anterior
   }
 });
 
@@ -11185,7 +11265,7 @@ function toggleUserMenu() {
     { label: "🏷 Versión " + APP_BUILD, action: recargarSinCache },
     { label: "🔑 Cambiar contraseña", action: cambiarPassword },
     currentRole === "admin" ? { label: "👥 Gestión de usuarios", action: abrirAdminModal } : null,
-    { label: "🚪 Cerrar sesión", action: () => auth.signOut() },
+    { label: "🚪 Cerrar sesión", action: cerrarSesionSegura },
   ].filter(Boolean);
 
   // Simple dropdown

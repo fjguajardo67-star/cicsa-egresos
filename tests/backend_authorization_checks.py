@@ -104,6 +104,12 @@ class BackendAuthorizationTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             renew.assert_called_once()
 
+    def test_local_financial_files_require_admin_before_read_or_write(self):
+        with patch.object(server, "IS_RAILWAY", False), patch.object(server, "hacer_backup") as backup:
+            self.assertEqual(self.client.get("/load-state", headers=self.headers).status_code, 403)
+            self.assertEqual(self.client.post("/save-state", json={}, headers=self.headers).status_code, 403)
+            backup.assert_not_called()
+
     def test_owner_bootstrap_requires_explicit_not_found(self):
         self.claims["sub"] = policy.OWNER_UID
         self.response.status_code = 404

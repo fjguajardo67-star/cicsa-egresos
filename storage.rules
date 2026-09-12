@@ -47,8 +47,8 @@ service firebase.storage {
 
     // Los cortes usan un nombre por periodo y la app necesita reimportarlos.
     match /cortes/{archivo} {
-      allow read: if esUsuario();
-      allow create, update: if esUsuario()
+      allow read: if esAdmin();
+      allow create, update: if esAdmin()
         && request.resource.size > 0
         && request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType == 'application/json';
