@@ -45,10 +45,51 @@ test('homologar mantiene compras y conversiones separadas, calcula el último pr
   assert(rows[0].sinonimos_menu.includes('Arroz'));
 });
 test('no reaparece una relación rechazada y no hay sugerencias para Solo Egresos',()=>{
-  const a=product({nombre_comercial:'Aderezo',ingrediente_generico:'Aderezo'}),b=product({id:'b',nombre_comercial:'Aderezo ranch',ingrediente_generico:'Aderezo ranch'});
+  const a=product({nombre_comercial:'Aderezo ranch 3.8L',ingrediente_generico:'Aderezo'}),b=product({id:'b',nombre_comercial:'Aderezo ranch 1L',ingrediente_generico:'Aderezo ranch'});
   assert.equal(C.suggest([a,b],a).length,1);
   assert.equal(C.suggest([{...a,forx_distintos:['b']},b],{...a,forx_distintos:['b']}).length,0);
   assert.equal(C.suggest([a,b],{...a,forx_destino:'excluir'}).length,0);
+});
+const matchPair=(left,right)=>{
+  const a=product({ingrediente_generico:'',...left,id:'a',ingrediente_id:'group-a'});
+  const b=product({ingrediente_generico:'',...right,id:'b',ingrediente_id:'group-b'});
+  return [C.suggest([a,b],a).length,C.suggest([a,b],b).length];
+};
+test('regresión: Aceituna 3kg y Pasta codo 3kg no son el mismo ingrediente',()=>{
+  const left={nombre_comercial:'Aceituna 3kg',ingrediente_generico:'Aceituna',proveedor_nombre:'NUEVA WAL MART DE MEXICO'};
+  const right={nombre_comercial:'Pasta codo 3kg',proveedor_nombre:left.proveedor_nombre};
+  assert.deepEqual(matchPair(left,right),[0,0]);
+  assert.equal(C.ingredientIdentity(left),'aceituna');assert.equal(C.ingredientIdentity(right),'pasta codo');
+});
+test('peso, volumen, número de piezas y empaque no aportan identidad',()=>{
+  for(const size of ['3kg','3 KG','3.8L','3,8 lt','500ml','500 g','12 pzas','2x3kg','2 × 3 KG','12 bolsas']){
+    assert.equal(C.ingredientIdentity({nombre_comercial:'Aceituna '+size}),'aceituna',size);
+    assert.deepEqual(matchPair({nombre_comercial:'Aceituna '+size},{nombre_comercial:'Pasta codo '+size}),[0,0],size);
+  }
+  for(const name of ['3kg','Caja de 3 kg','12 bolsas','12345','Aderezo','Salsa','Aceite'])assert.equal(C.ingredientIdentity({nombre_comercial:name}),'',name);
+});
+test('exige el nombre completo y conserva tipo, preparación, con/sin y porcentajes',()=>{
+  for(const [a,b] of [
+    ['Arroz blanco 3kg','Arroz integral 3kg'],['Aderezo ranch 3.8L','Aderezo mayonesa 3.8L'],
+    ['Pasta codo 3kg','Pasta espagueti 3kg'],['Aceitunas verdes 3kg','Aceitunas negras 3kg'],
+    ['Aceitunas con hueso 3kg','Aceitunas sin hueso 3kg'],['Leche 1% 1L','Leche 3% 1L'],
+    ['Chile jalapeño fresco 3kg','Chile jalapeño en vinagre 3kg'],['Aderezo 3kg','Aderezo ranch 3kg'],
+    ['Arroz 3kg','Arroz blanco 3kg'],['Salsa tomate 3kg','Tomate en salsa 3kg'],
+    ['Suplemento B12 500g','Suplemento B6 500g'],['Harina tipo 1 3kg','Harina tipo 2 3kg']
+  ])assert.deepEqual(matchPair({nombre_comercial:a,ingrediente_generico:'Ingrediente'},{nombre_comercial:b,ingrediente_generico:'Ingrediente'}),[0,0],a+' / '+b);
+});
+test('mismo alimento explícito sí se propone entre presentaciones, acentos y plurales conocidos',()=>{
+  for(const [a,b] of [
+    ['Aceituna 3kg','Aceitunas frasco 1 kg'],['CHILE JALAPEÑO 3kg','Chiles jalapenos 500 g'],
+    ['Arroz blanco bolsa 3kg','Arroz blanco caja 10kg'],['Aderezo ranch 3.8L','Aderezo ranch botella 1 lt'],
+    ['Leche 1,5% 1L','Leche 1.5 % 500ml']
+  ])assert.deepEqual(matchPair({nombre_comercial:a},{nombre_comercial:b}),[1,1],a+' / '+b);
+});
+test('proveedor, marca y categoría no bastan; solo se omite la marca registrada en el nombre',()=>{
+  const metadata={marca:'Marca Ejemplo',proveedor_nombre:'Proveedor A',categoria:'Alimentos'};
+  assert.deepEqual(matchPair({...metadata,nombre_comercial:'Aceituna Marca Ejemplo 3kg'},{...metadata,nombre_comercial:'Pasta codo Marca Ejemplo 3kg'}),[0,0]);
+  assert.deepEqual(matchPair({...metadata,nombre_comercial:'Aceituna Marca Ejemplo 3kg'},{marca:'Otra Marca',nombre_comercial:'Aceitunas Otra Marca frasco 1kg'}),[1,1]);
+  assert.equal(C.ingredientIdentity({...metadata,nombre_comercial:'Marca Ejemplo caja 3kg'}),'');
 });
 test('un mismo nombre de proveedores distintos no reutiliza una conversión sin aprobar',()=>{
   const a=product();assert.equal(C.findProduct([a],{nombre:a.nombre_comercial,proveedor:'Proveedor B'}),null);
@@ -172,7 +213,7 @@ test('edición obsoleta no destruye el cambio de otro usuario',async()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20260911-ingredientes1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20260912-ingredientes2'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -194,6 +235,28 @@ function integration(m){
   context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8'),context);
   return {app:context.CicsaCatalog,context,element};
 }
+test('integración: el catálogo no muestra homologación por peso ni modifica los productos al consultar',async()=>{
+  const m=memory();
+  await m.store.save([
+    product({id:'aceituna',nombre_comercial:'Aceituna 3kg',ingrediente_generico:'Aceituna'}),
+    product({id:'pasta',nombre_comercial:'Pasta codo 3kg',ingrediente_generico:'',estado:'pendiente'})
+  ]);
+  const before=structuredClone([...m.docs]);m.calls.length=0;
+  const {app,element}=integration(m);await app.load();await app.render();
+  const html=element('page-catalogo-productos').innerHTML;
+  assert(!html.includes('data-action="merge"'));assert(html.includes('Pasta codo 3kg'),html);
+  assert.deepEqual([...m.docs],before);assert(!m.calls.some(c=>c.path===':commit'));
+});
+test('integración: una coincidencia de alimento conserva la decisión explícita Sí/No',async()=>{
+  const m=memory();await m.store.save([
+    product({nombre_comercial:'Aceituna 3kg',ingrediente_generico:'Aceituna'}),
+    product({id:'b',nombre_comercial:'Aceitunas frasco 1kg',ingrediente_generico:'',estado:'pendiente'})
+  ]);
+  const {app,element}=integration(m);await app.load();await app.render();
+  const html=element('page-catalogo-productos').innerHTML;
+  assert(html.includes('Sí, homologar'),html);assert(html.includes('No, son distintos'));
+  assert.equal((html.match(/data-action="merge"/g)||[]).length,1);
+});
 test('integración: factura mixta, un solo commit, repetición idempotente y precio por fecha',async()=>{
   const m=memory();await m.store.save([product()]);m.calls.length=0;
   const {app}=integration(m);

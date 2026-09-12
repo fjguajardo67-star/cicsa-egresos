@@ -174,12 +174,45 @@
     const synonyms = unique(members.flatMap(p => [ingredientName(p), ...(p.sinonimos_menu || [])])).filter(x => norm(x) !== norm(name));
     return members.map(p => ({ ...p, compras_forx:observations(p), ingrediente_id:id, ingrediente_nombre:name, ingrediente_generico:name, sinonimos_menu:synonyms }));
   }
+  const presentationWords=new Set(('de del el la los las en un una por x ' +
+    'kg kgs kilogramo kilogramos kilo kilos g gr grs gramo gramos mg miligramo miligramos ' +
+    'l lt lts litro litros ml mililitro mililitros cc oz onza onzas lb libra libras ' +
+    'pz pza pzas pieza piezas unidad unidades bote botes caja cajas bolsa bolsas lata latas ' +
+    'frasco frascos botella botellas cubeta cubetas envase envases empaque empaques ' +
+    'paquete paquetes paq pq pqt pack packs costal costales saco sacos presentacion presentaciones').split(' '));
+  // Equivalencias gramaticales acotadas: no hay stemming ni equivalencias entre alimentos.
+  const ingredientPlurals=Object.fromEntries([
+    ['aceitunas','aceituna'],['aderezos','aderezo'],['aceites','aceite'],['salsas','salsa'],['pastas','pasta'],
+    ['chiles','chile'],['jalapenos','jalapeno'],['papas','papa'],['tomates','tomate'],['jitomates','jitomate'],
+    ['cebollas','cebolla'],['zanahorias','zanahoria'],['huevos','huevo'],['tortillas','tortilla'],
+    ['frijoles','frijol'],['limones','limon'],['nopales','nopal'],['quesos','queso'],['lechugas','lechuga'],
+    ['pimientos','pimiento'],['pepinos','pepino'],['manzanas','manzana'],['naranjas','naranja'],
+    ['verdes','verde'],['negras','negra'],['blancas','blanca'],['rojas','roja'],['enteras','entera'],
+    ['negros','negro'],['blancos','blanco'],['rojos','rojo'],['enteros','entero'],['integrales','integral'],
+    ['huesos','hueso'],['rebanadas','rebanada'],['rebanados','rebanado'],['molidos','molido'],['molidas','molida']
+  ]);
+  const ambiguousIngredients=new Set(['producto','alimento','insumo','salsa','aderezo','pasta','aceite','carne','queso','bebida','condimento','mezcla']);
+  const presentationQuantity=/\b(?:\d+(?:[.,]\d+)?\s*[x×]\s*)*\d+(?:[.,]\d+)?\s*(?:kilogramos?|kilos?|kgs?|gramos?|grs?|mg|miligramos?|g|litros?|lts?|mililitros?|ml|cc|l|onzas?|oz|libras?|lb|pzas?|pz|piezas?|unidades?|botes?|cajas?|bolsas?|latas?|frascos?|botellas?|cubetas?|paquetes?|packs?)(?=$|[\s,.;:/()])/gi;
+  function ingredientIdentity(p) {
+    // El nombre comercial es la evidencia; un nombre genérico amplio no borra sus calificativos.
+    const name=String(p.nombre_comercial||p.ingrediente_nombre||p.ingrediente_generico||'');
+    // Un porcentaje puede definir el alimento (p. ej., grasa), no el tamaño del empaque.
+    const percentages=unique((name.match(/\d+(?:[.,]\d+)?\s*%/g)||[]).map(x=>String(Number(x.replace('%','').replace(',','.').trim())))).sort();
+    let text=norm(name.replace(/\d+(?:[.,]\d+)?\s*%/g,' ').replace(presentationQuantity,' '));
+    for(const metadata of [p.marca,p.proveedor_nombre]){
+      const phrase=norm(metadata);if(phrase)text=(' '+text+' ').split(' '+phrase+' ').join(' ').trim();
+    }
+    const tokens=text.split(' ').filter(w=>w&&!presentationWords.has(w)).map(w=>ingredientPlurals[w]||w);
+    if(!tokens.some(w=>/[a-z]/.test(w)) || (tokens.length===1&&ambiguousIngredients.has(tokens[0])))return '';
+    // Códigos o números sin unidad conocida se conservan: no suponemos que sean peso.
+    // Se conservan orden, tipo, preparación y «con/sin». Peso, unidad o proveedor nunca bastan.
+    return tokens.join(' ')+(percentages.length?' '+percentages.map(x=>x+'%').join(' '):'');
+  }
   function createMatcher(products) {
-    const words=p=>new Set(norm(ingredientName(p)+' '+p.nombre_comercial).split(' ').filter(w=>w.length>2&&!/^\d+$/.test(w)&&!['para','con','sin','bote','caja','bolsa','lata'].includes(w)));
-    const byId=new Map(products.map(p=>[p.id,{p,group:groupId(p),include:destination(p).include,words:words(p)}]));
+    const byId=new Map(products.map(p=>[p.id,{p,group:groupId(p),include:destination(p).include,identity:ingredientIdentity(p)}]));
     const index=new Map(),rejected=new Map();
     for(const m of byId.values()){
-      if(m.include)for(const w of m.words){if(!index.has(w))index.set(w,[]);index.get(w).push(m);}
+      if(m.include&&m.identity){if(!index.has(m.identity))index.set(m.identity,[]);index.get(m.identity).push(m);}
       for(const id of m.p.forx_distintos||[]){
         const other=byId.get(id);if(!other)continue;
         for(const [a,b] of [[m.group,other.group],[other.group,m.group]]){if(!rejected.has(a))rejected.set(a,new Set());rejected.get(a).add(b);}
@@ -187,12 +220,12 @@
     }
     return function(source,limit=3){
       if(!destination(source).include)return [];
-      const own=byId.get(source.id)||{group:groupId(source),words:words(source)};
-      const pool=new Set([...own.words].flatMap(w=>index.get(w)||[])),seen=new Set();
-      return [...pool].filter(m=>m.group!==own.group&&!rejected.get(own.group)?.has(m.group))
-        .map(m=>({m,score:[...own.words].filter(w=>m.words.has(w)).length/Math.max(own.words.size,m.words.size)}))
-        .filter(x=>x.score>=0.2).sort((a,b)=>b.score-a.score||a.m.p.id.localeCompare(b.m.p.id))
-        .filter(({m})=>{if(seen.has(m.group))return false;seen.add(m.group);return true;}).slice(0,limit).map(x=>x.m.p);
+      const own=byId.get(source.id)||{group:groupId(source),identity:ingredientIdentity(source)};
+      if(!own.identity)return [];
+      const seen=new Set();
+      return (index.get(own.identity)||[]).filter(m=>m.group!==own.group&&!rejected.get(own.group)?.has(m.group))
+        .sort((a,b)=>a.p.id.localeCompare(b.p.id))
+        .filter(m=>{if(seen.has(m.group))return false;seen.add(m.group);return true;}).slice(0,limit).map(m=>m.p);
     };
   }
   const suggest=(products,source,limit=3)=>createMatcher(products)(source,limit);
@@ -230,5 +263,5 @@
     return { prices:next, managed:unique([...Object.keys(desired).filter(k=>!held.has(k)), ...managed.filter(k=>held.has(k))]), conflicts,
       changed:JSON.stringify(next) !== JSON.stringify(previous) };
   }
-  return { norm, date, destination, ingredientName, groupId, findProduct, conversion, observations, observationPrice, recordPurchase, keys, groups, priceForGroup, homologate, createMatcher, suggest, publication };
+  return { norm, date, destination, ingredientName, groupId, findProduct, conversion, observations, observationPrice, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, publication };
 });

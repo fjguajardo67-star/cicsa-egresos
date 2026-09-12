@@ -24,7 +24,7 @@ test('HTML anuncia favicon, apple-touch-icon y manifiesto sin alterar el script 
   assert.match(html,/<link rel="icon"[^>]*href="favicon\.ico\?/);
   assert.match(html,/<link rel="apple-touch-icon"[^>]*sizes="180x180"/);
   assert.match(html,/<link rel="manifest"[^>]*href="site\.webmanifest\?/);
-  assert(html.includes('2026-09-11-ingredientes-forx-v1'));
+  assert(html.includes('2026-09-12-ingredientes-forx-v2'));
 });
 test('ICO contiene imágenes válidas de 16, 32, 48 y 256 píxeles',()=>{
   const ico=fs.readFileSync(path.join(root,'favicon.ico'));

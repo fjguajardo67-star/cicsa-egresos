@@ -1,7 +1,7 @@
 # Egresos: ingredientes y precios para FORX
 
-Estado: implementado y probado localmente. No desplegado. Rama `feat/ingredientes-forx`, basada en `origin/main` (`8fa2811`).
-Versión visible: `2026-09-11-ingredientes-forx-v1`.
+Estado: versión inicial desplegada en `main` (`5bc97c7`); corrección conservadora de sugerencias preparada en `feat/ingredientes-forx`.
+Versión visible de la corrección: `2026-09-12-ingredientes-forx-v2`.
 
 ## Flujo implementado
 
@@ -15,6 +15,18 @@ Versión visible: `2026-09-11-ingredientes-forx-v1`.
 8. Guardar cambios crea, en el mismo commit, el pendiente de publicación. El publicador actualiza la fuente compartida que consume FORX.
 
 La lista agrupa ingredientes, muestra una propuesta por grupo y evita repetir el mismo par. Búsqueda y vistas: Por revisar, Ingredientes y Solo Egresos. La edición conserva el estilo CICSA, muestra solamente los campos necesarios y no inventa un kilo/pieza cuando falta la conversión.
+
+## Sugerencias estrictas de homologación (v2)
+
+- Ya no se acepta una coincidencia parcial de palabras. Se exige igualdad del nombre comercial completo normalizado, conservando orden, tipo y preparación.
+- Cantidades con unidad, empaques, proveedor y marca registrada no aportan evidencia de identidad. `Aceituna 3kg` y `Pasta codo 3kg` no se proponen como equivalentes.
+- Se normalizan mayúsculas, acentos y una lista acotada de plurales. `Aceituna 3kg` y `Aceitunas frasco 1kg` sí pueden proponerse.
+- Se conservan calificativos, «con/sin», porcentajes y códigos no reconocidos como cantidades: arroz blanco/integral, ranch/mayonesa y leche 1%/3% permanecen distintos. Nombres amplios como «Aderezo» no bastan.
+- El nombre genérico no borra las diferencias de la descripción comercial. Las decisiones «No, son distintos» siguen vigentes.
+- Se prioriza evitar falsos positivos: descripciones abreviadas, sinónimos o nombres incompletos pueden requerir revisión manual. Esto no es una clasificación semántica ni garantiza equivalencia culinaria.
+- La sugerencia nunca homologa sola. Esta corrección no modifica ingredientes ya vinculados, compras, precios, conversiones, filtros de Solo Egresos ni permisos.
+
+Regresión cubierta en pruebas de dominio y del catálogo: el par reportado no muestra el botón de homologar, consultar no escribe datos y un par válido conserva la decisión explícita Sí/No.
 
 ## Datos y compatibilidad
 
@@ -48,7 +60,7 @@ La lista agrupa ingredientes, muestra una propuesta por grupo y evita repetir el
 
 ## Límites y puesta en producción
 
-**No se ha publicado esta rama ni se ha confirmado recepción real en FORX.** La interfaz distingue “publicado para FORX” de “recibido por FORX”.
+**La versión inicial está publicada; no se ha confirmado recepción real en FORX.** La interfaz distingue “publicado para FORX” de “recibido por FORX”.
 
 El pendiente queda en Firestore, pero el publicador corre en Egresos: con todas las pestañas cerradas no hay un worker de servidor ejecutándose. La siguiente sesión retoma el pendiente. Para garantías de entrega independiente del navegador y acuse de recepción se necesita completar la integración del consumidor/worker.
 
