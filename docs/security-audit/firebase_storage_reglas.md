@@ -1,6 +1,26 @@
 # Reglas de Firestore y Storage — correcciones y aceptación
 
-Estado: preparadas y probadas en emuladores; verificar publicación por separado.
+Estado: publicadas en Firestore y Storage; verificadas contra las fuentes probadas.
+
+## Evidencia de publicación
+
+- Firebase CLI confirmó compilación y publicación correcta de ambas reglas.
+- Las fuentes activas coinciden byte a byte con los archivos del repositorio.
+- IAM entre Storage y Firestore confirmado antes y después del despliegue.
+- Preflight de los cinco perfiles: dos administradores, tres operativos, ningún
+  perfil inválido; los registros heredados siguen siendo compatibles.
+- Comprobaciones HTTP sin sesión: `datos/precios` 200, `estado/cicsa` 403,
+  listado `datos` 403 y listado de facturas de Storage 403.
+- Ruleset Firestore: `7c98c756-806e-49cb-b79a-1e207e0fb5d1`.
+- Ruleset Storage: `2392ea22-4b81-4542-b860-0d5be627cf0a`.
+- Reversión disponible: rulesets anteriores Firestore
+  `dd19a533-0dc3-4030-9648-da92566580fe` y Storage
+  `e2d3c1f5-1806-4db3-a461-cf2c329cc91b`; fuentes guardadas como entregable local.
+
+La sesión CLI administradora pertenece a `fjguajardo67@gmail.com` y quedó
+seleccionada para esta carpeta de proyecto. La cuenta de importación Gmail sigue
+siendo independiente. Falta la aceptación del flujo de captura/consulta de facturas
+con una sesión real de la aplicación después del despliegue.
 
 ## [CRITICAL] Autorización coherente con el backend
 
@@ -65,6 +85,7 @@ Antes de publicar, con sesión administradora de Firebase CLI:
 
 ```sh
 node tools/firebase_rules_snapshot.cjs
+node tools/firebase_users_preflight.cjs
 ```
 
 Conservar las fuentes y nombres de ruleset devueltos como respaldo; el script no

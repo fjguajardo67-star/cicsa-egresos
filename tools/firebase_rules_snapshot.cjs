@@ -5,7 +5,7 @@ const { createHash } = require('node:crypto');
 const { createRequire } = require('node:module');
 const path = require('node:path');
 const testRequire = createRequire(path.join(__dirname, '../tests/firebase/package.json'));
-const { getGlobalDefaultAccount } = testRequire('firebase-tools/lib/auth');
+const { getProjectDefaultAccount } = testRequire('firebase-tools/lib/auth');
 const { requireAuth } = testRequire('firebase-tools/lib/requireAuth');
 const rules = testRequire('firebase-tools/lib/gcp/rules');
 const { getProjectNumber } = testRequire('firebase-tools/lib/getProjectNumber');
@@ -23,7 +23,7 @@ const sha256 = s => createHash('sha256').update(s).digest('hex');
 let stage = 'sesion';
 
 (async () => {
-  const account = getGlobalDefaultAccount();
+  const account = getProjectDefaultAccount(path.resolve(__dirname, '..'));
   if (!account) throw new Error('LOGIN_REQUIRED');
   const options = { project, nonInteractive: true, user: account.user, tokens: account.tokens };
   await requireAuth(options);
