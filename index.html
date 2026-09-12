@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CICSA — Control de Egresos</title>
+<meta name="application-name" content="CICSA Egresos">
+<meta name="apple-mobile-web-app-title" content="CICSA Egresos">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0F3D2E">
+<link rel="icon" href="favicon.ico?v=cicsa-1" sizes="16x16 32x32 48x48 256x256">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/cicsa-32.png?v=1">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/cicsa-180.png?v=1">
+<link rel="manifest" href="site.webmanifest?v=cicsa-1">
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <!-- integrity: el navegador comprueba el hash antes de ejecutar. Sin esto corría lo que
      devolviera el CDN, con la sesión de Firebase del usuario y acceso a todo el estado.
@@ -2043,7 +2051,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-11-finanzas-v2";
+const APP_BUILD = "2026-09-11-finanzas-v2-iconos";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;

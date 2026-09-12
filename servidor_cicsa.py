@@ -217,6 +217,8 @@ ALLOWED_STATIC_EXT = {".html", ".css", ".js", ".png", ".jpg", ".jpeg", ".ico", "
 
 @app.route("/<path:filename>")
 def static_files(filename):
+    if filename == "site.webmanifest":
+        return send_from_directory(str(BASE_DIR), filename, mimetype="application/manifest+json")
     if Path(filename).suffix.lower() not in ALLOWED_STATIC_EXT:
         return "No encontrado", 404
     return send_from_directory(str(BASE_DIR), filename)

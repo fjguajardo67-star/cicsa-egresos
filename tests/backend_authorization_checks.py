@@ -147,6 +147,16 @@ class BackendAuthorizationTests(unittest.TestCase):
     def test_live_status_identifies_the_release(self):
         self.assertEqual(self.client.get("/status").json["security_release"], "authorization-v1")
 
+    def test_web_app_assets_are_public_but_private_json_is_not(self):
+        with self.client.get('/site.webmanifest') as response:
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(response.mimetype,'application/manifest+json')
+        for route in ('/favicon.ico','/assets/icons/cicsa-180.png'):
+            with self.client.get(route) as response:
+                self.assertEqual(response.status_code,200)
+        for route in ('/gmail_token.json','/cicsa_data.json','/private.webmanifest'):
+            self.assertEqual(self.client.get(route).status_code,404)
+
 
 if __name__ == "__main__":
     unittest.main()
