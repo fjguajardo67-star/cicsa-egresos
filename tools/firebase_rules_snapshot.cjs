@@ -10,7 +10,8 @@ const { requireAuth } = testRequire('firebase-tools/lib/requireAuth');
 const rules = testRequire('firebase-tools/lib/gcp/rules');
 const { getProjectNumber } = testRequire('firebase-tools/lib/getProjectNumber');
 const { serviceAccountHasRoles } = testRequire('firebase-tools/lib/gcp/resourceManager');
-const { getDefaultBucket } = testRequire('firebase-tools/lib/gcp/storage');
+const { Client } = testRequire('firebase-tools/lib/apiv2');
+const { firebaseStorageOrigin } = testRequire('firebase-tools/lib/api');
 
 const project = 'cicsa-egresos';
 const expectedBucket = 'cicsa-egresos.firebasestorage.app';
@@ -26,8 +27,14 @@ let stage = 'sesion';
   if (!account) throw new Error('LOGIN_REQUIRED');
   const options = { project, nonInteractive: true, user: account.user, tokens: account.tokens };
   await requireAuth(options);
+  stage = 'reglas';
+  const releases = (await rules.listAllReleases(project)).filter(r => expectedReleases.has(r.name));
+  if (releases.length !== 2) throw new Error('EXPECTED_RELEASES_MISSING');
   stage = 'bucket';
-  const bucket = await getDefaultBucket(project);
+  // GET directo: el helper de despliegue también puede habilitar APIs.
+  const storageClient = new Client({ urlPrefix: firebaseStorageOrigin(), apiVersion: 'v1alpha' });
+  const bucketResponse = await storageClient.get(`/projects/${project}/defaultBucket`);
+  const bucket = bucketResponse.body?.bucket?.name?.split('/').pop();
   if (bucket !== expectedBucket) throw new Error('BUCKET_MISMATCH');
   stage = 'numero_proyecto';
   const number = await getProjectNumber(options);
@@ -35,9 +42,7 @@ let stage = 'sesion';
   const crossServiceIam = await serviceAccountHasRoles(number,
     `service-${number}@gcp-sa-firebasestorage.iam.gserviceaccount.com`,
     ['roles/firebaserules.firestoreServiceAgent'], true);
-  stage = 'reglas';
-  const releases = (await rules.listAllReleases(project)).filter(r => expectedReleases.has(r.name));
-  if (releases.length !== 2) throw new Error('EXPECTED_RELEASES_MISSING');
+  stage = 'fuentes';
   const output = [];
   for (const release of releases) {
     const files = await rules.getRulesetContent(release.rulesetName);
