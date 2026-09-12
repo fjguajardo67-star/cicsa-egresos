@@ -36,6 +36,19 @@
 .ing-match{background:#f4f7f4;border-radius:10px;padding:16px;margin-top:16px;}
 .ing-match p{color:#284737;margin-bottom:12px;}
 .ing-match details{background:transparent;}
+.ing-quick{margin-top:14px;}
+.ing-manual{margin-top:16px;padding:18px;background:#f4f7f4;border-radius:10px;}
+.ing-manual h4{font:600 1rem/1.4 system-ui,-apple-system,sans-serif;margin:0 0 12px;color:var(--ing-green);}
+.ing-manual label{display:block;font-size:.875rem;font-weight:600;margin:14px 0 6px;}
+.ing-manual input{width:100%;max-width:540px;font:inherit;padding:10px 12px;border:1px solid #afc3b7;border-radius:8px;background:#fff;color:#173a2c;}
+.ing-manual .ing-actions{margin-top:16px;}
+.ing-targets,.ing-merge-members{list-style:none;padding:0;margin:12px 0;}
+.ing-targets li{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-top:1px solid #d4dfd8;}
+.ing-targets li>div{flex:1;min-width:0;}
+.ing-targets button{max-width:50%;overflow-wrap:anywhere;}
+.ing-merge-members li{padding:10px 0;border-top:1px solid #d4dfd8;}
+.ing-workspace .ing-manual h4:focus-visible{outline:3px solid #164a5f;outline-offset:3px;}
+@media(max-width:640px){.ing-manual{padding:14px;}.ing-targets li{align-items:stretch;flex-direction:column;gap:8px;}.ing-targets button{max-width:100%;}.ing-manual input{font-size:16px;}}
 .ing-history{padding-bottom:10px;}
 .ing-empty{padding:32px 0;}
 .ing-editor-destination{padding:16px;background:#f2f6f2;margin:14px 0 20px;border-radius:10px;}

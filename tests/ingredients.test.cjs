@@ -91,6 +91,28 @@ test('proveedor, marca y categoría no bastan; solo se omite la marca registrada
   assert.deepEqual(matchPair({...metadata,nombre_comercial:'Aceituna Marca Ejemplo 3kg'},{marca:'Otra Marca',nombre_comercial:'Aceitunas Otra Marca frasco 1kg'}),[1,1]);
   assert.equal(C.ingredientIdentity({...metadata,nombre_comercial:'Marca Ejemplo caja 3kg'}),'');
 });
+test('búsqueda manual encuentra nombres distintos sin convertirlos en coincidencias automáticas',()=>{
+  const a=product({nombre_comercial:'Aderezo para untar',ingrediente_generico:'Mayonesa'}),b=product({id:'b',nombre_comercial:'Aderezo BC 3.8L',ingrediente_generico:'Aderezo'});
+  const ignored={...b,id:'ignored',ingrediente_id:'ignored',estado:'ignorado'},sameGroup={...b,id:'same'};
+  assert.equal(C.suggest([a,b],a).length,0);
+  assert.equal(C.manualTargets([a,b,ignored,sameGroup],'a','aderezo').length,1);
+  assert.equal(C.manualTargets([a,b],'a','a').length,0);
+  assert.equal(C.manualTargets([a,b],'a','sin resultados').length,0);
+  assert.equal(C.manualTargets([a,b],'missing','aderezo').length,0);
+  assert.equal(C.manualTargets([{...a,estado:'ignorado'},b],'a','aderezo').length,0);
+  assert.equal(C.manualTargets([a,{...b,forx_distintos:['a']}],'a','aderezo')[0].targetId,'b','decisión explícita puede revisar un No anterior');
+});
+test('cinco nombres elegidos manualmente conservan cada compra y la fecha más reciente',()=>{
+  const names=['Aderezo','Aderezo para untar','Aderezo BC','Salsa para untar','Aderezo de mayonesa'];
+  let rows=names.map((name,i)=>product({id:String(i),nombre_comercial:name,ingrediente_generico:name,ingrediente_id:String(i),precio_actual:90+i*3,fecha_precio:'2026-09-'+String(i+1).padStart(2,'0')}));
+  for(let i=1;i<5;i++){
+    const changed=C.homologate(rows,String(i),'0'),byId=new Map(changed.map(p=>[p.id,p]));rows=rows.map(p=>byId.get(p.id)||p);
+  }
+  assert.equal(rows.length,5);assert.equal(C.groups(rows).length,1);
+  assert.deepEqual(rows.map(p=>p.nombre_comercial),names);
+  assert(rows.every(p=>p.compras_forx.length===1&&p.estado==='validado'));
+  assert.equal(C.priceForGroup(C.groups(rows)[0]).winner.calc.price,34);
+});
 test('un mismo nombre de proveedores distintos no reutiliza una conversión sin aprobar',()=>{
   const a=product();assert.equal(C.findProduct([a],{nombre:a.nombre_comercial,proveedor:'Proveedor B'}),null);
   assert.equal(C.findProduct([a],{nombre:a.nombre_comercial,proveedor:'Proveedor A'}).id,'a');
@@ -213,7 +235,7 @@ test('edición obsoleta no destruye el cambio de otro usuario',async()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20260912-ingredientes2'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20260912-egresos3'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -223,7 +245,7 @@ test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de ac
 
 function integration(m){
   const nodes=new Map(),element=id=>{
-    if(!nodes.has(id))nodes.set(id,{value:id==='pcForxDestino'?'auto':'',innerHTML:'',textContent:'',style:{},classList:{toggle(){},contains(){return false;}},addEventListener(){}});
+    if(!nodes.has(id))nodes.set(id,{value:id==='pcForxDestino'?'auto':'',innerHTML:'',textContent:'',style:{},classList:{toggle(){},contains(){return false;}},listeners:{},focus(){this.focused=true;},addEventListener(type,fn){this.listeners[type]=fn;}});
     return nodes.get(id);
   };
   const context={CicsaIngredients:C,CicsaIngredientStore:()=>m.store,FB_BASE:'demo',FB_KEY:'demo',fetch:()=>{throw Error('No live network');},fbAuthHeader:async()=>({}),
@@ -233,8 +255,74 @@ function integration(m){
     TextEncoder,structuredClone,setTimeout:()=>1,clearTimeout(){},addEventListener(){},console};
   for(const name of ['cargarCatalogo','fbUpdateDoc','fbCreateDoc','abrirEditorProducto','guardarCfdisEnStore','renderCatalogoProductos','setCatProdFiltro','abrirSyncMenuModal','confirmarSyncMenu','cambiarEstadoRapido','actualizarCalculoPorcion','closeProductoModal'])context[name]=()=>{};
   context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8'),context);
-  return {app:context.CicsaCatalog,context,element};
+  const click=async(action,id,extra={})=>{const b={dataset:{action,id,...extra},disabled:false};await element('page-catalogo-productos').listeners.click({target:{closest:()=>b}});return b;};
+  const input=value=>element('page-catalogo-productos').listeners.input({target:{id:'ingManualSearch',value}});
+  return {app:context.CicsaCatalog,context,element,click,input};
 }
+test('omitir desde la tarjeta conserva producto e historial, persiste y se puede recuperar',async()=>{
+  const m=memory();await m.store.save([product({estado:'pendiente'})]);
+  const ui=integration(m);await ui.app.load();await ui.app.render();
+  assert(ui.element('page-catalogo-productos').innerHTML.includes('data-action="omit"'));
+  const before=structuredClone(m.docs.get('productos_comerciales/a').data);
+  await ui.click('omit','a');
+  assert.deepEqual(m.docs.get('productos_comerciales/a').data,{...before,estado:'ignorado'});
+  assert.equal(C.destination(m.docs.get('productos_comerciales/a').data).include,false);
+  await ui.app.ingest([{nombre:before.nombre_comercial,precio:99}],'Proveedor A','NEW',{fecha:'2026-09-12'});
+  assert.equal(m.docs.get('productos_comerciales/a').data.estado,'ignorado','una compra no reactiva el omitido');
+  const reloaded=integration(m);await reloaded.app.load();await reloaded.click('view','',{view:'operacion'});
+  assert(reloaded.element('page-catalogo-productos').innerHTML.includes('Recuperar para revisión'));
+  await reloaded.click('include','a');
+  assert.equal(m.docs.get('productos_comerciales/a').data.estado,'pendiente');
+  assert.equal(m.docs.get('productos_comerciales/a').data.compras_forx.length,2);
+});
+test('fallo al omitir no elimina ni cambia el producto local o remoto',async()=>{
+  const m=memory();await m.store.save([product()]);const ui=integration(m);await ui.app.load();
+  const before=structuredClone([...m.docs]);m.setFail(403);
+  await ui.click('omit','a');assert.deepEqual([...m.docs],before);
+  assert.equal(ui.context._catalogoProductos[0].estado,'validado');
+  assert(ui.element('ingStatus').textContent);
+});
+test('una presentación omitida de grupo activo aparece y se recupera en Solo Egresos sin romper el vínculo',async()=>{
+  const a=product({ingrediente_id:'grupo',nombre_comercial:'Arroz bolsa 3kg'}),b=product({id:'b',ingrediente_id:'grupo',nombre_comercial:'Arroz caja 10kg',contenido_cantidad:10,precio_actual:400});
+  const m=memory();await m.store.save([a,b]);const ui=integration(m);await ui.app.load();
+  await ui.click('omit','a');await ui.click('view','',{view:'operacion'});
+  let html=ui.element('page-catalogo-productos').innerHTML;
+  assert(html.includes('Arroz bolsa 3kg'));assert(!html.includes('Arroz caja 10kg'));
+  assert(html.includes('Recuperar para revisión'));
+  assert.equal(m.docs.get('productos_comerciales/b').data.estado,'validado');
+  await ui.click('include','a');await ui.click('view','',{view:'ingredientes'});
+  html=ui.element('page-catalogo-productos').innerHTML;
+  assert(html.includes('2 presentación(es) vinculada(s)'));
+  assert.equal(m.docs.get('productos_comerciales/a').data.ingrediente_id,'grupo');
+  assert.equal(m.docs.get('productos_comerciales/a').data.estado,'pendiente');
+});
+test('manual: buscar, elegir y cancelar no escriben; confirmar vincula los grupos explícitamente',async()=>{
+  const m=memory();await m.store.save([product({nombre_comercial:'Aderezo',ingrediente_generico:'Aderezo',forx_distintos:['b']}),product({id:'b',nombre_comercial:'Salsa para untar',ingrediente_generico:'Mayonesa'})]);
+  const ui=integration(m);await ui.app.load();await ui.click('view','',{view:'ingredientes'});m.calls.length=0;
+  await ui.click('manual-open','a');ui.input('mayonesa');
+  assert(ui.element('ingManualResults').innerHTML.includes('Elegir Mayonesa'));
+  await ui.click('manual-select','a',{other:'b'});
+  let html=ui.element('page-catalogo-productos').innerHTML;assert(html.includes('Antes marcaste'));assert(html.includes('Se vincularán 2 presentaciones'));
+  await ui.click('manual-cancel','a');assert(!m.calls.some(c=>c.path===':commit'));
+  await ui.click('manual-open','a');ui.input('mayonesa');await ui.click('manual-select','a',{other:'b'});
+  await ui.click('manual-confirm','a',{other:'b'});
+  assert.equal(m.calls.filter(c=>c.path===':commit').length,1);
+  assert.equal(m.docs.get('productos_comerciales/a').data.ingrediente_generico,'Mayonesa');
+  assert.equal(m.docs.get('productos_comerciales/a').data.nombre_comercial,'Aderezo');
+  assert.equal(m.docs.get('productos_comerciales/a').data.estado,'validado');
+});
+test('manual: rechaza confirmar sin seleccionar y conserva selección ante error de guardado',async()=>{
+  const m=memory();await m.store.save([product(),product({id:'b',nombre_comercial:'Arroz entero',ingrediente_generico:'Arroz entero'})]);
+  const ui=integration(m);await ui.app.load();await ui.click('view','',{view:'ingredientes'});m.calls.length=0;
+  await ui.click('manual-confirm','a',{other:'b'});assert(!m.calls.some(c=>c.path===':commit'));
+  await ui.click('manual-open','a');ui.input('arroz');await ui.click('manual-select','a',{other:'b'});
+  m.setFail(503);const b=await ui.click('manual-confirm','a',{other:'b'});
+  assert.equal(b.disabled,false);assert(ui.element('ingManualError').textContent);
+  assert(ui.element('page-catalogo-productos').innerHTML.includes('Confirmar homologación'));
+  assert.equal(m.docs.get('productos_comerciales/a').data.ingrediente_id,undefined);
+  m.setFail(0);await ui.click('manual-confirm','a',{other:'b'});
+  assert.equal(m.docs.get('productos_comerciales/a').data.ingrediente_generico,'Arroz entero');
+});
 test('integración: el catálogo no muestra homologación por peso ni modifica los productos al consultar',async()=>{
   const m=memory();
   await m.store.save([

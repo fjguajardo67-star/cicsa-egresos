@@ -229,6 +229,16 @@
     };
   }
   const suggest=(products,source,limit=3)=>createMatcher(products)(source,limit);
+  // Búsqueda explícita del usuario; nunca se usa para sugerir ni fusionar automáticamente.
+  function manualTargets(products, sourceId, query) {
+    const source=products.find(p=>p.id===sourceId),text=norm(query);
+    if(!source||!destination(source).include||text.length<2)return [];
+    const terms=text.split(' ');
+    return groups(products).filter(g=>g.id!==groupId(source)&&g.products.some(p=>destination(p).include))
+      .filter(g=>{const names=norm([g.name,...g.products.flatMap(p=>[p.nombre_comercial,p.proveedor_nombre,...(p.sinonimos_menu||[])])].join(' '));return terms.every(t=>names.includes(t));})
+      .map(g=>({...g,targetId:g.products.find(p=>destination(p).include).id}))
+      .sort((a,b)=>a.name.localeCompare(b.name,'es')||a.id.localeCompare(b.id));
+  }
   function publication(products, previous = {}, managed = [], publishedDay = '') {
     const next = Object.assign(Object.create(null), previous), desired = Object.create(null), held = new Set(), conflicts = [], owners = new Map(), excluded = new Set();
     const grouped = groups(products);
@@ -263,5 +273,5 @@
     return { prices:next, managed:unique([...Object.keys(desired).filter(k=>!held.has(k)), ...managed.filter(k=>held.has(k))]), conflicts,
       changed:JSON.stringify(next) !== JSON.stringify(previous) };
   }
-  return { norm, date, destination, ingredientName, groupId, findProduct, conversion, observations, observationPrice, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, publication };
+  return { norm, date, destination, ingredientName, groupId, findProduct, conversion, observations, observationPrice, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets, publication };
 });

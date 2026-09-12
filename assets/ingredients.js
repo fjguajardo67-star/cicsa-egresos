@@ -4,7 +4,7 @@
   const C=window.CicsaIngredients;
   const store=window.CicsaIngredientStore({base:FB_BASE,key:FB_KEY,fetcher:(...args)=>fetch(...args),headers:fbAuthHeader,core:C,session:()=>auth.currentUser?.uid||''});
   const old={list:cargarCatalogo,update:fbUpdateDoc,create:fbCreateDoc,editor:abrirEditorProducto,cfdis:guardarCfdisEnStore};
-  let cached=new Map(),view='revision',query='',busy=false,publishing=null,timer=null,retries=0,lastStatus='',lastUid='',renderEpoch=0,analysisCache=null;
+  let cached=new Map(),view='revision',query='',busy=false,publishing=null,timer=null,retries=0,lastStatus='',lastUid='',renderEpoch=0,analysisCache=null,manual=null;
   const money=x=>new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN'}).format(x);
   const unit=x=>({pz:'pieza',porcion:'porción',lt:'L',kg:'kg'}[x]||x);
   const clean=p=>{const {id,...data}=p;return data;};
@@ -15,7 +15,7 @@
     const el=$('ingStatus');
     if(el){el.textContent=message;el.classList.toggle('ing-error',error);}
   }
-  function reset(){cached=new Map();analysisCache=null;_catalogoProductos=[];_catalogoProveedores=[];_catalogoCargado=false;query='';lastStatus='';clearTimeout(timer);retries=0;renderEpoch++;}
+  function reset(){cached=new Map();analysisCache=null;manual=null;_catalogoProductos=[];_catalogoProveedores=[];_catalogoCargado=false;query='';lastStatus='';clearTimeout(timer);retries=0;renderEpoch++;}
   async function load(force=false){
     const uid=auth.currentUser?.uid;
     if(!uid) throw new Error('Inicia sesión para abrir los ingredientes.');
@@ -135,9 +135,31 @@
     closeProductoModal();await render();status('Producto guardado. La publicación se comprobará automáticamente.');
   }
   function labelState(result){return {excluido:'Solo Egresos',pendiente:'Por verificar',conflicto:'Revisar conflicto',listo:'Verificado'}[result.state];}
+  function quickActions(p){
+    return `<div class="ing-actions ing-quick"><button type="button" data-action="manual-open" data-id="${e(p.id)}">Homologar manualmente</button><button type="button" data-action="omit" data-id="${e(p.id)}" title="Mover a Solo Egresos sin borrar compras ni historial">Omitir</button></div>`;
+  }
   function productDetails(p){
     const calc=C.conversion(p),reason=C.destination(p);
-    return `<div class="ing-presentation"><div><strong>${e(p.nombre_comercial)}</strong><p>${e(p.proveedor_nombre||'Proveedor no registrado')} · ${e(p.presentacion||'Presentación sin definir')}</p><p>${calc.ok?money(calc.price)+' / '+e(unit(calc.unit)):e(calc.reason)} · ${e(p.fecha_precio||'Sin fecha de factura')}</p></div><div class="ing-actions"><button type="button" data-action="edit" data-id="${e(p.id)}">Revisar</button>${reason.include?`<button type="button" data-action="exclude" data-id="${e(p.id)}">Solo Egresos</button>`:`<button type="button" data-action="include" data-id="${e(p.id)}">Usar en FORX</button>`}${p.ingrediente_id?`<button type="button" data-action="split" data-id="${e(p.id)}">Separar presentación</button>`:''}</div></div>`;
+    return `<div class="ing-presentation"><div><strong>${e(p.nombre_comercial)}</strong><p>${e(p.proveedor_nombre||'Proveedor no registrado')} · ${e(p.presentacion||'Presentación sin definir')}</p><p>${calc.ok?money(calc.price)+' / '+e(unit(calc.unit)):e(calc.reason)} · ${e(p.fecha_precio||'Sin fecha de factura')}</p></div><div class="ing-actions"><button type="button" data-action="edit" data-id="${e(p.id)}">Revisar</button>${reason.include?`<button type="button" data-action="omit" data-id="${e(p.id)}">Omitir</button>`:`<button type="button" data-action="include" data-id="${e(p.id)}">Recuperar para revisión</button>`}${p.ingrediente_id?`<button type="button" data-action="split" data-id="${e(p.id)}">Separar presentación</button>`:''}</div></div>`;
+  }
+  function manualResults(){
+    const results=C.manualTargets(_catalogoProductos,manual.sourceId,manual.query);
+    if(C.norm(manual.query).length<2)return '<p>Escribe al menos dos letras. La búsqueda incluye nombres de productos y proveedores.</p>';
+    return results.length?`<p>${results.length} ingrediente(s) encontrados. Elige solo si representan el mismo alimento.</p><ul class="ing-targets">${results.slice(0,8).map(g=>`<li><div><strong>${e(g.name)}</strong><p>${e(g.products.map(p=>p.nombre_comercial).join(' · '))}</p></div><button type="button" data-action="manual-select" data-id="${e(manual.sourceId)}" data-other="${e(g.targetId)}">Elegir ${e(g.name)}</button></li>`).join('')}</ul>${results.length>8?'<p>Se muestran ocho resultados. Escribe más para acotar la búsqueda.</p>':''}`:'<p>No hay otros ingredientes con ese texto. Prueba otro nombre o recupera primero el producto desde Solo Egresos.</p>';
+  }
+  function manualPanel(){
+    const source=_catalogoProductos.find(p=>p.id===manual.sourceId),target=_catalogoProductos.find(p=>p.id===manual.targetId);
+    if(!source)return '';
+    const cancel=`<button type="button" data-action="manual-cancel" data-id="${e(source.id)}">Cancelar</button>`;
+    let body;
+    if(!target){body=`<p>Vincula «${e(C.ingredientName(source))}» con un ingrediente existente aunque sus nombres sean diferentes.</p><label for="ingManualSearch">Buscar ingrediente de destino</label><input id="ingManualSearch" type="search" autocomplete="off" value="${e(manual.query)}"><div id="ingManualResults" aria-live="polite">${manualResults()}</div><div class="ing-actions">${cancel}</div>`;}
+    else{
+      const groups=C.groups(_catalogoProductos),a=groups.find(g=>g.id===C.groupId(source)),b=groups.find(g=>g.id===C.groupId(target));
+      const previouslyDistinct=a.products.some(p=>(p.forx_distintos||[]).some(id=>b.products.some(o=>o.id===id)))||b.products.some(p=>(p.forx_distintos||[]).some(id=>a.products.some(o=>o.id===id)));
+      const merged=C.homologate(_catalogoProductos,source.id,target.id),price=C.priceForGroup(C.groups(merged)[0]);
+      body=`<p>El nombre principal será <strong>${e(C.ingredientName(target))}</strong>. Se vincularán ${merged.length} presentaciones, no solo las dos seleccionadas.</p><ul class="ing-merge-members">${[a,b].map(g=>`<li><strong>${e(g.name)}</strong><p>${e(g.products.map(p=>p.nombre_comercial).join(' · '))}</p></li>`).join('')}</ul><p>Se conservan compras, conversiones e historiales. Ningún producto se elimina ni se valida por esta acción.</p><p>${price.state==='listo'?'Precio resultante: '+money(price.winner.calc.price)+' / '+e(unit(price.winner.calc.unit))+' · factura '+e(price.winner.fecha)+'.':'El precio requiere revisión: '+e(price.reason||'faltan datos')+'. No se publicará un precio nuevo para este grupo hasta resolverlo.'}</p>${previouslyDistinct?'<p class="ing-reason">Antes marcaste estos grupos como distintos. Confirma únicamente si revisaste esa decisión y son el mismo ingrediente.</p>':''}<div class="ing-actions"><button type="button" class="ing-primary" data-action="manual-confirm" data-id="${e(source.id)}" data-other="${e(target.id)}">Confirmar homologación</button><button type="button" data-action="manual-back" data-id="${e(source.id)}">Elegir otro ingrediente</button>${cancel}</div>`;
+    }
+    return `<section class="ing-manual" aria-labelledby="ingManualTitle"><h4 id="ingManualTitle" tabindex="-1">Homologar manualmente</h4>${body}<p id="ingManualError" class="ing-error" role="alert">${e(manual.error||'')}</p></section>`;
   }
   function suggestions(p,other){
     return `<div class="ing-match"><p>¿<strong>${e(p.nombre_comercial)}</strong> y <strong>${e(C.ingredientName(other))}</strong> corresponden al mismo ingrediente?</p><div class="ing-actions"><button type="button" class="ing-primary" data-action="merge" data-id="${e(p.id)}" data-other="${e(other.id)}">Sí, homologar</button><button type="button" data-action="different" data-id="${e(p.id)}" data-other="${e(other.id)}">No, son distintos</button></div><details><summary>Comparar detalles</summary>${productDetails(p)}${productDetails(other)}<p>Se conservan ambas presentaciones e historiales. El nombre principal será «${e(C.ingredientName(other))}».</p></details></div>`;
@@ -158,13 +180,18 @@
     analysisCache={grouped,matches};
     }
     const needs=g=>g.result.state!=='excluido'&&(g.result.state!=='listo'||g.result.issues?.length||matches.has(g.id));
-    const counts={revision:grouped.filter(needs).length,ingredientes:grouped.filter(g=>g.result.state!=='excluido').length,operacion:grouped.filter(g=>g.result.state==='excluido').length};
-    const visible=grouped.filter(g=>view==='revision'?needs(g):view==='operacion'?g.result.state==='excluido':g.result.state!=='excluido').filter(g=>C.norm([g.name,...g.products.map(p=>p.nombre_comercial+' '+p.proveedor_nombre)].join(' ')).includes(C.norm(query)));
+    const omitted=g=>g.products.filter(p=>!C.destination(p).include);
+    const counts={revision:grouped.filter(needs).length,ingredientes:grouped.filter(g=>g.result.state!=='excluido').length,operacion:grouped.filter(g=>omitted(g).length).length};
+    const visible=grouped.filter(g=>view==='revision'?needs(g):view==='operacion'?omitted(g).length:g.result.state!=='excluido')
+      .map(g=>{if(view!=='operacion')return g;const subset={...g,products:omitted(g)};return {...subset,result:C.priceForGroup(subset)};})
+      .filter(g=>C.norm([g.name,...g.products.map(p=>p.nombre_comercial+' '+p.proveedor_nombre)].join(' ')).includes(C.norm(query)));
     const rows=visible.slice(0,100).map(g=>{
       const r=g.result,w=r.winner;
       const choices=r.state==='conflicto'&&(r.candidates||[]).length?r.candidates.map(c=>`<button type="button" data-action="choose" data-id="${e(c.productId)}" data-observation="${e(c.id)}">Usar ${money(c.calc.price)}/${e(unit(c.calc.unit))} · ${e(c.proveedor)} · ${e(c.folio)}</button>`).join(''):'';
       const match=matches.get(g.id),reviews=view==='revision'&&match?suggestions(match.p,match.other):'';
-      return `<article class="ing-row"><div class="ing-row-head"><div><h3>${e(g.name)}</h3><p>${g.products.length} presentación(es) vinculada(s)</p></div><div class="ing-price">${w?`<strong>${money(w.calc.price)} <span>/ ${e(unit(w.calc.unit))}</span></strong><p>Factura: ${e(w.fecha)}</p>`:'<strong>Sin cambio de precio</strong>'}</div><span class="ing-state ${r.state==='listo'?'ing-ready':''}">${labelState(r)}</span></div>${r.reason?`<p class="ing-reason">${e(r.reason)}</p>`:''}${r.issues?.length?`<p class="ing-reason">Hay presentaciones por verificar. Se usa la última compra válida.</p>`:''}${choices?`<div class="ing-actions">${choices}</div>`:''}<details ${r.state==='pendiente'?'open':''}><summary>Ver presentaciones, proveedor e historial</summary>${g.products.map(p=>productDetails(p)+`<details class="ing-history"><summary>Compras de esta presentación</summary>${C.observations(p).map(o=>`<p>${e(o.fecha||'Sin fecha')} · ${money(o.precio)} por presentación · ${e(o.folio||'Sin folio')} · ${e(o.proveedor)}</p>`).join('')||'<p>Sin compras registradas.</p>'}</details>`).join('')}</details>${reviews}</article>`;
+      const active=g.products.find(p=>C.destination(p).include),openManual=manual&&g.products.some(p=>p.id===manual.sourceId);
+      const shortcuts=active?(g.products.length===1?quickActions(active):`<div class="ing-actions ing-quick"><button type="button" data-action="manual-open" data-id="${e(active.id)}">Homologar manualmente</button></div>`):'';
+      return `<article class="ing-row"><div class="ing-row-head"><div><h3>${e(g.name)}</h3><p>${g.products.length} presentación(es) vinculada(s)</p></div><div class="ing-price">${w?`<strong>${money(w.calc.price)} <span>/ ${e(unit(w.calc.unit))}</span></strong><p>Factura: ${e(w.fecha)}</p>`:'<strong>Sin cambio de precio</strong>'}</div><span class="ing-state ${r.state==='listo'?'ing-ready':''}">${labelState(r)}</span></div>${r.reason?`<p class="ing-reason">${e(r.reason)}</p>`:''}${r.issues?.length?`<p class="ing-reason">Hay presentaciones por verificar. Se usa la última compra válida.</p>`:''}${choices?`<div class="ing-actions">${choices}</div>`:''}${shortcuts}${openManual?manualPanel():''}<details ${r.state==='pendiente'?'open':''}><summary>Ver presentaciones, proveedor e historial</summary>${g.products.map(p=>productDetails(p)+`<details class="ing-history"><summary>Compras de esta presentación</summary>${C.observations(p).map(o=>`<p>${e(o.fecha||'Sin fecha')} · ${money(o.precio)} por presentación · ${e(o.folio||'Sin folio')} · ${e(o.proveedor)}</p>`).join('')||'<p>Sin compras registradas.</p>'}</details>`).join('')}</details>${openManual?'':reviews}</article>`;
     }).join('');
     return `<section class="ing-workspace" aria-label="Ingredientes y precios para FORX"><header class="ing-heading"><div><h2>Ingredientes para FORX</h2><p>Identifica una vez. Las siguientes compras actualizan el precio automáticamente.</p></div><div class="ing-actions"><button type="button" data-action="refresh">Actualizar</button><button type="button" data-action="new" class="ing-primary">Agregar ingrediente</button></div></header><div class="ing-toolbar" role="group" aria-label="Vista del catálogo">${Object.entries({revision:'Por revisar',ingredientes:'Ingredientes',operacion:'Solo Egresos'}).map(([key,label])=>`<button type="button" data-action="view" data-view="${key}" aria-pressed="${key===view}">${label} <span>${counts[key]}</span></button>`).join('')}</div><div class="ing-search"><label for="ingSearch">Buscar ingrediente, producto o proveedor</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aderezo ranch" autocomplete="off"></div><div class="ing-publication"><p id="ingStatus" role="status" aria-live="polite">${e(lastStatus||'Los precios se publican al guardar cambios verificados.')}</p><button type="button" data-action="publish">Comprobar publicación</button></div><p class="ing-policy">Limpieza, refrescos y desechables permanecen en Solo Egresos. Autoriza individualmente las excepciones de Grill Express.</p><div id="ingRows">${rows||'<div class="ing-empty"><h3>No hay ingredientes en esta vista</h3><p>Cambia de vista o limpia la búsqueda. Las compras siguen registradas en Egresos.</p></div>'}</div>${visible.length>100?`<p>Mostrando 100 de ${visible.length}. Usa la búsqueda para acotar los resultados.</p>`:''}</section>`;
   }
@@ -177,21 +204,34 @@
   async function action(button){
     if(busy)return;
     const action=button.dataset.action,id=button.dataset.id;
-    if(action==='view'){view=button.dataset.view;await render();return;}
+    if(action==='view'){manual=null;view=button.dataset.view;await render();return;}
     if(action==='edit'||action==='new'){abrirEditorProducto(id||null);return;}
+    if(action==='manual-cancel'){manual=null;await render();$('ingSearch')?.focus();return;}
     busy=true;button.disabled=true;
     try{
-      if(action==='refresh'){await render(true);return;}
+      if(action==='refresh'){manual=null;await render(true);return;}
       if(action==='publish'){retries=0;await publish();return;}
       const p=_catalogoProductos.find(x=>x.id===id);
       if(!p)throw new Error('Actualiza el catálogo para encontrar este producto.');
-      if(action==='merge'){
+      if(action==='manual-open'){
+        if(!C.destination(p).include)throw new Error('Recupera primero el producto desde Solo Egresos.');
+        manual={sourceId:id,targetId:'',query:'',error:''};await render();$('ingManualSearch')?.focus();return;
+      }else if(action==='manual-select'||action==='manual-back'){
+        if(!manual||manual.sourceId!==id)throw new Error('Vuelve a abrir la homologación manual.');
+        if(action==='manual-select'&&!C.manualTargets(_catalogoProductos,id,manual.query).some(g=>g.targetId===button.dataset.other))throw new Error('El destino cambió. Busca y selecciona de nuevo el ingrediente.');
+        manual.targetId=action==='manual-back'?'':button.dataset.other;manual.error='';await render();$(manual.targetId?'ingManualTitle':'ingManualSearch')?.focus();return;
+      }else if(action==='merge'||action==='manual-confirm'){
+        if(action==='manual-confirm'&&(!manual||manual.sourceId!==id||manual.targetId!==button.dataset.other))throw new Error('Revisa el destino antes de confirmar.');
         const changes=C.homologate(_catalogoProductos,id,button.dataset.other);
-        await saveRows(changes);status('Homologación guardada. Se conservaron presentaciones e historiales.');
+        if(!changes.length)throw new Error('Estos productos ya pertenecen al mismo ingrediente.');
+        await saveRows(changes);manual=null;status('Homologación guardada. Se conservaron presentaciones e historiales.');
       }else if(action==='different'){
         const other=_catalogoProductos.find(x=>x.id===button.dataset.other);
         await saveRows([{...p,forx_distintos:[...new Set([...(p.forx_distintos||[]),other.id])]},{...other,forx_distintos:[...new Set([...(other.forx_distintos||[]),p.id])]}]);
         status('Son distintos. Esta sugerencia no volverá a aparecer.');
+      }else if(action==='omit'){
+        await saveRows([{...p,estado:'ignorado'}]);manual=null;
+        status('Producto omitido: '+p.nombre_comercial+'. Se conserva en Solo Egresos; puedes recuperarlo para revisión.');
       }else if(action==='include'||action==='exclude'){
         await saveRows([{...p,forx_destino:action==='include'?'incluir':'excluir',estado:p.estado==='ignorado'?'pendiente':p.estado}]);
         status(action==='include'?'Excepción autorizada. Revisa su conversión antes de publicarla.':'Producto guardado en Solo Egresos. Sus compras se conservan.');
@@ -206,7 +246,7 @@
         await saveRows(group.products.map(x=>({...x,forx_preferido:pref})));status('Precio elegido para esta fecha. Una factura posterior prevalecerá automáticamente.');
       }
       await render();
-    }catch(err){status(err.message,true);}
+    }catch(err){status(err.message,true);if(manual){manual.error=err.message;$('ingManualError').textContent=err.message;}}
     finally{busy=false;button.disabled=false;}
   }
   // Las rutas heredadas de escritura también generan el pendiente atómicamente.
@@ -271,11 +311,16 @@
     return result;
   };
   const page=$('page-catalogo-productos');
-  page.addEventListener('click',event=>{const b=event.target.closest('button[data-action]');if(b)action(b);});
+  page.addEventListener('click',event=>{const b=event.target.closest('button[data-action]');if(b)return action(b);});
   let searchTimer;
-  page.addEventListener('input',event=>{if(event.target.id!=='ingSearch')return;query=event.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{const pos=event.target.selectionStart;await render();const input=$('ingSearch');input?.focus();try{input?.setSelectionRange(pos,pos);}catch(_){}},200);});
+  page.addEventListener('input',event=>{
+    if(event.target.id==='ingManualSearch'&&manual){manual.query=event.target.value;manual.targetId='';manual.error='';$('ingManualResults').innerHTML=manualResults();$('ingManualError').textContent='';return;}
+    if(event.target.id!=='ingSearch')return;manual=null;query=event.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{const pos=event.target.selectionStart;await render();const input=$('ingSearch');input?.focus();try{input?.setSelectionRange(pos,pos);}catch(_){}},200);
+  });
   document.addEventListener('keydown',event=>{
-    const modal=$('productoModal');if(!modal.classList.contains('open'))return;
+    const modal=$('productoModal');
+    if(manual&&event.key==='Escape'&&!modal.classList.contains('open')){manual=null;render().then(()=>$('ingSearch')?.focus());return;}
+    if(!modal.classList.contains('open'))return;
     if(event.key==='Escape'){closeProductoModal();$('ingSearch')?.focus();}
     if(event.key==='Tab'){const nodes=[...modal.querySelectorAll('input,select,button,[href]')].filter(x=>!x.disabled&&x.type!=='hidden'&&x.getClientRects().length);const first=nodes[0],last=nodes.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}
   });

@@ -1,7 +1,19 @@
 # Egresos: ingredientes y precios para FORX
 
-Estado: versión inicial desplegada en `main` (`5bc97c7`); corrección conservadora de sugerencias preparada en `feat/ingredientes-forx`.
-Versión visible de la corrección: `2026-09-12-ingredientes-forx-v2`.
+Estado: comparador estricto desplegado en `main` (`2cbe440`); extensión de omisión y homologación manual preparada en `feat/ingredientes-forx`.
+Versión visible de esta extensión: `2026-09-12-egresos-v3`.
+Las siguientes versiones se identifican como Egresos; FORX solo se menciona en la integración, no en el distintivo de versión.
+
+## Omitir y homologar manualmente (v3)
+
+- **Omitir** aparece directamente en la tarjeta de un producto. En grupos con varias presentaciones, cada una tiene su botón dentro de los detalles; no se omite todo el grupo por accidente.
+- Omitir marca `estado: ignorado`, igual que el editor, y lo deja en **Solo Egresos**. No borra factura, producto ni historial. Nuevas compras del mismo producto conservan la omisión.
+- Para deshacerlo: **Solo Egresos → Ver presentaciones, proveedor e historial → Recuperar para revisión**. También aparecen allí las presentaciones omitidas de un grupo que sigue activo; se conserva su vínculo al recuperarlas. Regresa pendiente de validar y se autoriza individualmente para recetas.
+- **Homologar manualmente** está disponible desde la tarjeta, tanto en Por revisar como en Ingredientes. Busca el nombre de destino (por ejemplo, Mayonesa), pulsa **Elegir**, revisa todos los miembros y el precio resultante y pulsa **Confirmar homologación**.
+- Para cinco nombres del mismo alimento, repite la vinculación hacia el mismo ingrediente principal. Cada operación une los grupos completos y conserva sus presentaciones, compras y conversiones. No marca productos pendientes como validados.
+- La búsqueda manual admite nombres distintos, pero no es una sugerencia de equivalencia. No incluye grupos completamente omitidos ni el grupo de origen. Si antes se marcaron como distintos, la confirmación lo advierte.
+- Se muestra el cálculo según la última compra válida; ante conflicto de precios o unidades no se promete una publicación nueva. Elegir y Cancelar no escriben. Un fallo mantiene la selección y permite reintentar; las escrituras conservan las precondiciones contra ediciones concurrentes.
+- La lógica automática estricta de v2 y los permisos financieros no se modifican.
 
 ## Flujo implementado
 
@@ -50,7 +62,7 @@ Regresión cubierta en pruebas de dominio y del catálogo: el par reportado no m
 
 ## Verificación
 
-- 25 pruebas nuevas de dominio, integración de captura/XML, idempotencia, fechas, homologación, conflictos, conversiones históricas y fallos.
+- 39 pruebas de dominio e integración, incluyendo omisión recuperable dentro de grupos activos, persistencia tras nueva factura, cinco nombres, homologación manual, confirmación explícita, cancelación y fallos de guardado.
 - 709 comprobaciones JavaScript heredadas.
 - 12 comprobaciones de sincronización, PDF, sintaxis e integridad.
 - 12 pruebas de separación financiera y 4 de iconos.
