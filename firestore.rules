@@ -1,166 +1,97 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// CICSA Egresos — Reglas de seguridad de Firestore
-// ═══════════════════════════════════════════════════════════════════════════
-// ARCHIVO DE REFERENCIA. Firestore NO lo lee desde el repo: hay que pegarlo en
-// Firebase Console → Firestore Database → Reglas → Publicar. Se versiona aquí
-// para saber qué reglas están puestas y poder revisarlas como código.
-//
-// ESTE ARCHIVO PROTEGE LOS DATOS. Los ARCHIVOS —las fotos y PDFs de facturas, y
-// los .json de cortes— los protege storage.rules, que va en otra sección de la
-// consola (Storage → Reglas). Publicar uno NO publica el otro.
-//
-// Cambio principal vs. las reglas anteriores: se elimina el comodín
-//   match /{document=**} { allow read, write: if request.auth != null; }
-// que daba a CUALQUIER usuario con sesión permiso total sobre TODAS las
-// colecciones — incluido borrar CFDIs o auto-asignarse el rol de admin.
-// Ahora cada colección declara lo que realmente necesita.
-//
-// Segundo cambio (2026-08-28): tener sesión dejó de ser suficiente. El alta por
-// correo y contraseña de Firebase es un endpoint PÚBLICO de Google, y la llave del
-// proyecto va en index.html, que se sirve abierto en GitHub Pages: cualquiera podía
-// crearse una cuenta sin invitación y, con esa sesión, leer y ESCRIBIR el documento
-// estado/cicsa —todo el dinero de la empresa— además de los CFDIs y los respaldos,
-// que son copias completas del mismo estado. No es un descuido de configuración:
-// en Firebase Auth clásico el alta pública no se puede cerrar desde la consola.
-// Por eso el candado va aquí: esUsuario() exige registro en usuarios/{uid}, y ese
-// registro sólo lo crea el admin.
-//
-// IMPORTANTE: al quitar el comodín, cualquier colección NO listada abajo queda
-// denegada. Las colecciones que la app usa hoy están todas cubiertas:
-//   datos · estado · usuarios · chat · productos_comerciales · proveedores
-//   cfdis · actividad · gmail_revisados · respaldos
-// Si más adelante se agrega una colección nueva, hay que agregarla aquí también.
-//
-// Ya pasó dos veces: se agregaron 'gmail_revisados' y 'respaldos' al código sin
-// agregarlas aquí. La primera daba 403 al abrir la pestaña de Gmail; la segunda
-// fallaba en silencio porque el código traga el error, así que los respaldos de
-// facturas llevaban tiempo sin guardarse sin que nadie lo notara.
-// Antes de dar por terminada una colección nueva: buscarla en este archivo.
-
+// CICSA — reglas desplegables con firebase deploy --only firestore:rules.
+// Usuarios heredados sin activo/rol conservan acceso operativo.
+// El presupuesto continúa dentro del JSON de estado/cicsa: su aislamiento
+// administrativo requiere la migración de datos pendiente del hallazgo W12.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // ── Helpers ────────────────────────────────────────────────────────────
     function conSesion() {
       return request.auth != null;
     }
-    // El admin principal por UID (cuenta dueña) o cualquier usuario con
-    // rol "admin" en usuarios/{uid}. Los get() dentro de reglas son lecturas
-    // privilegiadas: no vuelven a pasar por estas reglas, así que no hay
-    // recursión aunque 'usuarios' esté restringida.
-    // El exists() NO es adorno: get() sobre un documento inexistente truena y
-    // la regla entera deniega. Con él, un uid sin registro simplemente no es
-    // admin, en vez de romper la evaluación.
-    function esAdmin() {
-      return conSesion() && (
-        request.auth.uid == 'NVapfgY8pshXwYbMq7Wz28ry3pC3' ||
-        (exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.rol == 'admin')
-      );
+    function esDueno() {
+      return request.auth.uid == 'NVapfgY8pshXwYbMq7Wz28ry3pC3';
     }
-
-    // Tener sesión NO es estar autorizado. El alta por correo de Firebase es un
-    // endpoint PÚBLICO de Google: cualquiera que lea la llave del proyecto en
-    // index.html —que se sirve abierto— puede crearse una cuenta sin invitación.
-    // Lo que autoriza es estar dado de alta: tener registro en usuarios/{uid}.
-    // El dueño se exceptúa por UID porque es quien tiene que poder recrear el suyo.
+    function registroValido(data) {
+      return data.get('activo', true) is bool
+        && data.get('activo', true) == true
+        && data.get('rol', 'operativo') in ['admin', 'operativo'];
+    }
+    function tieneRegistro() {
+      return exists(/databases/$(database)/documents/usuarios/$(request.auth.uid));
+    }
     function esUsuario() {
       return conSesion() && (
-        request.auth.uid == 'NVapfgY8pshXwYbMq7Wz28ry3pC3' ||
-        exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+        (tieneRegistro() &&
+          registroValido(get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data))
+        || (esDueno() && !tieneRegistro())
       );
     }
+    function esAdmin() {
+      return esUsuario() && (esDueno() ||
+        get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.get('rol', 'operativo') == 'admin');
+    }
+    function perfilValido(data) {
+      return data.get('activo', true) is bool
+        && data.get('rol', 'operativo') in ['admin', 'operativo'];
+    }
 
-    // ── datos/precios — lo lee CICSA Menú SIN sesión ───────────────────────
-    // Lectura pública a propósito (el Menú consulta precios sin login);
-    // escribir exige estar dado de alta.
+    // CICSA Menú consulta este documento concreto sin iniciar sesión.
     match /datos/{doc} {
-      allow read: if true;
-      allow write: if esUsuario();
+      allow get: if doc == 'precios';
+      allow create, update: if doc == 'precios' && esUsuario();
+      allow delete: if doc == 'precios' && esAdmin();
     }
 
-    // ── estado/cicsa — el estado financiero completo ───────────────────────
-    // Todos los usuarios capturan gastos, cortes y retiros, así que todos
-    // escriben este documento. El candado de "presupuesto solo admin" vive en
-    // la interfaz: no se puede aplicar aquí porque el presupuesto viaja dentro
-    // del mismo documento que todo lo demás (habría que separarlo para poder
-    // protegerlo por reglas).
+    // Mantener lectura de respaldos históricos para su migración por el admin.
+    // La aplicación actual solo guarda estado/cicsa; no se borran datos al publicar.
     match /estado/{doc} {
-      allow read, write: if esUsuario();
+      allow read: if esUsuario();
+      allow create, update: if doc == 'cicsa' && esUsuario();
+      allow delete: if esAdmin();
     }
 
-    // ── usuarios — roles y nombres ─────────────────────────────────────────
-    // Cada quien lee su propio registro (para saber su rol al entrar); el
-    // admin lee todos (panel de Administración).
-    // Crear, modificar rol/nombre y eliminar: solo el admin. Este documento es la
-    // llave de todo lo demás —esUsuario() se apoya en que exista—, así que quien
-    // pudiera crearlo se daría acceso a sí mismo.
+    // Leer el perfil propio permite informar una desactivación y autorizar el
+    // backend. Esta excepción nunca permite crear ni modificar ese registro.
     match /usuarios/{uid} {
-      allow read:   if esAdmin() || (conSesion() && request.auth.uid == uid);
-      // Antes cada quien podía crear SU PROPIO registro como "operativo", para
-      // re-vincularse al volver a entrar. Esa puerta anulaba todo lo demás: quien se
-      // registrara por su cuenta se creaba el registro y con él pasaba a ser usuario
-      // dado de alta. Ahora sólo el admin da de alta. Se pierde la re-vinculación
-      // automática: a quien borres del panel hay que volver a agregarlo a mano.
-      allow create: if esAdmin();
-      allow update, delete: if esAdmin();
+      allow read: if esAdmin() || (conSesion() && request.auth.uid == uid);
+      allow create, update: if esAdmin() && perfilValido(request.resource.data);
+      allow delete: if esAdmin();
     }
 
-    // ── chat de equipo ─────────────────────────────────────────────────────
-    // Todos leen y escriben mensajes, pero cada mensaje debe ir firmado con el
-    // uid de quien lo manda (no se puede publicar a nombre de otro). Editar o
-    // borrar mensajes ajenos: solo admin.
     match /chat/{msg} {
-      allow read:   if esUsuario();
+      allow read: if esUsuario();
       allow create: if esUsuario() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if esAdmin();
     }
-
-    // ── Catálogo de productos y proveedores ────────────────────────────────
-    // Los operativos validan y editan productos como parte de su trabajo.
     match /productos_comerciales/{doc} {
       allow read, write: if esUsuario();
     }
     match /proveedores/{doc} {
       allow read, write: if esUsuario();
     }
-
-    // ── cfdis — CFDIs guardados para la conciliación SAT ───────────────────
-    // Cualquier usuario dado de alta puede subir XML y consultarlos; BORRAR es solo
-    // del admin (igual que en la interfaz, pero ahora sí aplicado de verdad).
     match /cfdis/{uuid} {
       allow read, create, update: if esUsuario();
       allow delete: if esAdmin();
     }
-
-    // ── gmail_revisados — qué adjuntos de Gmail ya se atendieron ───────────
-    // Es memoria COMPARTIDA a propósito: si cada quien llevara la suya, el mismo
-    // correo se capturaría dos veces. Todos leen y marcan; no se borra desde la
-    // interfaz, así que delete queda denegado (un borrado haría reaparecer
-    // facturas ya capturadas como si fueran nuevas).
     match /gmail_revisados/{doc} {
       allow read, create, update: if esUsuario();
       allow delete: if esAdmin();
     }
 
-    // ── respaldos — copias de seguridad del estado ─────────────────────────
-    // Cualquier usuario dado de alta genera respaldos al capturar; PODAR los viejos
-    // es solo del admin, que es justo lo que ya asume podarRespaldos().
-    // Ojo: un respaldo es una copia COMPLETA de estado/cicsa, así que leer aquí vale
-    // tanto como leer el estado. Por eso también pasa por esUsuario().
+    // Todos pueden crear el respaldo diario; solo el índice se actualiza.
+    // El contenido completo y el listado de copias se reservan al administrador.
     match /respaldos/{doc} {
-      allow read, create, update: if esUsuario();
+      allow get: if esAdmin() || (doc == '_indice' && esUsuario());
+      allow list: if esAdmin();
+      allow create: if esUsuario();
+      allow update: if doc == '_indice' && esUsuario();
       allow delete: if esAdmin();
     }
-
-    // ── actividad — latido de usuarios operativos ──────────────────────────
-    // Cada usuario solo puede escribir SU propio latido (no puede inflar ni
-    // falsear el de otro). Lo consulta el admin; cada quien puede ver el suyo.
     match /actividad/{uid} {
-      allow read:          if esAdmin() || (esUsuario() && request.auth.uid == uid);
+      allow read: if esAdmin() || (esUsuario() && request.auth.uid == uid);
       allow create, update: if esUsuario() && request.auth.uid == uid;
-      allow delete:        if esAdmin();
+      allow delete: if esAdmin();
     }
+    // Cualquier colección no declarada queda denegada.
   }
 }

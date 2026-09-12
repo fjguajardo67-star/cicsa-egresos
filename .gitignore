@@ -4,4 +4,10 @@ gmail_seen.json
 facturas_inbox/
 __pycache__/
 *.pyc
+node_modules/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+.firebase/
+.DS_Store
 .env
