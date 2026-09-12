@@ -30,11 +30,25 @@ async function main() {
   const marker = await get(financial.PATHS.marker);
   if (marker) {
     if (marker.fields?.version?.integerValue !== '2') throw new Error('MARCADOR_INVALIDO');
+    const parts = {};
     for (const p of ['operation', 'budget', 'cash']) {
       const doc = await get(financial.PATHS[p]);
       if (doc?.fields?.schema?.integerValue !== '2') throw new Error('DOCUMENTO_INCOMPLETO');
+      parts[p] = JSON.parse(doc.fields.json.stringValue);
     }
-    console.log(JSON.stringify({ project, status: 'migracion_ya_aplicada', writes: 0 }));
+    stage='verificar_respaldo_existente';
+    const backup=marker.fields?.backup?.stringValue;
+    if(!/^respaldos\/respaldo-\d{4}-\d{2}-\d{2}-antes-finanzas-v2$/.test(backup||'')) throw Error('RESPALDO_INVALIDO');
+    const saved=await get(backup);
+    if(!saved?.fields?.json?.stringValue || digest(saved.fields.json.stringValue)!==marker.fields.sourceHash.stringValue)
+      throw Error('RESPALDO_NO_COINCIDE');
+    const composed=financial.compose(parts.operation,parts.budget,parts.cash);
+    const safePublic=financial.operational(parts.operation);
+    if(!require('node:util').isDeepStrictEqual(safePublic,parts.operation)) throw Error('OPERACION_NO_CANONICA');
+    console.log(JSON.stringify({ project, status: 'migracion_ya_aplicada', writes: 0,
+      backupExact:true, publicDataIsolated:true, weeks:composed.weeks.length,
+      gastos:composed.weeks.reduce((n,w)=>n+(w.gastos||[]).length,0),
+      cortes:composed.weeks.reduce((n,w)=>n+(w.cortes||[]).length,0),backup }));
     return;
   }
   const legacy = await get('estado/cicsa');

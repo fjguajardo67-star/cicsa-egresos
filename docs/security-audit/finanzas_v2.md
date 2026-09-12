@@ -83,9 +83,32 @@ y caché, 45 casos/subcasos con emuladores oficiales, 19 de autorización backen
 Incluyen el transporte REST real usado por la app, presupuestos falsificados, lectura directa
 de Caja como operativo, commits mixtos rechazados completos y conflicto de versiones.
 
-Verificación pendiente antes de considerar desplegado: CI, publicación de reglas, activación
-atómica, retiro de enlaces antiguos, comprobación del respaldo y una prueba de uso en producción.
-No se crean usuarios de prueba ni registros contables ficticios en producción.
+Desplegado mediante `0381ad6b2f09594b4bceb42a5e7964bf1e0b9b0d`. CI de main
+`34669127350`, GitHub Pages `34669126697` y Railway terminaron correctamente.
+La interfaz publicada y el hash SRI de su módulo financiero coinciden.
+
+- Firestore activo: `887786f5-c8e3-4405-8ab2-0acdbccf25d6`; SHA-256
+  `b9bf532c228534aa8b0fc959e70b462ffe6a82bcb79e6a7dffb400edef3ff92d`.
+- Storage activo: `7b0321f2-aa48-403c-bbf5-9d716efb6e50`; SHA-256
+  `bc5ceaa38b8fda415c952ee734c97da19a34cdb04941e2d786e6ce2e68df4a30`.
+- Ambas fuentes publicadas son idénticas a las locales; IAM entre servicios confirmado.
+- Sin sesión, operación, presupuesto, Caja, estado anterior e índice responden 403.
+  `datos/precios` sigue respondiendo 200 para conservar la integración con Menú.
+- Migración activa: 12 semanas, 507 gastos, 356 cortes. Proyección operativa sin campos privados.
+- Respaldo exacto: `respaldos/respaldo-2026-09-12-antes-finanzas-v2` (fecha UTC).
+  SHA-256 del JSON original y respaldado:
+  `7e7306af824411692181b0b9aa943b6e05b58c826f7e771d8361796af95bcae1`.
+- Google devolvió un 500 transitorio al verificar después del commit; se consultó el marcador
+  sin repetir escrituras y se verificó el respaldo exacto. El traslado no se ejecutó dos veces.
+- Se retiraron seis tokens históricos de descarga de cortes y se comprobó la denegación
+  de los seis enlaces anteriores. Los seis archivos permanecen; cero borrados.
+- Arranque en navegador aislado con datos ficticios: admin ve Caja y sus cifras; operativo
+  conserva gastos y presupuesto, sin Caja, Balance ni herramientas de administración.
+
+Falta aceptación funcional de esta nueva versión con la sesión habitual del usuario en
+producción. La prueba anterior de carga/visualización de factura sí fue confirmada por el usuario,
+antes de esta separación. No se crearon usuarios ni registros contables ficticios en producción.
+Recargar las pestañas antiguas: ya no se permite que guarden en el estado anterior.
 
 Mejoras posteriores: respaldo completo programado fuera de sesiones de usuario; archivo por
 periodos para dejar atrás el límite de 1 MiB por documento; autorización granular de edición
