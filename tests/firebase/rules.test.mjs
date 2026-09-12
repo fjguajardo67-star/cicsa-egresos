@@ -5,6 +5,8 @@ import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebas
 import { doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, setLogLevel, writeBatch } from 'firebase/firestore';
 import { createMockUserToken } from '@firebase/util';
 import financial from '../../assets/financial-access.js';
+import ingredientCore from '../../assets/ingredients-core.js';
+import ingredientStore from '../../assets/ingredients-store.js';
 import { ref, uploadBytes, getMetadata, updateMetadata, deleteObject, listAll } from 'firebase/storage';
 
 const PROJECT = 'demo-cicsa-rules';
@@ -51,6 +53,24 @@ before(async () => {
   });
 });
 after(async () => { if (env) await env.cleanup(); });
+
+test('Ingredientes: transporte real, pendiente atómico, CAS y permisos existentes',async()=>{
+  const store=uid=>ingredientStore({base:`http://127.0.0.1:8180/v1/projects/${PROJECT}/databases/(default)/documents`,key:'demo-key',core:ingredientCore,fetcher:fetch,session:()=>uid,
+    headers:async()=>({Authorization:'Bearer '+createMockUserToken({sub:uid},PROJECT)})});
+  const staff=store('staff');
+  const p={id:'ingrediente-prueba',nombre_comercial:'Arroz 3kg',ingrediente_generico:'Arroz de prueba',estado:'validado',precio_actual:90,fecha_precio:'2026-09-11',unidad_base:'kg',contenido_cantidad:3,contenido_unidad:'kg'};
+  await staff.save([p],{[p.id]:null});
+  assert.equal((await staff.get(staff.markerPath)).data.pending,true);
+  const first=await staff.publish();assert.equal(first.state,'publicado');
+  assert.equal((await staff.get('datos/precios')).data['Arroz de prueba'].precio,30);
+  const {id,...before}=p;
+  await staff.save([{...p,notas:'Sin cambio del precio'}],{[id]:before});
+  // La rama sin cambios utiliza una escritura verify con precondición real.
+  assert.equal((await staff.publish()).plan.changed,false);
+  await assert.rejects(staff.save([{...p,precio_actual:999}],{[id]:before}),/Otro usuario/);
+  await assert.rejects(store('outsider').save([{...p,id:'intruso'}]),e=>e.status===403);
+  assert.equal((await staff.get('datos/precios')).data['Arroz de prueba'].precio,30);
+});
 
 for (const uid of [null, 'outsider', 'inactive', 'inactiveAdmin', 'badActive', 'numericActive', 'nullActive', 'badRole']) {
   test(`Firestore: ${uid ?? 'sin sesión'} no lee ni escribe finanzas`, async () => {

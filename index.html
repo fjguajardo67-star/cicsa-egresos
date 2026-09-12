@@ -607,6 +607,10 @@ body.snav-min .side-theme span { display:none; }
 :root[data-theme="dark"] #buildBadge { background:var(--dk-surface2); border-color:var(--dk-border); color:var(--dk-ink2); }
 </style>
 <link rel="stylesheet" href="assets/workspace.css?v=20260911-3">
+<link rel="stylesheet" href="assets/ingredients.css?v=20260911-ingredientes1" integrity="sha384-9QcMbZ2NUsOZTxJiln0KTU0ipCE5ZX7l2CCV1/ATpL3VFoDB/+hGNcctwRe7AL6I" crossorigin="anonymous">
+<script src="assets/ingredients-core.js?v=20260911-ingredientes1" integrity="sha384-cBvcQxoluAC7DCdNeP/Yl0N1UNCM5rvVZOmquxG3lzZqsQUWX807EXZZEABkeBeq" crossorigin="anonymous"></script>
+<script src="assets/ingredients-store.js?v=20260911-ingredientes1" integrity="sha384-1t1r7qDywMGV3TumAi7h3DKdgU5FSImkC521K3f8vaZST4Gzj87WBYHNq2CJ+Omb" crossorigin="anonymous"></script>
+<script src="assets/ingredients.js?v=20260911-ingredientes1" integrity="sha384-NRy/AUPFn4im4GermJYx0vpWCYD+no9zASU7NhAjdELyk0MbpQsYIZGtpxm38aE5" crossorigin="anonymous" defer></script>
 <script src="assets/workspace.js" integrity="sha384-KPZJPA9xLRf7T354MrqOF9ZpbxkfCh/RqFLg/UtG0qp+x6HDQEQ8VNq8CKyV5mju" defer></script>
 </head>
 <body>
@@ -2051,7 +2055,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-11-finanzas-v2-iconos";
+const APP_BUILD = "2026-09-11-ingredientes-forx-v1";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -2102,12 +2106,12 @@ const STORAGE_BUCKET = 'cicsa-egresos.firebasestorage.app';
 // Fuente de verdad = cicsa-egresos. Se lee de aquí, con auth (funciona antes y después de
 // que las reglas abran lectura pública de este documento).
 async function fetchMenuPrecios(){
-  try {
-    const r = await fetch(FB_BASE + '/datos/precios?key=' + FB_KEY, { headers: await fbAuthHeader() });
-    const d = await r.json();
-    if(d.fields?.json?.stringValue) return JSON.parse(d.fields.json.stringValue);
-  } catch(e) { /* primera vez — documento aún no existe */ }
-  return {};
+  const r = await fetch(FB_BASE + '/datos/precios?key=' + FB_KEY, { headers: await fbAuthHeader() });
+  if(r.status===404) return {};
+  if(!r.ok) throw new Error("No se pudieron leer los precios de FORX. No se publicó ningún cambio.");
+  const d = await r.json();
+  if(!d.fields?.json?.stringValue) throw new Error("El documento de precios no tiene un formato válido.");
+  return JSON.parse(d.fields.json.stringValue);
 }
 
 // Compat: entradas viejas se guardaron con el campo "unidad"; Menú lee "unidad_base". Al
@@ -2146,7 +2150,8 @@ async function escribirPrecios(preciosActuales){
   const r = await fetch(FB_BASE + '/datos/precios?key=' + FB_KEY, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(await fbAuthHeader()) }, body
   });
-  return !!(r && r.ok);
+  if(!r || !r.ok) throw new Error("La publicación fue rechazada. Los cambios siguen pendientes.");
+  return true;
 }
 
 // Pedir el token es la llamada MÁS frágil de una lectura, no la menos: sale a la red de Google
@@ -3991,8 +3996,8 @@ function dedupeProductos(productos){
     const nombre = (p.nombre||"").trim();
     if(!nombre) return;
     const precio = parseFloat(p.precio_unitario)||0;
-    const key = nombre.toLowerCase()+"|"+precio.toFixed(2);
-    if(!vistos.has(key)) vistos.set(key, { nombre, precio, unidad: p.unidad||"kg" });
+    const key = nombre.toLowerCase()+"|"+precio.toFixed(2)+"|"+(p.unidad||"");
+    if(!vistos.has(key)) vistos.set(key, { nombre, precio, unidad: p.unidad||"", categoria:p.categoria||"" });
   });
   return [...vistos.values()];
 }
@@ -4039,7 +4044,7 @@ async function cargarCatalogo(forzar){
     fbListCollection(CATALOGO_COL),
     fbListCollection(PROVEEDORES_COL)
   ]);
-  _catalogoProductos = productos;
+  _catalogoProductos = productos.filter(p=>!p._internal && p.id!=="_forx_sync");
   _catalogoProveedores = proveedores;
   _catalogoCargado = true;
 }
@@ -4056,7 +4061,8 @@ async function asegurarProveedor(nombre){
 // (por alias o nombre normalizado), actualiza precio/fecha/factura del producto existente.
 // Si no hay match, crea uno nuevo con estado "pendiente" — nunca se usa para costeo ni
 // se sincroniza a Menú hasta que alguien lo valide manualmente en la vista de Catálogo.
-async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
+async function sincronizarConCatalogo(productos, proveedorNombre, facturaId, contexto={}){
+  if(window.CicsaCatalog) return window.CicsaCatalog.ingest(productos, proveedorNombre, facturaId, contexto);
   if(!productos || !productos.length) return { nuevos:0, actualizados:0 };
   let nuevos = 0, actualizados = 0;
   const ignorados = [];   // hacen match pero estan en la papelera: se actualizan y siguen ocultos
@@ -4064,7 +4070,7 @@ async function sincronizarConCatalogo(productos, proveedorNombre, facturaId){
   try {
     await cargarCatalogo();
     if(proveedorNombre) await asegurarProveedor(proveedorNombre);
-    const fecha = todayStr();
+    const fecha = contexto.fecha || "";
     for(const p of productos){
       const nombre = (p.nombre||"").trim();
       if(!nombre) continue;
@@ -4176,10 +4182,10 @@ function extraerProductosEnSegundoPlano(gastoIds, b64, mimeType){
       save();
       const primerGasto = encontrarGastoPorId(ids[0]);
       try{
-        const r = await sincronizarConCatalogo(productos, primerGasto?.proveedor, primerGasto?.factura);
+        const r = await sincronizarConCatalogo(productos, primerGasto?.proveedor, primerGasto?.factura, {fecha:primerGasto?.fecha||"", gastoId:primerGasto?.id, uuid:primerGasto?.cfdiUuid});
         const n = r?.nuevos||0, a = r?.actualizados||0, ign = r?.ignorados||[];
         const avisoIgn = ign.length
-          ? `<br><span style="color:#B8860B">🚫 ${ign.length} de estos productos están en la papelera, por eso NO se ven en la lista: ${esc(ign.slice(0,4).join(", "))}${ign.length>4?"…":""}. Restáuralos desde el filtro “🚫 Ignorado”.</span>`
+          ? `<br><span>${ign.length} producto(s) permanecen en Solo Egresos: ${esc(ign.slice(0,4).join(", "))}${ign.length>4?"…":""}. Las excepciones se autorizan individualmente.</span>`
           : "";
         const det = r?.detalle||[];
         const absorbidos = det.filter(d=>d.viaAlias && d.destino && normalizarParaComparar(d.nombre)!==normalizarParaComparar(d.destino));
@@ -6712,7 +6718,7 @@ async function guardarCfdisEnStore(cfdis){
     const docId = uuid.replace(/[^A-Za-z0-9_-]/g,"_");
     // Si ya se descartó a mano, volver a subir el XML NO debe resucitarlo.
     const prev = _cfdisStore.find(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase());
-    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", total:parseFloat(c.total)||0, subtotal:parseFloat(c.subtotal)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), nombreReceptor:(c.nombreReceptor||""), folioComp:(c.folioComp||""), mes:cfdiMes(c.fecha), conceptos:Array.isArray(c.conceptos)?c.conceptos:[], nomina:c.nomina||null, subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
+    const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", fecha_hora:c.fecha_hora||prev?.fecha_hora||"", total:parseFloat(c.total)||0, subtotal:parseFloat(c.subtotal)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), nombreReceptor:(c.nombreReceptor||""), folioComp:(c.folioComp||""), mes:cfdiMes(c.fecha), conceptos:Array.isArray(c.conceptos)&&c.conceptos.length?c.conceptos:(prev?.conceptos||[]), nomina:c.nomina||null, subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
     if(prev && prev.ignorado){ data.ignorado=true; data.ignoradoPor=prev.ignoradoPor||""; data.ignoradoTs=prev.ignoradoTs||""; }
     tareas.push({ docId, data });
     if(yaHay.has(uuid.toUpperCase())){ existentes++; const i=_cfdisStore.findIndex(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase()); if(i>=0)_cfdisStore[i]={id:docId,...data}; }
@@ -6720,7 +6726,8 @@ async function guardarCfdisEnStore(cfdis){
   }
   // Escritura en paralelo por tandas (PATCH = crea si no existe) para no esperar 80 viajes en fila.
   for(let i=0;i<tareas.length;i+=25){
-    await Promise.all(tareas.slice(i,i+25).map(t=>fbUpdateDoc(CFDIS_COL, t.docId, t.data)));
+    const resultados=await Promise.all(tareas.slice(i,i+25).map(t=>fbUpdateDoc(CFDIS_COL, t.docId, t.data)));
+    if(resultados.some(ok=>ok!==true)){ _cfdisStore=null; throw new Error("Una o más facturas no se guardaron. Repite la carga para completar los pendientes."); }
   }
   return { nuevos, existentes };
 }
@@ -6977,7 +6984,7 @@ function parseCFDIXML(xml){
   const nomRec = _cfdiAttr(xml,"Receptor","Nombre");
   const uuid   = _cfdiAttr(xml,"TimbreFiscalDigital","UUID");
   if(!uuid && !total) return null;                 // no parece un CFDI válido
-  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, total, subtotal: subtot, tipo, rfcReceptor: rfcRec, nombreReceptor: nomRec, folioComp: folioC, conceptos: _cfdiConceptos(xml), nomina: _cfdiNomina(xml) };
+  return { folio: uuid || (serie+folioC), uuid, serie, rfc, proveedor: nombre||rfc||"—", fecha, fecha_hora:_cfdiAttr(xml,"Comprobante","Fecha")||fecha, total, subtotal: subtot, tipo, rfcReceptor: rfcRec, nombreReceptor: nomRec, folioComp: folioC, conceptos: _cfdiConceptos(xml), nomina: _cfdiNomina(xml) };
 }
 // ── Nómina timbrada ────────────────────────────────────────────────────────
 // Un CFDI de nómina se emite por trabajador, así que una quincena son decenas de comprobantes.
@@ -7217,7 +7224,7 @@ async function analizarPreciosCfdi(){
       <div id="cfdiPreciosLista" style="max-height:300px;overflow:auto">${filasIdent(identificados)}</div></details>`:""}
     ${porIdentificar.length?`<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--naranja)">❓ Por identificar (${porIdentificar.length})</summary>
       <div style="font-size:11.5px;color:var(--txt2);margin:6px 0">Nadie ha dicho todavía qué producto es cada una. Se aprende una vez y no se vuelve a preguntar: puedes identificarlas con IA aquí abajo (manda solo el <strong>texto</strong>, no la imagen de la factura) o a mano, agregando la descripción como alias en <strong>Productos</strong>.</div>
-      <button class="btn btn-light" style="padding:6px 10px;font-size:12px;margin-bottom:6px" onclick="identificarConIA()">🤖 Identificar con IA (solo texto)</button>
+      <button class="btn btn-light" style="padding:6px 10px;font-size:12px;margin-bottom:6px" onclick="abrirRevisionIngredientesCfdi()">Revisar ingredientes para FORX</button>
       <div id="cfdiIdentBody"></div>
       <div>${filasPend(porIdentificar)}</div>${porIdentificar.length>40?`<div style="font-size:11px;color:var(--txt2);margin-top:4px">…y ${porIdentificar.length-40} más (se procesan todas al identificar con IA)</div>`:""}</details>`:""}`;
   if(btn) btn.style.display = identificados.length ? "inline-flex" : "none";
@@ -7473,6 +7480,11 @@ async function aplicarIdentificacion(){
 // Escribe al catálogo SOLO lo identificado por match exacto. Un XML viejo no debe pisar un precio
 // más nuevo: si el producto ya trae una fecha de precio posterior, ese renglón se salta.
 async function aplicarPreciosCfdiAlCatalogo(){
+  if(window.CicsaCatalog){
+    try { await window.CicsaCatalog.ingestXml(_cfdisStore||[]); await window.CicsaCatalog.render(true); }
+    catch(e){ setStatus("satStatus",e.message,"err"); }
+    return;
+  }
   const items = (_cfdiPreciosIdent || []).filter(it=>it._sel !== false);
   if(!items.length) return;
   const btn = document.getElementById("btnAplicarPreciosCfdi");
@@ -7523,7 +7535,7 @@ async function procesarSATXml(){
   autodetectarRfcPropio(unicos);
   setStatus("satStatus",`Guardando ${unicos.length} CFDI en la nube…`,"loading");
   let guardado={nuevos:unicos.length, existentes:0};
-  try{ guardado=await guardarCfdisEnStore(unicos); }catch(e){ console.warn("guardarCfdisEnStore:",e); }
+  try{ guardado=await guardarCfdisEnStore(unicos); }catch(e){ setStatus("satStatus","No se completó el procesamiento: "+e.message+". Vuelve a subir los XML para reanudar sin duplicarlos.","err"); return; }
   await renderCfdisStore();
   // Conciliación inmediata del periodo seleccionado (subconjunto en rango).
   const enRango=filtrarCfdisPorRango(unicos, fechaIni, fechaFin);
@@ -9934,6 +9946,17 @@ async function guardarProducto(nuevoEstado){
   // factor_conversion queda deprecado: si el documento existente lo traía, se conserva
   // como referencia legacy, pero ya no es el campo del que depende la conversión.
   if(existente?.factor_conversion!=null) datos.factor_conversion = existente.factor_conversion;
+
+  if(window.CicsaCatalog){
+    const modal=document.getElementById("productoModal");
+    if(modal.dataset.saving==="true") return;
+    modal.dataset.saving="true";
+    const buttons=[...modal.querySelectorAll("button")]; buttons.forEach(b=>b.disabled=true);
+    try { await window.CicsaCatalog.saveEditor(id,datos); }
+    catch(e){ const out=document.getElementById("pcForxError"); if(out){out.textContent=e.message;out.scrollIntoView({block:"nearest"});}else alert(e.message); }
+    finally { delete modal.dataset.saving;buttons.forEach(b=>b.disabled=false); }
+    return;
+  }
 
   if(datos.estado==="validado" && !puedeValidarse(datos)){
     alert("No se puede validar todavía: " + motivoNoValidable(datos) + ".");

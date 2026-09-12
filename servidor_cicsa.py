@@ -295,7 +295,8 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
   "categoria": "categoría de esta lista: {cats}",
   "productos": [
     {{
-      "nombre": "producto específico (ej: Pollo pechuga, Res molida, Papa blanca), no la marca ni el proveedor",
+      "nombre": "descripción comercial fiel: conservar marca, tamaño y presentación cuando aparezcan",
+      "categoria": "categoría de ESTE renglón de la lista indicada; no heredar la categoría global",
       "cantidad": 10.5,
       "unidad": "kg",
       "precio_unitario": 85.00,
@@ -314,6 +315,8 @@ REGLAS:
 - Si el documento tiene productos de VARIAS categorías distintas, pon "mixto": true y en
   "categoria" la categoría principal (la de mayor importe).
 - unidad de cada producto debe ser: kg, lt, pz, cja o paq.
+- Clasifica cada renglón por separado, incluyendo limpieza, desechables y refrescos.
+- Conserva la presentación real en el nombre (ej. Aderezo ranch 3.8 L); no confundas kg y litros.
 - precio_unitario es el precio por unidad (kg, lt, pz), NO el importe total del renglón.
 - Si no muestra precio unitario, calcula precio_unitario = importe / cantidad.
 - Incluye TODOS los productos del documento sin omitir ninguno (facturas grandes pueden traer
@@ -605,7 +608,7 @@ def leer_productos():
             client,
             d["image_base64"],
             d.get("mime_type", "image/jpeg"),
-            '''Analiza esta factura o recibo de proveedor de alimentos.
+            '''Analiza esta factura o recibo, que puede contener alimentos y artículos de operación.
 Extrae CADA producto individual con su precio unitario por kg, lt o pieza.
 Si el documento no muestra precio unitario, calcula: precio_unitario = importe / cantidad.
 
@@ -617,7 +620,8 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
   "total": 1234.56,
   "productos": [
     {
-      "nombre": "nombre del producto (ej: Pollo pechuga, Res molida, Papa blanca)",
+      "nombre": "descripción comercial fiel, conservando marca, tamaño y presentación",
+      "categoria": "categoría de la partida: alimentos, Artículos de limpieza, Desechables, Refrescos / Pepsi u operación",
       "cantidad": 10.5,
       "unidad": "kg",
       "precio_unitario": 85.00,
@@ -628,7 +632,8 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
 
 REGLAS:
 - unidad debe ser: kg, lt, pz, cja, paq
-- nombre debe ser el producto específico, no la marca ni el proveedor
+- nombre debe identificar el producto específico y conservar marca y presentación cuando aparezcan.
+- Clasifica CADA partida; una factura mixta no transmite su categoría a todos los productos.
 - Un renglón CON descripción y (cantidad o precio) SÍ es un producto, aunque sea el ÚNICO del
   documento. Una factura o CFDI de un solo concepto (ej: "905 KILOGRAMOS DE TORTILLAS" a $25/kg)
   es UN producto — NO la trates como "ticket simple sin detalle".
