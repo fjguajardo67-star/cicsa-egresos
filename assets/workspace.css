@@ -38,6 +38,29 @@ label { color:var(--txt); }
 table { font-variant-numeric:tabular-nums; }
 th { text-transform:none; letter-spacing:0; font-size:12px; }
 td { font-size:13px; }
+/* Gastos: conservar la lectura de folio, pago e importe antes de comprimir columnas. */
+#page-gastos .gastos-table-wrap { min-width:0; }
+#page-gastos .gastos-table { table-layout:fixed; min-width:1192px; }
+#page-gastos .gastos-col-respaldo { width:80px; }
+#page-gastos .gastos-col-fecha { width:96px; }
+#page-gastos .gastos-col-proveedor { width:auto; }
+#page-gastos .gastos-col-categoria { width:176px; }
+#page-gastos .gastos-col-factura { width:168px; }
+#page-gastos .gastos-col-pago { width:176px; }
+#page-gastos .gastos-col-importe { width:152px; }
+#page-gastos .gastos-col-acciones { width:80px; }
+#page-gastos .gastos-table th,
+#page-gastos .gastos-table td { padding:12px; vertical-align:middle; }
+#page-gastos .gastos-table td { overflow-wrap:anywhere; }
+#page-gastos .gastos-heading-importe { text-align:right; }
+#page-gastos .gastos-heading-acciones { text-align:center; }
+#page-gastos .gastos-table input,
+#page-gastos .gastos-table select { box-sizing:border-box; min-width:0; max-width:100%; }
+/* La celda compartida trae width:90px inline; el ajuste solo pertenece a Gastos. */
+#page-gastos .gastos-table .amount-cell input { width:100% !important; }
+#page-gastos .gastos-actions-cell { display:table-cell; }
+#page-gastos .gastos-row-actions { display:flex; align-items:center; justify-content:center; gap:4px; }
+#page-gastos .gastos-row-actions .del-btn { width:44px; min-width:44px; height:44px; padding:0; display:inline-flex; align-items:center; justify-content:center; }
 .side-brand { padding:14px 18px 12px; flex-direction:column; align-items:stretch; gap:0; }
 .corporate-logo { display:block; width:100%; max-height:110px; object-fit:contain; background:#fff; border-radius:8px; }
 .brand-caption { font-size:12px; text-align:center; color:var(--txt2); margin-top:0; }

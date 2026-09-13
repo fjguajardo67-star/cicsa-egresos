@@ -606,7 +606,7 @@ body.snav-min .side-theme span { display:none; }
 :root[data-theme="dark"] #page-resumen #rsAvisoSemana .go { color:var(--dk-gold) !important; }
 :root[data-theme="dark"] #buildBadge { background:var(--dk-surface2); border-color:var(--dk-border); color:var(--dk-ink2); }
 </style>
-<link rel="stylesheet" href="assets/workspace.css?v=20260911-3">
+<link rel="stylesheet" href="assets/workspace.css?v=20260912-egresos4">
 <link rel="stylesheet" href="assets/ingredients.css?v=20260912-egresos3" integrity="sha384-q4Rvv5tbRTrsyuCz5tuU/Ii3fPm4yyWkKT8PyKIEv8V76UWCyiuVuHXjMkhh+vIX" crossorigin="anonymous">
 <script src="assets/ingredients-core.js?v=20260912-egresos3" integrity="sha384-bR6Ehg5MFVbuMaTOlrQjeYEraJ4lXXibZ/swSdHVW8ehML59uz/JQ09zZaPJtqWn" crossorigin="anonymous"></script>
 <script src="assets/ingredients-store.js?v=20260912-egresos3" integrity="sha384-1t1r7qDywMGV3TumAi7h3DKdgU5FSImkC521K3f8vaZST4Gzj87WBYHNq2CJ+Omb" crossorigin="anonymous"></script>
@@ -1070,12 +1070,18 @@ body.snav-min .side-theme span { display:none; }
         <span>Total semana: <strong id="totalSemana" style="font-family:'JetBrains Mono',monospace;color:var(--vd);font-size:16px">$0.00</strong></span>
       </div>
     </div>
-    <div class="tbl-wrap">
-      <table>
+    <div class="tbl-wrap gastos-table-wrap" tabindex="0" role="region" aria-label="Gastos del periodo; tabla con desplazamiento horizontal">
+      <table class="gastos-table">
+        <colgroup>
+          <col class="gastos-col-respaldo"><col class="gastos-col-fecha">
+          <col class="gastos-col-proveedor"><col class="gastos-col-categoria">
+          <col class="gastos-col-factura"><col class="gastos-col-pago">
+          <col class="gastos-col-importe"><col class="gastos-col-acciones">
+        </colgroup>
         <thead><tr>
-          <th style="width:50px">Respaldo</th><th style="width:90px">Fecha</th><th>Proveedor</th><th style="width:150px">Categoría</th>
-          <th style="width:100px">No. Factura</th><th style="width:120px">Forma de pago</th><th style="width:110px;text-align:right">Importe</th>
-          <th style="width:70px"></th>
+          <th scope="col">Respaldo</th><th scope="col">Fecha</th><th scope="col">Proveedor</th><th scope="col">Categoría</th>
+          <th scope="col">No. Factura</th><th scope="col">Forma de pago</th><th scope="col" class="gastos-heading-importe">Importe</th>
+          <th scope="col" class="gastos-heading-acciones">Acciones</th>
         </tr></thead>
         <tbody id="gastosBody"></tbody>
       </table>
@@ -2055,7 +2061,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-12-egresos-v3";
+const APP_BUILD = "2026-09-12-egresos-v4";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4504,7 +4510,7 @@ function renderGastos(){
       <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${celdaFolio(g, P)}</td>
       <td>${celdaFormaPago(g, P)}</td>
       <td class="amount-cell">${celdaImporte(g, P)}</td>
-      <td style="display:flex;gap:4px;align-items:center;padding:6px 8px">${celdaAcciones(g, P)}</td>`;
+      <td class="gastos-actions-cell"><div class="gastos-row-actions">${celdaAcciones(g, P)}</div></td>`;
     tbody.appendChild(tr);
   });
   pendientesThumb.forEach(p=>cargarThumbReal(p.id, p.url, p.elId));
