@@ -22,6 +22,7 @@ jobs:
       - run: node --test tests/financial_access.test.cjs
       - run: node --test tests/app_icons.test.cjs
       - run: node --test tests/gastos_layout.test.cjs
+      - run: node --test tests/capture_context.test.cjs
       - run: python -m unittest discover -s tests -p 'test*.py'
       # Proceso separado: las pruebas heredadas de Gmail sustituyen módulos de Google.
       - run: python tests/backend_authorization_checks.py

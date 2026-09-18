@@ -2061,7 +2061,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-12-egresos-v4";
+const APP_BUILD = "2026-09-17-egresos-v1";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3771,6 +3771,8 @@ async function checkServer(){
 // FILE HANDLING
 // ═══════════════════════════════════════════════════════════════════════════
 let capturedFile=null, capturedDataURL=null, capturedB64=null;
+// Cada documento tiene su contexto: una lectura anterior nunca debe modificar el siguiente.
+let _capturaRevision=0;
 // Productos que /leer-gasto-full ya devolvió junto con el encabezado. Se guardan aquí para que
 // al guardar el gasto NO se vuelva a mandar la imagen a Claude solo por los productos.
 let _productosPreleidos=null;
@@ -3831,8 +3833,9 @@ function _redimensionarDataURL(dataURL, maxLado=IMG_MAX_LADO, q=IMG_JPEG_Q){
 }
 // Deja capturedB64/DataURL/File en su versión optimizada (JPEG reducido) si convino; si algo
 // falla o ya era más chica, conserva la original. Reusable desde captura de archivo y desde Gmail.
-async function _optimizarCaptura(rawDataURL, nombre){
+async function _optimizarCaptura(rawDataURL, nombre, revision=_capturaRevision){
   const opt = await _redimensionarDataURL(rawDataURL);
+  if(revision!==_capturaRevision) return;
   const usar = (opt && opt.length < rawDataURL.length) ? opt : rawDataURL;
   capturedDataURL = usar;
   capturedB64 = usar.split(",")[1];
@@ -3841,6 +3844,8 @@ async function _optimizarCaptura(rawDataURL, nombre){
 }
 
 async function handleFile(file){
+  limpiarCaptura();
+  const revision=_capturaRevision;
   capturedFile=file;
   _productosPreleidos=null;
   _cfdiGmail=null;          // archivo suelto: no hay CFDI del correo que mande sobre la fecha
@@ -3848,11 +3853,15 @@ async function handleFile(file){
   const preview=document.getElementById("imgPreview");
   if(file.type.startsWith("image/")){
     const rawDataURL = await _leerArchivoDataURL(file);
-    await _optimizarCaptura(rawDataURL, file.name);
+    if(revision!==_capturaRevision) return;
+    await _optimizarCaptura(rawDataURL, file.name, revision);
+    if(revision!==_capturaRevision) return;
     preview.src=capturedDataURL; preview.style.display="block";
   } else if(file.type==="application/pdf"){
     const ab=await file.arrayBuffer();
-    capturedB64=(await _leerArchivoDataURL(file)).split(",")[1];
+    const rawDataURL=await _leerArchivoDataURL(file);
+    if(revision!==_capturaRevision) return;
+    capturedB64=rawDataURL.split(",")[1];
     try {
       pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
       const loadingTask=pdfjsLib.getDocument({data:ab,isEvalSupported:false});
@@ -3862,10 +3871,12 @@ async function handleFile(file){
       const vp=page.getViewport({scale:1.5});
       const canvas=document.createElement("canvas"); canvas.width=vp.width; canvas.height=vp.height;
       await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
+      if(revision!==_capturaRevision) return;
       capturedDataURL=canvas.toDataURL("image/jpeg",0.85); preview.src=capturedDataURL; preview.style.display="block";
       } finally { await loadingTask.destroy(); }
-    } catch(e){ capturedDataURL=null; preview.style.display="none"; }
+    } catch(e){ if(revision!==_capturaRevision) return; capturedDataURL=null; preview.style.display="none"; }
   } else { preview.style.display="none"; capturedDataURL=null; capturedB64=null; }
+  if(revision!==_capturaRevision) return;
   document.getElementById("btnLeer").disabled=false;
   document.getElementById("statusLectura").style.display="none";
 }
@@ -3922,18 +3933,25 @@ function datosDeCaptura(cfdi, ia){
 
 async function leerDocumento(){
   if(!capturedFile) return;
+  const revision=_capturaRevision;
   document.getElementById("btnLeer").disabled=true;
   setStatus("statusLectura","Analizando documento con IA…","loading");
   try {
     const toB64=f=>new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
-    if(!capturedB64&&capturedFile) capturedB64=await toB64(capturedFile);
+    if(!capturedB64&&capturedFile){
+      const b64=await toB64(capturedFile);
+      if(revision!==_capturaRevision) return;
+      capturedB64=b64;
+    }
     const mimeToSend=capturedFile?.type||"image/jpeg";
     _productosPreleidos=null;
     // Una sola llamada: encabezado (para el formulario) + productos (para el catálogo). Si el
     // servidor viejo aún no tiene /leer-gasto-full, cae al /leer-gasto de siempre.
     let resp=await fetch(SERVER+"/leer-gasto-full",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:mimeToSend,categorias:catsActuales()})});
+    if(revision!==_capturaRevision) return;
     if(resp.status===404) resp=await fetch(SERVER+"/leer-gasto",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:mimeToSend,categorias:catsActuales()})});
     const data=await resp.json();
+    if(revision!==_capturaRevision) return;
     if(!resp.ok) throw new Error(data.error||"Error desconocido");
     if(Array.isArray(data.productos)) _productosPreleidos=data.productos;   // se usan al guardar
     if(data.mixto){
@@ -3974,6 +3992,7 @@ async function leerDocumento(){
           : "✅ Datos extraídos — verifica y guarda",
       (bloqueoComplementoPago(_cfdiGmail,_esComplementoIA) || _fechaAsumida) ? "err" : "ok");
   } catch(err){
+    if(revision!==_capturaRevision) return;
     setStatus("statusLectura","❌ "+err.message+". Puedes capturar manualmente abajo.","err");
     document.getElementById("extractedCard").style.display="block";
     _fechaAsumida = true;
@@ -4321,6 +4340,7 @@ function guardarGasto(){
     }
   }
   getActiveWeek().gastos.push(gasto);
+  _capturaRevision++;          // invalida lecturas aún pendientes del documento guardado
   _cfdiOrigen = null;            // ya se usó: que no se pegue a la siguiente captura
   _cfdiGmail  = null;
   _esComplementoIA = false;
@@ -4411,7 +4431,20 @@ function guardarManual(){
 
 function cancelarGasto(){ document.getElementById("extractedCard").style.display="none"; }
 function limpiarCaptura(){
+  _capturaRevision++;
   capturedFile=null; capturedDataURL=null; capturedB64=null; splitData=null;
+  _cfdiOrigen=null; _cfdiGmail=null; _esComplementoIA=false;
+  _productosPreleidos=null; _fechaAsumida=false; _gmailPendienteCaptura=null;
+  ["fProv","fFecha","fFactura","fImporte","fNotas","fOtro","fVencimiento","fileIn"].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value="";
+  });
+  document.getElementById("fCategoria").selectedIndex=0;
+  document.getElementById("fFormaPago").selectedIndex=0;
+  ["otroField","fVencimientoWrap","fCreditoInfo","statusGuardar","dupWarning"].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.style.display="none";
+  });
+  document.getElementById("splitModal")?.classList.remove("open");
+  document.getElementById("imgPreview").removeAttribute("src");
   document.getElementById("imgPreview").style.display="none";
   document.getElementById("btnLeer").disabled=true;
   document.getElementById("btnDividir").style.display="none";
@@ -4543,14 +4576,17 @@ function posibleMismoIngrediente(a, b){
 let splitData=null;
 async function analizarDivision(proveedor,fecha,factura,total){
   if(!capturedB64) return;
+  const revision=_capturaRevision;
   setStatus("statusLectura","🔍 Analizando división por categorías…","loading");
   document.getElementById("btnLeer").disabled=true;
   try {
     const resp=await fetch(SERVER+"/analizar-division",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:capturedB64,mime_type:capturedFile?.type||"image/jpeg",categorias:catsActuales()})});
-    const data=await resp.json(); if(!resp.ok) throw new Error(data.error||"Error en análisis");
+    const data=await resp.json();
+    if(revision!==_capturaRevision) return;
+    if(!resp.ok) throw new Error(data.error||"Error en análisis");
     splitData=data;
     setStatusHTML("statusLectura",`✅ División lista — ${data.partidas?.length||0} categorías detectadas · Total ${fmt(data.total)}<br><span style="font-size:12px">Haz clic en <strong>"Ver división por categoría"</strong> para revisar y guardar.</span>`,"ok");
-  } catch(err){ setStatus("statusLectura","⚠ No pude dividir automáticamente. Guarda como un solo gasto.","err"); splitData=null; }
+  } catch(err){ if(revision!==_capturaRevision) return; setStatus("statusLectura","⚠ No pude dividir automáticamente. Guarda como un solo gasto.","err"); splitData=null; }
   document.getElementById("btnLeer").disabled=false;
 }
 
@@ -8062,6 +8098,12 @@ function renderConciliacion(r){
 // abandona esta y hace otra.
 let _cfdiOrigen = null;
 function preLlenarCaptura(proveedor,fecha,folio,importe,uuid){
+  limpiarCaptura();
+  // Conserva el tipo del CFDI seleccionado, nunca el de un correo anterior.
+  const clave=String(uuid||"").toUpperCase();
+  const cfdi=clave ? [...(satCFDIs||[]),...(_cfdisStore||[])].find(c=>
+    String(c.uuid||c.id||c.folio||"").toUpperCase()===clave) : null;
+  _cfdiGmail=cfdi ? {...cfdi,folio} : null;
   _cfdiOrigen = { uuid: uuid||folio||"", fecha: fecha||"", importe: parseFloat(importe)||0 };
   showPage("captura");   // sin btn: showPage marca sola la pestana correcta (con el sidebar, el primer .nav-btn ya no es Capturar sino Resumen)
   document.getElementById("fProv").value=proveedor; document.getElementById("fFecha").value=fecha;
@@ -10702,12 +10744,15 @@ function verAdjuntoGmail(idx){
 
 async function gmailProcessItem(idx){
   const item=gmailItems[idx];if(!item)return;
+  limpiarCaptura();
+  const revision=_capturaRevision;
   capturedB64=item.data_b64;capturedFile={type:item.mime_type,name:item.filename,_gmailMsgId:item.msg_id};
   if(item.mime_type.startsWith("image/")){
     // Misma reducción que en captura de archivo, pero conservando _gmailMsgId (no se puede
     // convertir a File real porque ese campo alimenta el dedup/respaldo de Gmail aguas abajo).
     const raw=`data:${item.mime_type};base64,${item.data_b64}`;
     const opt=await _redimensionarDataURL(raw);
+    if(revision!==_capturaRevision) return;
     capturedDataURL=(opt && opt.length<raw.length)?opt:raw;
     capturedB64=capturedDataURL.split(",")[1];
     capturedFile.type=(capturedDataURL.match(/data:([^;]+)/)||[])[1]||"image/jpeg";
@@ -10720,11 +10765,13 @@ async function gmailProcessItem(idx){
       const page=await pdfDoc.getPage(1), vp=page.getViewport({scale:1.5}), canvas=document.createElement("canvas");
       canvas.width=vp.width; canvas.height=vp.height;
       await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
+      if(revision!==_capturaRevision) return;
       capturedDataURL=canvas.toDataURL("image/jpeg",0.85);
-    }catch(e){ capturedDataURL=null; }
+    }catch(e){ if(revision!==_capturaRevision) return; capturedDataURL=null; }
     finally{ if(pdfDoc) try{ await pdfDoc.destroy(); }catch(_){} }
   }
   else capturedDataURL=null;
+  if(revision!==_capturaRevision) return;
   gmailItems[idx]._done=true;
   guardarGmailItemsLocal();
   // Antes aquí se registraba "capturado" para TODO el equipo, con solo mandarla a Capturar. Si
@@ -10754,6 +10801,7 @@ async function gmailProcessItem(idx){
     _fechaAsumida = false;
   }
   setTimeout(async()=>{
+    if(revision!==_capturaRevision) return;
     if(_cfdiGmail && _cfdiGmail.tipo==="P"){
       // Se avisa antes de que nadie teclee nada: el PDF de un complemento se parece a una factura.
       document.getElementById("extractedCard").style.display="block";
