@@ -519,7 +519,8 @@ body.snav-min .user-chip span { display:none; }
   font-weight:600; cursor:pointer; font-size:12.5px; font-family:'DM Sans',sans-serif; }
 .rs-alert .go:hover { text-decoration:underline; }
 
-/* ── Tema oscuro — ALCANCE ACOTADO: barra lateral + pantalla Resumen ──────────
+/* ── Tema oscuro base: barra lateral + pantalla Resumen ──────────────────────
+   Presupuesto amplía este tema en assets/budget-dark.css, con alcance local.
    El resto de la app tiene ~83 colores escritos a mano dentro del HTML; oscurecerla
    entera exige convertirlos uno por uno y revisar las 12 pantallas. Aquí solo se
    oscurece la cáscara (sidebar + fondo) y el Resumen, que se escribieron con
@@ -2070,7 +2071,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-26-egresos-v2";
+const APP_BUILD = "2026-09-26-egresos-v3";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;

@@ -1,6 +1,7 @@
-# Prueba de tema oscuro: Presupuesto
+# Tema oscuro: Presupuesto
 
-Piloto local, todavía sin publicar. El botón existente Tema claro / Tema oscuro
+Versión aprobada para publicación: `2026-09-26-egresos-v3`.
+El botón existente Tema claro / Tema oscuro
 alterna la presentación. No cambia importes, presupuestos, permisos ni exportaciones.
 
 Los estilos están en `assets/budget-dark.css`, dentro de `@media screen` y
