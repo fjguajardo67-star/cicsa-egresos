@@ -7,7 +7,7 @@ const setup=harness.slice(harness.indexOf('\n')+1,harness.indexOf('let pass = 0,
 const {extractFunction}=new Function('require','__dirname',setup+'\nreturn {extractFunction};')(require,__dirname);
 const names=['renderPresupuesto','renderDetallePresupuesto','actualizarTotalPresupuesto','basePresupuestoPeriodo',
   'pintarSelectorPeriodoSP','celdaProveedor','celdaCategoria','celdaFolio','celdaImporte','celdaFormaPago',
-  'formaPagoSelectHtml','esc','escAttrJs','aplicarTema','toggleTema'];
+  'formaPagoSelectHtml','esc','escAttrJs','aplicarTema','toggleTema','renderResumen'];
 const original=fs.readFileSync(path.join(root,'index.html'),'utf8');
 const workspace=fs.readFileSync(path.join(root,'assets/workspace.js'),'utf8');
 // Identidad vigente, tomada del mismo módulo que usa producción; sin ejecutar captura.
@@ -27,6 +27,11 @@ function preview(url){
   const budget={'Cárnicos':80000,'Frutas y Verduras':30000,'Congelados':12000,'Abarrotes / Secos':20000,'Nómina / Personal':60000,'Desechables':8000};
   const data=[['Cárnicos',92400,'Proveedor de prueba A','efectivo'],['Frutas y Verduras',18500,'Proveedor de prueba B','transferencia'],['Congelados',9500,'Proveedor de prueba C','credito'],['Abarrotes / Secos',14000,'Proveedor de prueba D','efectivo'],['Nómina / Personal',54900,'Nómina de ejemplo','efectivo']].map((r,i)=>({id:String(i),categoria:r[0],importe:r[1],proveedor:r[2],formaPago:r[3],fecha:'2026-09-24',factura:'DEMO-'+(i+1)}));
   const state={budget,budgetObjetivo:220000,weeks:[{id:'demo',label:'21 al 27 sep 2026',ini:'2026-09-21',fin:'2026-09-27'}]};
+  const getActiveWeek=()=>state.weeks[0],allGastosAllWeeks=()=>gastosDelPeriodoSP(),partidasExpandidas=g=>g;
+  const todayStr=()=>'2026-09-26',periodoCajaActual=()=>getActiveWeek();
+  const calcularSaldoCajaPeriodo=()=>({saldo:20586.48,saldoInicialManual:null}),diasRestantes=()=>null;
+  const divididasDescuadradas=()=>[{diff:2581.11}],SAT_STATE_KEY='cicsa_preview_palette_sat';
+  localStorage.setItem(SAT_STATE_KEY,JSON.stringify({resultado:{faltantes:[{total:18500},{total:7200}]}}));
   if(params.get('state')==='excess')state.budgetObjetivo=150000;
   const catsActuales=()=>Object.keys(budget),presupDesbloqueado=()=>unlocked;
   const getPeriodoSP=()=>({modo:'semana',weekId:'demo',label:'21 al 27 sep 2026'}),getPeriodoSPRaw=()=>({});
@@ -47,20 +52,21 @@ function preview(url){
   document.querySelectorAll('.page').forEach(el=>el.classList.toggle('active',el.id==='page-presupuesto'));
   document.querySelectorAll('.nav-btn').forEach(el=>{el.removeAttribute('onclick');el.classList.toggle('active',el.textContent.includes('Presupuesto'));});
   document.getElementById('buildBadge').textContent='PRUEBA LOCAL · sin publicar';
-  const note=document.createElement('div');note.style='padding:14px 18px;font:14px system-ui;background:#E6DBC2;color:#172F26;line-height:1.8';
-  note.innerHTML='<strong>Prueba de Presupuesto · datos ficticios · sin guardado</strong><br><a href="?">Bloqueado</a> · <a href="?state=edit">Edición</a> · <a href="?role=operativo">Operativo</a> · <a href="?state=excess">Excedido</a> · <a href="?state=empty">Sin gastos</a> · <button onclick="toggleTema()">Alternar claro / oscuro</button>';
+  const note=document.createElement('div');note.style='padding:14px 18px;font:14px system-ui;background:#FFC23E;color:#172F26;line-height:1.8';
+  note.innerHTML='<strong>Prueba de colores · datos ficticios · sin guardado</strong><br><a href="?review=1">Resumen</a> · <a href="?">Presupuesto</a> · <a href="?state=edit">Edición</a> · <a href="?role=operativo">Operativo</a> · <a href="?state=excess">Excedido</a> · <a href="?state=empty">Sin gastos</a> · <button onclick="toggleTema()">Alternar claro / oscuro</button>';
+  note.querySelectorAll('a').forEach(el=>el.style.color='inherit');
   document.getElementById('page-presupuesto').prepend(note);
   aplicarTema(params.get('theme')==='light'?'light':'dark');
   pintarSelectorPeriodoSP('presupPeriodoSel','renderPresupuesto');renderPresupuesto();
   if(params.has('review')){
     const summary=document.getElementById('page-resumen');
-    const head=summary.querySelector('.rs-head');summary.replaceChildren(head);
     ${workspace.slice(workspace.indexOf('  const svg ='),workspace.indexOf('  const brand ='))}
     ${workspace.slice(workspace.indexOf('  const title='),workspace.indexOf("  document.getElementById('workspaceCapture').onclick"))}
     document.querySelectorAll('.page').forEach(el=>el.classList.toggle('active',el===summary));
     document.querySelectorAll('.nav-btn').forEach(el=>el.classList.toggle('active',el.textContent.includes('Resumen')));
     summary.querySelectorAll('button').forEach(el=>el.onclick=noGuardar);
-    const warning=document.createElement('p');warning.textContent='Vista local de color · sin conexión a datos reales.';summary.append(warning);
+    renderResumen();summary.prepend(note);
+    summary.querySelectorAll('button:not(.side-theme)').forEach(el=>{if(!el.closest('div[style*="font:14px"]'))el.onclick=noGuardar;});
   }
   </script></body>`);
 }

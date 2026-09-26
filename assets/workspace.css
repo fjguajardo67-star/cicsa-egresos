@@ -134,9 +134,11 @@ td { font-size:13px; }
 .rs-bar,.rs-catfill { background:#3FAE4C; }
 .rs-bar.over,.rs-catfill.over { background:#F57C00; }
 :root[data-theme=dark] .workspace-head h1 { color:var(--txt); }
-:root[data-theme=dark] .brand-caption { color:#CFDAD1; }
+:root[data-theme=dark] .brand-caption { color:var(--dk-ink); }
 :root[data-theme=dark] .workspace-review { background:var(--amarillo); color:#0F3D2E; }
 :root[data-theme=dark] .workspace-capture { background:#0F3D2E; color:white; border:1px solid #416250; }
+:root[data-theme=dark] .workspace-capture p { color:var(--dk-ink); }
+:root[data-theme=dark] .workspace-capture .btn:hover { background:var(--dk-gold); outline:2px solid var(--dk-ink); outline-offset:2px; }
 @media (max-width:1100px) { .container { padding:24px; } .capture-bento { grid-template-columns:1fr; } .capture-help { order:2; } }
 @media (max-width:600px) {
   .container { padding:20px 16px 50px; }

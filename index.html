@@ -530,9 +530,10 @@ body.snav-min .user-chip span { display:none; }
    pantalla cambia de color por accidente. */
 :root[data-theme="dark"] {
   --dk-bg:#12160E; --dk-surface:#1B2115; --dk-surface2:#232B1B;
-  --dk-ink:#EBEEDF; --dk-ink2:#ACB59A; --dk-ink3:#78826A;
-  --dk-border:#2C3521; --dk-brand:#92BF5B; --dk-gold:#E7C04A;
-  --dk-orange:#F79350; --dk-red:#E58A7C; --dk-red-bg:#2C1A17; --dk-warn-bg:#2A2113;
+  --dk-ink:#FFFFFF; --dk-ink2:var(--dk-ink); --dk-ink3:var(--dk-ink);
+  --dk-border:#2C3521; --dk-brand:#3FAE4C; --dk-gold:#FFC23E;
+  --dk-orange:#F57C00; --dk-red:var(--dk-orange);
+  --dk-red-bg:var(--dk-surface); --dk-warn-bg:var(--dk-surface2);
 }
 :root[data-theme="dark"] body { background:var(--dk-bg); }   /* SOLO el fondo: poner aquí el
    color claro lo heredaba TODA la app, y las pantallas que siguen con tarjetas blancas
@@ -587,12 +588,16 @@ body.snav-min .side-theme span { display:none; }
 :root[data-theme="dark"] #page-resumen .scard-label { color:var(--dk-ink2); }
 :root[data-theme="dark"] #page-resumen .scard-val { color:var(--dk-brand); }
 :root[data-theme="dark"] #page-resumen .scard-sub { color:var(--dk-ink3); }
-:root[data-theme="dark"] #page-resumen .scard.alert { background:var(--dk-red-bg); border-color:#4A2A24; }
+:root[data-theme="dark"] #page-resumen .scard.alert { background:var(--dk-red-bg); border-color:var(--dk-orange); }
 :root[data-theme="dark"] #page-resumen .scard.alert .scard-val { color:var(--dk-red); }
 :root[data-theme="dark"] #page-resumen .rs-bar-wrap,
 :root[data-theme="dark"] #page-resumen .rs-cattrack { background:var(--dk-surface2); border-color:var(--dk-border); }
 :root[data-theme="dark"] #page-resumen .rs-stat small { color:var(--dk-ink3); }
 :root[data-theme="dark"] #page-resumen .rs-stat b { color:var(--dk-ink); }
+:root[data-theme="dark"] #page-resumen [style*="color:var(--vd)"] { color:var(--dk-brand) !important; }
+:root[data-theme="dark"] #page-resumen [style*="color:var(--red)"] { color:var(--dk-orange) !important; }
+:root[data-theme="dark"] #page-resumen [style*="color:var(--txt2)"],
+:root[data-theme="dark"] #page-resumen .scard-sub span { color:var(--dk-ink) !important; }
 :root[data-theme="dark"] #page-resumen .rs-catrow { border-top-color:var(--dk-border); }
 :root[data-theme="dark"] #page-resumen .rs-catname { color:var(--dk-ink); }
 :root[data-theme="dark"] #page-resumen .rs-alert { background:var(--dk-surface2); border-color:var(--dk-border); color:var(--dk-ink); }
@@ -603,12 +608,16 @@ body.snav-min .side-theme span { display:none; }
 :root[data-theme="dark"] #page-resumen td { color:var(--dk-ink); border-top-color:var(--dk-border); }
 :root[data-theme="dark"] #page-resumen tbody tr:hover { background:var(--dk-surface2); }
 :root[data-theme="dark"] #page-resumen .btn-green { background:var(--dk-brand); color:#16210F; }
+:root[data-theme="dark"] #page-resumen .btn-light { background:var(--dk-surface2); color:var(--dk-ink); border-color:var(--dk-border); }
+:root[data-theme="dark"] #page-resumen .btn-light:hover { border-color:var(--dk-brand); }
+:root[data-theme="dark"] #page-resumen :is(button,a):focus-visible { outline:2px solid var(--dk-gold); outline-offset:3px; }
+:root[data-theme="dark"] #page-resumen ::selection { background:var(--dk-gold); color:var(--dk-bg); }
 :root[data-theme="dark"] #page-resumen #rsAvisoSemana > div { background:var(--dk-warn-bg) !important; border-color:var(--dk-border) !important; color:var(--dk-ink) !important; }
 :root[data-theme="dark"] #page-resumen #rsAvisoSemana .go { color:var(--dk-gold) !important; }
 :root[data-theme="dark"] #buildBadge { background:var(--dk-surface2); border-color:var(--dk-border); color:var(--dk-ink2); }
 </style>
-<link rel="stylesheet" href="assets/workspace.css?v=20260926-review-yellow1">
-<link rel="stylesheet" href="assets/budget-dark.css?v=20260926-preview1">
+<link rel="stylesheet" href="assets/workspace.css?v=20260926-palette1">
+<link rel="stylesheet" href="assets/budget-dark.css?v=20260926-palette1">
 <link rel="stylesheet" href="assets/expense-classification.css?v=20260926-congelados1">
 <script src="assets/expense-classification.js?v=20260926-congelados1" integrity="sha384-lP3OZXuIgH5Z2uRsfe/kX3IugW6Yn+avwp4fhFhV7qNNV3EfJc0Z4B0LDkBNj10e" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="assets/ingredients.css?v=20260912-egresos3" integrity="sha384-q4Rvv5tbRTrsyuCz5tuU/Ii3fPm4yyWkKT8PyKIEv8V76UWCyiuVuHXjMkhh+vIX" crossorigin="anonymous">
