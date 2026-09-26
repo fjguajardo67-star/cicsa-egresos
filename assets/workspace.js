@@ -33,7 +33,7 @@
   grid.append(cards[0],document.getElementById('extractedCard'));
   cards[0].querySelector('.card-title').textContent='Sube el documento';
   const help=document.createElement('aside');help.className='capture-help';
-  help.innerHTML='<h2>Antes de guardar</h2><ol><li>Usa una foto legible o el PDF original de la factura.</li><li>Comprueba proveedor, fecha, folio e importe.</li><li>Selecciona la categoría y la forma de pago.</li></ol><p>La lectura automática puede equivocarse. Tú confirmas los datos antes de registrarlos.</p>';
+  help.innerHTML='<h2>Antes de guardar</h2><ol><li>Usa una foto legible o el PDF original de la factura.</li><li>Comprueba proveedor, fecha, folio e importe.</li><li>Selecciona la categoría y la forma de pago.</li></ol><p>Leer con IA desde Gmail abre el documento para revisión; no registra el gasto. Revisa los datos y pulsa Guardar gasto.</p>';
   grid.append(help);
   cards.at(-1).classList.add('capture-manual');
   const manualToggle=cards.at(-1).querySelector('.card-title');
@@ -52,7 +52,7 @@
   window.actualizarEstadoCaptura=()=>{
     const pending=typeof _syncPending!=='undefined' && (_syncPending||_syncing);
     sync.dataset.pending=String(pending);
-    sync.textContent=pending?'Cambios locales pendientes de sincronizar. Mantén abierta la aplicación.':_syncUltimo?'Datos sincronizados.':'Se confirmará la sincronización cuando se guarde un cambio.';
+    sync.textContent=pending?'Cambios locales pendientes de sincronizar. Mantén abierta la aplicación.':_syncUltimo?'Sincronización general: datos al día. Esto no confirma el guardado del documento abierto.':'Se confirmará la sincronización cuando se guarde un cambio.';
   };
   actualizarEstadoCaptura();
   const extracted=document.getElementById('extractedCard');
@@ -70,14 +70,15 @@
     visible=next;
   };
   new MutationObserver(updateStep).observe(extracted,{attributes:true,attributeFilter:['style']});
-  const restart=()=>{
-    document.getElementById('fileIn').value='';
+  // Todas las entradas (Gmail, SAT y archivo) limpian el contexto. La presentación
+  // debe reiniciarse en ese mismo momento, no solo después de subir un archivo.
+  document.addEventListener('cicsa:captura-reiniciada',()=>{
     saved=false;completion.hidden=true;grid.hidden=false;grid.classList.remove('has-document');
     extracted.append(document.getElementById('statusGuardar'));
     document.getElementById('statusGuardar').style.display='none';
-    limpiarCaptura();updateStep();
-  };
-  document.getElementById('captureAnother').onclick=restart;
+    updateStep();
+  });
+  document.getElementById('captureAnother').onclick=()=>limpiarCaptura();
   document.getElementById('captureViewExpense').onclick=()=>showPage('gastos');
   document.addEventListener('cicsa:gasto-registrado',()=>{
     saved=true;completion.hidden=false;grid.hidden=true;extracted.style.display='none';
@@ -87,9 +88,10 @@
   const originalHandleFile=handleFile;
   handleFile=async function(file){
     if(!file)return;
-    await originalHandleFile(file);
-    saved=false;completion.hidden=true;grid.hidden=false;extracted.style.display='none';
-    extracted.append(document.getElementById('statusGuardar'));
+    const pending=originalHandleFile(file);
+    const revision=_capturaRevision;
+    await pending;
+    if(revision!==_capturaRevision)return;
     grid.classList.add('has-document');updateStep();
   };
   // El idioma del control nativo depende del navegador; la etiqueta visible es nuestra.

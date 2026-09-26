@@ -611,7 +611,7 @@ body.snav-min .side-theme span { display:none; }
 <script src="assets/ingredients-core.js?v=20260912-egresos3" integrity="sha384-bR6Ehg5MFVbuMaTOlrQjeYEraJ4lXXibZ/swSdHVW8ehML59uz/JQ09zZaPJtqWn" crossorigin="anonymous"></script>
 <script src="assets/ingredients-store.js?v=20260912-egresos3" integrity="sha384-1t1r7qDywMGV3TumAi7h3DKdgU5FSImkC521K3f8vaZST4Gzj87WBYHNq2CJ+Omb" crossorigin="anonymous"></script>
 <script src="assets/ingredients.js?v=20260912-egresos3" integrity="sha384-s1ZplK52t7BarVzWR7335tHpL7FDc6JcIh0kddoYeFKEaZrsy2F21TOZOGrokeqj" crossorigin="anonymous" defer></script>
-<script src="assets/workspace.js" integrity="sha384-KPZJPA9xLRf7T354MrqOF9ZpbxkfCh/RqFLg/UtG0qp+x6HDQEQ8VNq8CKyV5mju" defer></script>
+<script src="assets/workspace.js?v=20260926-gmail1" integrity="sha384-WxT0PiSRTRpBaaPkTq9bHde6Ci4kqfHF7oXHTJLX/k7l1a2exGSvlafzcj7BXFmB" defer></script>
 </head>
 <body>
 <div id="avisoFallos" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:100000;background:var(--red);color:#fff;padding:10px 14px;font-size:12.5px;box-shadow:0 -2px 10px rgba(0,0,0,.25)"></div>
@@ -2061,7 +2061,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-17-egresos-v1";
+const APP_BUILD = "2026-09-26-egresos-v1";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -4450,6 +4450,7 @@ function limpiarCaptura(){
   document.getElementById("btnDividir").style.display="none";
   document.getElementById("statusLectura").style.display="none";
   document.getElementById("extractedCard").style.display="none";
+  document.dispatchEvent(new CustomEvent("cicsa:captura-reiniciada"));
 }
 let manualOpen=false;
 function toggleManual(){
@@ -10782,7 +10783,8 @@ async function gmailProcessItem(idx){
   const el=document.getElementById(`gmail-item-${idx}`);if(el){el.style.opacity="0.4";el.innerHTML=`<div style="padding:8px;color:var(--vm);font-size:13px">✅ Procesando…</div>`;}
   showPage("captura");   // sin btn: showPage marca sola la pestana correcta (con el sidebar, el primer .nav-btn ya no es Capturar sino Resumen)
   const preview=document.getElementById("imgPreview");
-  if(item.mime_type.startsWith("image/")){preview.src=capturedDataURL;preview.style.display="block";}else preview.style.display="none";
+  // También mostrar la primera página renderizada del PDF, no solo fotos.
+  if(capturedDataURL){preview.src=capturedDataURL;preview.style.display="block";}else preview.style.display="none";
   document.getElementById("btnLeer").disabled=false;document.getElementById("btnDividir").style.display="none";
   document.getElementById("extractedCard").style.display="none";document.getElementById("statusLectura").style.display="none";
   ["fProv","fFecha","fFactura","fImporte","fNotas","fOtro"].forEach(id=>{document.getElementById(id).value="";});
@@ -10821,7 +10823,7 @@ async function gmailProcessItem(idx){
     } else {
       await leerDocumento();
     }
-    if(el)el.innerHTML=`<div style="padding:8px;color:var(--vm);font-size:13px">✅ Enviado a Capturar</div>`;
+    if(el)el.innerHTML=`<div style="padding:8px;color:var(--vm);font-size:13px">Abierto en Capturar · pendiente de guardar</div>`;
   },300);
 }
 // Descartar ahora vale para TODO el equipo (antes solo para este navegador), asi que la misma
