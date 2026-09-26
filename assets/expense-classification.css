@@ -1,0 +1,24 @@
+/* Revisión por producto dentro de la división existente. */
+#splitModal .split-modal { width:min(900px,96vw); max-width:900px; }
+.split-guide { color:var(--txt); font-size:14px; line-height:1.5; margin:0 0 18px; }
+.split-product-name { font-weight:600; color:var(--vd); overflow-wrap:anywhere; }
+.split-product-meta { color:var(--txt); font-size:13px; line-height:1.5; margin:4px 0 10px; overflow-wrap:anywhere; }
+.split-category-label { display:block; font-size:13px; color:var(--txt); margin:8px 0 4px; }
+.split-category-select { width:100%; min-height:42px; font-size:16px; }
+.split-remember { display:flex; align-items:flex-start; gap:8px; color:var(--txt); font-size:14px; line-height:1.4; margin:12px 0 0; }
+.split-remember input { flex:none; width:18px; height:18px; margin:1px 0 0; }
+.split-classification-status { color:var(--vd); font-size:13px; line-height:1.5; margin:6px 0 0; }
+.split-classification-summary { margin:18px 0; padding-top:12px; border-top:1px solid var(--border); }
+.split-classification-summary p { display:flex; justify-content:space-between; gap:16px; margin:6px 0; font-size:14px; }
+#splitError { color:var(--red); font-size:14px; line-height:1.5; }
+#splitModal .split-row { align-items:start; }
+#splitModal input[type=number] { font-size:16px; }
+@media(max-width:600px){
+  #splitModal .split-row { grid-template-columns:minmax(0,1fr) 36px; }
+  #splitModal .split-row>div:first-child { grid-column:1 / -1; }
+  #splitModal .split-row .split-amount { grid-column:1; }
+  #splitModal .split-column-head { display:none!important; }
+  #splitModal .split-invoice-info { flex-wrap:wrap; }
+  #splitModal .split-total-row { flex-wrap:wrap; gap:8px; }
+  #splitModal .split-modal { padding:20px 16px; }
+}

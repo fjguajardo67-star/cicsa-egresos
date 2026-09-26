@@ -2,19 +2,21 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const classification=require('../assets/expense-classification.js');
 const harness=fs.readFileSync(path.join(__dirname,'run_js_tests.js'),'utf8');
 const setup=harness.slice(harness.indexOf('\n')+1,harness.indexOf('let pass = 0, fail = 0;'));
 function fixture(){
   const {S,extractFunction}=new Function('require','__dirname',setup+'\nreturn {S,extractFunction};')(require,__dirname);
   const fields=new Map(),alerts=[],saved=[],callbacks=[],uploads=[],products=[],listeners=new Map();
-  const element=()=>({value:'',style:{},dataset:{},hidden:false,selectedIndex:0,
-    classList:{add(){},remove(){}},setAttribute(k,v){this[k]=v;},removeAttribute(k){delete this[k];},
-    append(child){child.parentElement=this;},before(){},focus(){},scrollIntoView(){}});
+  const element=()=>({value:'',style:{},dataset:{},hidden:false,selectedIndex:0,options:[],
+    add(option){this.options.push(option);},classList:{add(){},remove(){}},setAttribute(k,v){this[k]=v;},removeAttribute(k){delete this[k];},
+    append(child){child.parentElement=this;},appendChild(child){child.parentElement=this;},before(){},focus(){},scrollIntoView(){}});
   const field=id=>{
     if(!fields.has(id)) fields.set(id,element());
     return fields.get(id);
   };
   Object.assign(S,{
+    CicsaExpenseClassification:classification,_normCat:classification.norm,Option:class {constructor(text,value){this.text=text;this.value=value;}},
     _capturaRevision:0,capturedFile:null,capturedB64:null,capturedDataURL:null,splitData:null,
     _cfdiGmail:null,_cfdiOrigen:null,_esComplementoIA:false,_productosPreleidos:null,
     _fechaAsumida:false,_gmailPendienteCaptura:null,satCFDIs:[],_cfdisStore:[],gmailItems:[],
@@ -35,7 +37,9 @@ function fixture(){
   });
   for(const name of ['limpiarCaptura','preLlenarCaptura','guardarGasto','bloqueoComplementoPago',
     '_cfdiUuidDeEsteFormulario','leerDocumento','datosDeCaptura','analizarDivision','gmailProcessItem',
-    'handleFile','_optimizarCaptura','checkFormaPago']) vm.runInContext(extractFunction(name),S);
+    'handleFile','_optimizarCaptura','checkFormaPago','categoriasCaptura','prepararRevisionProductos',
+    'incorporarCongelados','splitGuardar','openSplitModal','closeSplitModal','renderSplitRows','updateSplitDiff',
+    'splitGuardarUno','cambiarClasificacionSplit']) vm.runInContext(extractFunction(name),S);
   function installUI(){
     const source=fs.readFileSync(path.join(__dirname,'../assets/workspace.js'),'utf8');
     const start=source.indexOf("  const extracted=document.getElementById('extractedCard');");
@@ -237,4 +241,57 @@ test('subir un archivo nuevo después de guardar reinicia la captura inmediatame
   resolve('data:image/jpeg;base64,new');await pending;
   assert.equal(f.field('imgPreview').style.display,'block');
   assert.equal(f.field('btnLeer').disabled,false);
+});
+
+function frozenFixture(){
+  const f=fixture();
+  f.S.state={weeks:[],budget:{},categorias:['Frutas y Verduras','Otro']};
+  f.S.capturedFile={type:'application/pdf',_gmailMsgId:'m',name:'factura.pdf'};
+  f.S.capturedB64='test';
+  f.S._cfdiGmail={tipo:'I',proveedor:'Proveedor A',fecha:'2026-09-26',folio:'XML-REAL',total:140};
+  f.S.fetch=async()=>({ok:true,status:200,json:async()=>({proveedor:'IA',fecha:'2026-01-01',factura:'IA-ERR',importe:999,mixto:true,
+    productos:[{nombre:'Papa lisa europea',categoria:'Frutas y Verduras',importe:100,precio_unitario:50},
+      {nombre:'Zanahoria fresca',categoria:'Frutas y Verduras',importe:40,precio_unitario:20}]})});
+  return f;
+}
+test('división conserva XML y recuerda papa congelada sin mover la verdura fresca ni cambiar precios',async()=>{
+  const f=frozenFixture();await f.S.leerDocumento();
+  assert.equal(f.S.splitData.proveedor,'Proveedor A');assert.equal(f.S.splitData.factura,'XML-REAL');
+  assert.equal(f.S.splitData.total,140);assert.equal(f.S.splitData.fecha,'2026-09-26');
+  f.S.splitData.partidas[0].categoria='Congelados';f.S.splitData.partidas[0]._recordar=true;
+  f.field('fFormaPago').value='credito';f.field('fVencimiento').value='2026-10-26';
+  f.S.splitGuardar();
+  assert.equal(f.saved.length,1);assert.equal(f.saved[0].importe,140);
+  assert.equal(f.saved[0]._partidas.find(p=>p.categoria==='Congelados').importe,100);
+  assert.equal(f.saved[0]._partidas.find(p=>p.categoria==='Frutas y Verduras').importe,40);
+  assert.equal(f.saved[0].formaPago,'credito');assert.equal(f.saved[0]._clasificacionProductos[0].nombre,'Papa lisa europea');
+  const rules=f.S.state.reglasClasificacionProductos;
+  assert.equal(Object.values(rules).length,1);assert.equal(Object.values(rules)[0].categoria,'Congelados');
+  assert.equal(f.S.state.categorias.includes('Congelados'),true);
+  const g=frozenFixture();g.S.state.reglasClasificacionProductos=rules;await g.S.leerDocumento();
+  assert.equal(g.S.splitData.partidas[0].categoria,'Congelados');
+  assert.equal(g.S.splitData.partidas[1].categoria,'Frutas y Verduras');
+  assert.equal(g.S._productosPreleidos[0].precio_unitario,50);
+});
+test('cerrar sin guardar y descartar división no persisten reglas ni gastos',async()=>{
+  const f=frozenFixture();await f.S.leerDocumento();f.S.splitData.partidas[0]._recordar=true;
+  f.S.closeSplitModal();assert.equal(f.S.state.reglasClasificacionProductos,undefined);assert.equal(f.saved.length,0);
+  f.S.splitGuardarUno();assert.equal(f.S.splitData,null);assert.equal(f.S.state.reglasClasificacionProductos,undefined);
+});
+test('diferencia fiscal o importe vacío bloquea guardado y aprendizaje de la regla',async()=>{
+  const f=frozenFixture();await f.S.leerDocumento();f.S.splitData.partidas[0]._recordar=true;
+  f.S.splitData.total=150;f.S.splitGuardar();
+  assert.equal(f.saved.length,0);assert.equal(f.S.state.reglasClasificacionProductos,undefined);
+  assert.match(f.field('splitError').textContent,/no suman/);
+  f.S.splitData.partidas[0].importe=null;f.S.splitGuardar();assert.equal(f.saved.length,0);
+});
+test('botón principal abre revisión en vez de ignorar categorías por producto',async()=>{
+  const f=frozenFixture();await f.S.leerDocumento();let opened=false;
+  f.S.openSplitModal=()=>{opened=true;};f.S.guardarGasto();
+  assert.equal(opened,true);assert.equal(f.saved.length,0);
+});
+test('complementos de pago y sesión no verificada no guardan división ni reglas',async()=>{
+  const f=frozenFixture();await f.S.leerDocumento();
+  f.S._cfdiGmail.tipo='P';f.S.splitGuardar();assert.equal(f.saved.length,0);
+  f.S._cfdiGmail.tipo='I';f.S._financialReady=false;f.S.splitGuardar();assert.equal(f.saved.length,0);
 });

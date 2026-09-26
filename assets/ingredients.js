@@ -83,6 +83,13 @@
       const observationId=await hash([C.norm(supplier),receipt,C.norm(name),C.norm(item.unidad),context.evidencia==='xml'?index:Number(item.precio)].join('|'));
       const observation={id:observationId,precio:Number(item.precio),fecha:C.date(context.fecha)||'',folio:receipt,proveedor:supplier||'',unidad:item.unidad||'',origen:'factura',evidencia:context.evidencia||'lectura',descripcion:name};
       const updated=C.recordPurchase(p,observation);
+      // Clasificación operativa separada del ingrediente y de su conversión.
+      // Una compra antigua no reemplaza los metadatos de la presentación vigente.
+      if(!p.fecha_precio||(C.date(context.fecha)&&C.date(context.fecha)>=p.fecha_precio)){
+        if(item.tipo_alimento)updated.tipo_alimento=item.tipo_alimento;
+        if(item.codigo_proveedor)updated.codigo_proveedor=item.codigo_proveedor;
+        if(item.categoria)updated.categoria_operativa=item.categoria;
+      }
       if(JSON.stringify(updated)!==JSON.stringify(p)||created){
         changes.set(updated.id,updated);const at=working.findIndex(x=>x.id===updated.id);if(at<0)working.push(updated);else working[at]=updated;
       }

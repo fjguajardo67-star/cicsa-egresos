@@ -4976,7 +4976,7 @@ t("se conserva la detección por msg_id contra los gastos ya capturados", () => 
 });
 
 console.log("\n== Categorías editables ==");
-const CATS_FAB = ["Cárnicos","Lácteos / Cremería","Frutas y Verduras","Tortilla","Abarrotes / Secos",
+const CATS_FAB = ["Cárnicos","Lácteos / Cremería","Frutas y Verduras","Congelados","Tortilla","Abarrotes / Secos",
   "Refrescos / Pepsi","Hielo","Gas","Artículos de limpieza","Desechables","Mantenimiento y Equipo",
   "Transporte / Combustible","Servicios (Basura, Agua, Luz)","Nómina / Personal","Gastos Generales","Otro"];
 t("sin lista propia se usan las categorías de fábrica", () => {

@@ -89,7 +89,7 @@ signal.signal(signal.SIGTERM, shutdown_handler)
 CORS(app, origins=["https://fjguajardo67-star.github.io", "https://cicsa-egresos.cicsacomedores.com.mx", "http://cicsa-egresos.cicsacomedores.com.mx", "http://localhost:7432", "http://127.0.0.1:7432"])
 
 CATEGORIAS = [
-    "Cárnicos", "Lácteos / Cremería", "Frutas y Verduras", "Tortilla",
+    "Cárnicos", "Lácteos / Cremería", "Frutas y Verduras", "Congelados", "Tortilla",
     "Abarrotes / Secos", "Refrescos / Pepsi", "Hielo", "Gas",
     "Artículos de limpieza", "Desechables", "Mantenimiento y Equipo",
     "Transporte / Combustible", "Servicios (Basura, Agua, Luz)",
@@ -297,10 +297,13 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
     {{
       "nombre": "descripción comercial fiel: conservar marca, tamaño y presentación cuando aparezcan",
       "categoria": "categoría de ESTE renglón de la lista indicada; no heredar la categoría global",
+      "codigo_proveedor": "código o SKU propio del proveedor, o vacío; nunca la ClaveProdServ genérica del SAT",
+      "tipo_alimento": "tipo de alimento independiente de su conservación, por ejemplo papa/verdura, fresa/fruta o ajo/condimento",
       "cantidad": 10.5,
       "unidad": "kg",
       "precio_unitario": 85.00,
-      "importe": 892.50
+      "importe": 892.50,
+      "importe_clasificacion": 892.50
     }}
   ]
 }}
@@ -316,6 +319,14 @@ REGLAS:
   "categoria" la categoría principal (la de mayor importe).
 - unidad de cada producto debe ser: kg, lt, pz, cja o paq.
 - Clasifica cada renglón por separado, incluyendo limpieza, desechables y refrescos.
+- Usa "Congelados" cuando la descripción indique congelado, ultracongelado, frozen o IQF.
+  No supongas que "papa lisa europea", "mezcla California" o "mezcla Primavera" son congelados
+  solo por su nombre. Tampoco clasifiques fresas o ajo frescos como congelados.
+- Conserva codigo_proveedor exactamente, incluidos ceros y guiones. No inventes códigos.
+- importe_clasificacion es el importe final del renglón con sus impuestos y descuentos
+  explícitos; importe y precio_unitario conservan su significado comercial. No inventes
+  prorrateos de cargos globales: si no se puede determinar, usa null y el usuario revisará
+  la diferencia contra el total. La descripción fiel permite recordar reglas por proveedor.
 - Conserva la presentación real en el nombre (ej. Aderezo ranch 3.8 L); no confundas kg y litros.
 - precio_unitario es el precio por unidad (kg, lt, pz), NO el importe total del renglón.
 - Si no muestra precio unitario, calcula precio_unitario = importe / cantidad.
@@ -354,6 +365,9 @@ Devuelve ÚNICAMENTE JSON válido, sin texto adicional:
   "fecha": "YYYY-MM-DD",
   "factura": "número de factura o folio",
   "total": 1234.56,
+  "productos": [
+    {{"nombre":"descripción comercial completa, con marca y presentación", "codigo_proveedor":"SKU propio del proveedor o vacío; no ClaveProdServ SAT", "tipo_alimento":"tipo de alimento sin confundir con conservación", "categoria":"categoría exacta de la lista", "importe":456.78}}
+  ],
   "partidas": [
     {{
       "categoria": "nombre exacto de esta lista: {cats}",
@@ -370,9 +384,16 @@ IMPORTANTE:
 - Agrupa carnes, aves, embutidos en "Cárnicos".
 - Agrupa lácteos, quesos, leche en "Lácteos / Cremería".
 - Agrupa frutas y verduras frescas en "Frutas y Verduras".
+- "productos" contiene TODOS los renglones individuales, sin agrupar nombres, para que
+  el usuario pueda corregir y recordar una categoría por producto y proveedor.
+- Usa "Congelados" si el renglón dice congelado, ultracongelado, frozen o IQF. No lo supongas
+  por nombres como papa lisa europea, mezcla California o Primavera. Conserva descripción
+  y código completos. No confundas el SKU del proveedor con la ClaveProdServ del SAT.
+- Los importes individuales incluyen impuestos/descuentos explícitos del renglón. No inventes
+  prorrateos de cargos globales ni cambies el total para cuadrar; el usuario revisa diferencias.
 - Agrupa refrescos, jugos, aguas en "Refrescos / Pepsi".
 - Todo lo demás (salsas, condimentos, abarrotes secos, cereales) en "Abarrotes / Secos".''',
-            max_tokens=2000)
+            max_tokens=8000)
         return jsonify(data)
     except (json.JSONDecodeError, KeyError):
         return jsonify({"error":"No pude analizar la división. Captura manualmente."}), 422

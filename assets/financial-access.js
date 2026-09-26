@@ -7,7 +7,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function() {
   'use strict';
   const PUBLIC_KEYS = ['activeWeek', 'categorias', 'provAliases', 'rfcPropio',
-    'fechaCorte', 'migracionDesechables', 'tombstones'];
+    'fechaCorte', 'migracionDesechables', 'tombstones', 'reglasClasificacionProductos'];
   const WEEK_KEYS = ['id', 'label', 'ini', 'fin', 'gastos'];
   const PATHS = { operation: 'operacion/cicsa', budget: 'finanzas/presupuesto',
     cash: 'finanzas/caja', marker: 'configuracion/seguridadFinanciera' };
