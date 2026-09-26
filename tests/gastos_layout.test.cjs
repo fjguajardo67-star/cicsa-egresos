@@ -31,5 +31,5 @@ test('ampliar el importe no altera la celda compartida ni sus cambios de valor',
   assert(amount.includes('type="number" step="0.01"'));
   assert(amount.includes('width:90px'));
   assert(amount.includes("'importe',parseFloat(this.value)||0"));
-  assert(html.includes('workspace.css?v=20260926-palette1'));
+  assert(html.includes('workspace.css?v=20260926-palette2'));
 });

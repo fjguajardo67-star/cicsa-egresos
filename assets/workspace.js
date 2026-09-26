@@ -14,7 +14,7 @@
   title.textContent='Tu espacio de trabajo';
   const actions=document.createElement('section');
   actions.className='workspace-actions';actions.setAttribute('aria-label','Acciones principales');
-  actions.innerHTML=`<article class="workspace-action workspace-capture"><h2>Una factura, todo en orden.</h2><p>Sube el documento, confirma los datos y registra el gasto en su categoría.</p><button class="btn" id="workspaceCapture">${plus} Capturar factura</button></article><article class="workspace-action workspace-review"><h2>Revisa tus gastos</h2><p>Consulta movimientos, filtra por categoría y revisa cómo se pagaron.</p><button class="btn" id="workspaceReview">Revisar gastos ${arrow}</button></article>`;
+  actions.innerHTML=`<article class="workspace-action workspace-capture"><h2>Registra una factura</h2><p>Sube el documento, confirma los datos y registra el gasto en su categoría.</p><button class="btn" id="workspaceCapture">${plus} Capturar factura</button></article><article class="workspace-action workspace-review"><h2>Revisa tus gastos</h2><p>Consulta movimientos, filtra por categoría y revisa cómo se pagaron.</p><button class="btn" id="workspaceReview">Revisar gastos ${arrow}</button></article>`;
   document.querySelector('.rs-head').after(actions);
   document.getElementById('workspaceCapture').onclick=()=>showPage('captura');
   document.getElementById('workspaceReview').onclick=()=>showPage('gastos');

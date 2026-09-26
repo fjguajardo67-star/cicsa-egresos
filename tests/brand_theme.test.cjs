@@ -29,3 +29,11 @@ test('Revisa tus gastos usa el amarillo de marca en ambos temas',()=>{
   for(const r of rules)assert.match(r[2],/background:var\(--amarillo\)/);
   assert.match(css,/--amarillo:#FFC23E/);
 });
+test('la tarjeta de captura tiene un título directo y usa el verde acordado en oscuro',()=>{
+  const js=fs.readFileSync(path.join(root,'assets/workspace.js'),'utf8');
+  const css=fs.readFileSync(path.join(root,'assets/workspace.css'),'utf8');
+  assert(js.includes('<h2>Registra una factura</h2>'));
+  assert(!js.includes('Una factura, todo en orden.'));
+  assert.match(css,/:root\[data-theme=dark\] \.workspace-capture \{ background:var\(--dk-brand\); color:var\(--dk-bg\);/);
+  assert.match(css,/:root\[data-theme=dark\] \.workspace-capture p \{ color:var\(--dk-bg\);/);
+});
