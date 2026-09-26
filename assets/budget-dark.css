@@ -1,0 +1,53 @@
+/* Piloto acotado a Presupuesto. Solo pantalla: no cambia impresión ni otras páginas.
+   Las variables se heredan dentro de esta sección, nunca se redefinen en :root. */
+@media screen {
+  :root[data-theme="dark"] #page-presupuesto {
+    --bg:#12160E; --claro:#232B1B; --txt:#EBEEDF; --txt2:#B8C2AC;
+    --border:#48543C; --vd:#A9D477; --vm:#A9D477; --do:#E7C04A;
+    --red:#F0A395; --red-bg:#321F1C; --naranja:#FFB078;
+    color-scheme:dark;
+    background:var(--bg); color:var(--txt);
+    scrollbar-color:#788A69 var(--bg);
+  }
+  :root[data-theme="dark"] #page-presupuesto :is(.card,.scard,.bcard) {
+    background:#1B2115; border-color:var(--border); box-shadow:none;
+  }
+  :root[data-theme="dark"] #page-presupuesto .scard.alert {
+    background:var(--red-bg); border-color:#89554C;
+  }
+  :root[data-theme="dark"] #page-presupuesto :is(input,select,textarea) {
+    background:#151B11 !important; color:var(--txt) !important;
+    border-color:var(--border) !important; caret-color:var(--vd);
+  }
+  :root[data-theme="dark"] #page-presupuesto :is(input,textarea)::placeholder { color:var(--txt2); }
+  :root[data-theme="dark"] #page-presupuesto :is(input,select,button,a):focus-visible {
+    outline:2px solid #E7C04A; outline-offset:3px;
+  }
+  :root[data-theme="dark"] #page-presupuesto input[readonly] { opacity:1 !important; color:var(--txt2) !important; }
+  :root[data-theme="dark"] #page-presupuesto #presupTotalBar {
+    background:#232B1B !important; box-shadow:none !important;
+  }
+  :root[data-theme="dark"] #page-presupuesto :is(#presupCandado,#presupDescuadre) {
+    background:#302815 !important;
+  }
+  :root[data-theme="dark"] #page-presupuesto #presupDescuadre[style*="var(--red)"] { background:var(--red-bg) !important; }
+  :root[data-theme="dark"] #page-presupuesto #presupAbierto { background:#23331D !important; }
+  :root[data-theme="dark"] #page-presupuesto #presupProporcional {
+    background:#192D35 !important; border-color:#6C98AA !important;
+  }
+  :root[data-theme="dark"] #page-presupuesto #presupPeriodoSel > div[style*="background"] { background:#302815 !important; }
+  :root[data-theme="dark"] #page-presupuesto :is(#presupDif,#presupDifLbl)[style*="184, 134, 11"] { color:#E7C04A !important; }
+  :root[data-theme="dark"] #page-presupuesto .bcard-bar-wrap { background:#38442C; }
+  :root[data-theme="dark"] #page-presupuesto :is(.btn-green,.bcard button[onclick^="saveSingleBudget"]) {
+    background:#A9D477 !important; color:#14200F !important;
+  }
+  :root[data-theme="dark"] #page-presupuesto .btn-green:hover { background:#C0E593 !important; }
+  :root[data-theme="dark"] #page-presupuesto .btn-light { background:#293422; color:var(--txt); }
+  :root[data-theme="dark"] #page-presupuesto .btn-light:hover { background:#3B4A31; }
+  :root[data-theme="dark"] #page-presupuesto .btn-gold { color:#14200F; }
+  :root[data-theme="dark"] #page-presupuesto :is(th,thead th) { background:#293422; color:var(--txt); }
+  :root[data-theme="dark"] #page-presupuesto td { border-color:var(--border); }
+  :root[data-theme="dark"] #page-presupuesto tbody tr:hover { background:#232B1B; }
+  :root[data-theme="dark"] #page-presupuesto .cat-badge { background:#293422; color:var(--vd); }
+  :root[data-theme="dark"] #page-presupuesto ::selection { background:#E7C04A; color:#14200F; }
+}
