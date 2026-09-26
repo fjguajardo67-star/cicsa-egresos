@@ -5,9 +5,9 @@
   const arrow = svg('<path d="M5 12h14m-6-6 6 6-6 6"/>');
   const upload = svg('<path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5"/>');
   const brand = document.querySelector('.side-brand');
-  brand.innerHTML='<img class="corporate-logo" src="assets/cicsa-logo.png" alt="CICSA · Alimentamos tu energía" width="1000" height="542"><span class="brand-caption">Control de egresos</span>';
+  brand.innerHTML='<img class="corporate-logo brand-positive" src="assets/cicsa-logo.png" alt="CICSA · Alimentamos tu energía" width="1000" height="542"><img class="corporate-logo brand-negative" src="assets/cicsa-logo-negativo.png" alt="CICSA · Alimentamos tu energía" width="960" height="360"><span class="brand-caption">Control de egresos</span>';
   const mobileBrand=document.querySelector('.mt-title');
-  if(mobileBrand) mobileBrand.innerHTML='<img src="assets/cicsa-logo.png" alt="CICSA" width="1000" height="542" class="mobile-corporate-logo">';
+  if(mobileBrand) mobileBrand.innerHTML='<img src="assets/cicsa-logo.png" alt="CICSA" width="1000" height="542" class="mobile-corporate-logo brand-positive"><img src="assets/cicsa-logo-negativo.png" alt="CICSA" width="960" height="360" class="mobile-corporate-logo brand-negative">';
   const loginLogo=document.querySelector('.login-logo img');
   if(loginLogo){loginLogo.src='assets/cicsa-logo.png';loginLogo.alt='CICSA · Alimentamos tu energía';loginLogo.style.cssText='width:240px;height:130px;object-fit:contain';}
   const title=document.querySelector('.rs-title');

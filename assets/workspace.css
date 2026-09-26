@@ -64,6 +64,14 @@ td { font-size:13px; }
 .side-brand { padding:14px 18px 12px; flex-direction:column; align-items:stretch; gap:0; }
 .corporate-logo { display:block; width:100%; max-height:110px; object-fit:contain; background:#fff; border-radius:8px; }
 .brand-caption { font-size:12px; text-align:center; color:var(--txt2); margin-top:0; }
+/* Logo oficial negativo, sin placa blanca. El modo claro conserva su marca actual. */
+.brand-negative { display:none; }
+@media screen {
+  :root[data-theme=dark] .brand-positive { display:none; }
+  :root[data-theme=dark] .brand-negative { display:block; background:transparent; border-radius:0; }
+  :root[data-theme=dark] .side-brand { padding:20px 18px 16px; gap:12px; }
+  :root[data-theme=dark] .corporate-logo.brand-negative { height:auto; }
+}
 .nav-btn { min-height:41px; border-radius:8px; }
 .nav-btn.active { color:var(--vd); background:#E3EEDF; font-weight:650; }
 .sn-group h4 { text-transform:none; letter-spacing:0; color:var(--txt2); font-size:11px; padding-top:8px; }

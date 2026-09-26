@@ -9,6 +9,9 @@ const names=['renderPresupuesto','renderDetallePresupuesto','actualizarTotalPres
   'pintarSelectorPeriodoSP','celdaProveedor','celdaCategoria','celdaFolio','celdaImporte','celdaFormaPago',
   'formaPagoSelectHtml','esc','escAttrJs','aplicarTema','toggleTema'];
 const original=fs.readFileSync(path.join(root,'index.html'),'utf8');
+const workspace=fs.readFileSync(path.join(root,'assets/workspace.js'),'utf8');
+// Identidad vigente, tomada del mismo módulo que usa producción; sin ejecutar captura.
+const brandSetup=workspace.slice(workspace.indexOf("  const brand ="),workspace.indexOf("  const title="));
 function preview(url){
   const baseline=url.searchParams.has('baseline');
   let html=original.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').replace(/<link\b[^>]*href="https:[^>]*>/gi,'');
@@ -39,6 +42,7 @@ function preview(url){
   function noGuardar(){alert('Vista de prueba: no se guardan datos ni se exportan archivos.');}
   for(const n of ['guardarObjetivoPresupuesto','saveSingleBudget','guardarPresupuesto','resetPresupuesto','exportarExcel','exportarPDF','verEnGastos','editarGastosCategoria','cambiarFormaPagoReporte','agregarCategoria','unificarVariantesCategorias','restaurarCategorias','renombrarCategoria','eliminarCategoria','onCambioPeriodoSP'])window[n]=noGuardar;
   window.desbloquearPresupuesto=()=>location.search='?state=edit';window.bloquearPresupuesto=()=>location.search='';
+  ${brandSetup}
   document.getElementById('loginScreen').remove();
   document.querySelectorAll('.page').forEach(el=>el.classList.toggle('active',el.id==='page-presupuesto'));
   document.querySelectorAll('.nav-btn').forEach(el=>{el.removeAttribute('onclick');el.classList.toggle('active',el.textContent.includes('Presupuesto'));});

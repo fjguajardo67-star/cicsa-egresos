@@ -18,6 +18,10 @@ Los controles de guardado/exportación no realizan operaciones; solo avisan.
 Las opciones de prueba permiten ver edición, bloqueo, operador, exceso y ausencia
 de gastos. El botón de tema funciona solamente en esta vista local.
 
+La barra lateral y el encabezado móvil usan el PNG negativo transparente proporcionado
+por el usuario en modo oscuro, sin fondo blanco. En modo claro se conserva el logo
+original. La vista previa reutiliza el bloque de identidad real de `workspace.js`.
+
 ## Comprobaciones
 
 `node --test tests/budget_dark.test.cjs`: alcance de selectores y contraste.
