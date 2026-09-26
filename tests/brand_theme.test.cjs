@@ -22,3 +22,10 @@ test('logo oscuro transparente y cambio por CSS sin lógica de tema nueva',()=>{
   assert.match(css,/:root\[data-theme=dark\] \.brand-positive\s*\{\s*display:none/);
   assert.match(css,/:root\[data-theme=dark\] \.brand-negative\s*\{\s*display:block; background:transparent/);
 });
+test('Revisa tus gastos usa el amarillo de marca en ambos temas',()=>{
+  const css=fs.readFileSync(path.join(root,'assets/workspace.css'),'utf8');
+  const rules=[...css.matchAll(/(?:^|\n)([^{}]*\.workspace-review)\s*\{([^}]+)\}/g)];
+  assert.equal(rules.length,2);
+  for(const r of rules)assert.match(r[2],/background:var\(--amarillo\)/);
+  assert.match(css,/--amarillo:#FFC23E/);
+});

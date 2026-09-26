@@ -52,6 +52,16 @@ function preview(url){
   document.getElementById('page-presupuesto').prepend(note);
   aplicarTema(params.get('theme')==='light'?'light':'dark');
   pintarSelectorPeriodoSP('presupPeriodoSel','renderPresupuesto');renderPresupuesto();
+  if(params.has('review')){
+    const summary=document.getElementById('page-resumen');
+    const head=summary.querySelector('.rs-head');summary.replaceChildren(head);
+    ${workspace.slice(workspace.indexOf('  const svg ='),workspace.indexOf('  const brand ='))}
+    ${workspace.slice(workspace.indexOf('  const title='),workspace.indexOf("  document.getElementById('workspaceCapture').onclick"))}
+    document.querySelectorAll('.page').forEach(el=>el.classList.toggle('active',el===summary));
+    document.querySelectorAll('.nav-btn').forEach(el=>el.classList.toggle('active',el.textContent.includes('Resumen')));
+    summary.querySelectorAll('button').forEach(el=>el.onclick=noGuardar);
+    const warning=document.createElement('p');warning.textContent='Vista local de color · sin conexión a datos reales.';summary.append(warning);
+  }
   </script></body>`);
 }
 http.createServer((req,res)=>{
