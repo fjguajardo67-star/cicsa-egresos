@@ -108,7 +108,8 @@ const FUNCS = [
   "motivoNoEsGasto", "deducirRfcPropio", "rfcPropioEfectivo", "fechaBalanceCfdi",
   "ritmoSemanal", "semanasRestantes",
   "_montoMovimiento", "movimientosDelMes", "resumenArchivo", "construirArchivoMes",
-  "verificarArchivo", "mesesArchivables", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
+  "verificarArchivo", "mesesArchivables",
+  "mesesDelRango", "unirConArchivo", "archivoValido", "coberturaArchivo", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
   "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance", "facturasFueraDelPeriodo",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
@@ -1096,6 +1097,144 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== leer lo archivado: fase 2 ==");
+// El peligro propio de esta fase: como la fase 3 todavia no quita nada, cada movimiento
+// archivado SIGUE estando en el documento. Unirlos sin deduplicar duplicaria dinero — y un
+// balance que suma dos veces es peor que uno que no llega tan atras.
+
+t("los meses de un rango, de punta a punta", () => {
+  assert.deepEqual(S.mesesDelRango("2026-07-15", "2026-09-02"), ["2026-07","2026-08","2026-09"]);
+  assert.deepEqual(S.mesesDelRango("2026-07-01", "2026-07-31"), ["2026-07"]);
+  assert.deepEqual(S.mesesDelRango("2025-12-20", "2026-01-05"), ["2025-12","2026-01"]);
+});
+t("un rango al reves o vacio no inventa meses", () => {
+  assert.deepEqual(S.mesesDelRango("2026-09-01", "2026-07-01"), []);
+  assert.deepEqual(S.mesesDelRango("", "2026-07-01"), []);
+  assert.deepEqual(S.mesesDelRango("mal", "peor"), []);
+});
+t("un rango largo no se desborda", () => {
+  assert.equal(S.mesesDelRango("2020-01-01", "2026-12-31").length, 84);
+});
+
+t("unir deduplica: lo que ya esta en el documento NO se suma otra vez", () => {
+  // El caso real de la fase 2: el archivo de julio existe Y julio sigue en el documento.
+  const doc = [{ id:"g1", importe:100, _tipo:"gasto" }, { id:"g2", importe:200, _tipo:"gasto" }];
+  const arch = [{ id:"g1", importe:100, _tipo:"gasto" }, { id:"g2", importe:200, _tipo:"gasto" }];
+  const u = S.unirConArchivo(doc, arch);
+  assert.equal(u.length, 2, "sumar dos veces el mismo gasto es duplicar dinero");
+  close(u.reduce((s,x)=>s+x.importe,0), 300, 0.01);
+});
+t("y trae lo que YA no esta en el documento", () => {
+  // Como quedara tras la fase 3: el documento ya no tiene julio, el archivo si.
+  const doc = [{ id:"g3", importe:300, _tipo:"gasto" }];
+  const arch = [{ id:"g1", importe:100, _tipo:"gasto" }, { id:"g2", importe:200, _tipo:"gasto" }];
+  const u = S.unirConArchivo(doc, arch);
+  assert.deepEqual(u.map(x=>x.id).sort(), ["g1","g2","g3"]);
+});
+t("ante la duda gana el documento, que es la copia viva", () => {
+  // Si un gasto se corrigio despues de archivarlo, el bueno es el del documento.
+  const doc = [{ id:"g1", importe:150, _tipo:"gasto", proveedor:"CORREGIDO" }];
+  const arch = [{ id:"g1", importe:100, _tipo:"gasto", proveedor:"VIEJO" }];
+  const u = S.unirConArchivo(doc, arch);
+  assert.equal(u.length, 1);
+  close(u[0].importe, 150, 0.01);
+  assert.equal(u[0].proveedor, "CORREGIDO");
+});
+t("marca de donde vino cada uno", () => {
+  const u = S.unirConArchivo([{ id:"a", importe:1 }], [{ id:"b", importe:2 }]);
+  assert.equal(u.find(x=>x.id==="a")._archivado, undefined, "lo del documento no es archivado");
+  assert.equal(u.find(x=>x.id==="b")._archivado, true, "y hay que poder decirlo en pantalla");
+});
+t("unir no truena con listas vacias", () => {
+  assert.deepEqual(S.unirConArchivo(null, null), []);
+  assert.deepEqual(S.unirConArchivo([{ id:"a" }], null).map(x=>x.id), ["a"]);
+  assert.deepEqual(S.unirConArchivo(null, [{ id:"b" }]).map(x=>x.id), ["b"]);
+});
+t("un movimiento sin id no se pierde en la union", () => {
+  // Deduplicar por id no puede desaparecer lo que no tiene id — ni del documento NI del archivo.
+  assert.equal(S.unirConArchivo([{ importe:1 }, { importe:2 }], []).length, 2);
+  const u = S.unirConArchivo([{ id:"a", importe:1 }], [{ importe:9 }, { importe:8 }]);
+  assert.equal(u.length, 3, "un movimiento viejo sin id se quedaria fuera del balance para siempre");
+  close(u.reduce((s,x)=>s+x.importe,0), 18, 0.01);
+});
+
+t("un archivo bien formado se acepta", () => {
+  assert.equal(S.archivoValido({ version:1, mes:"2026-07", movimientos:[] }).ok, true);
+});
+t("uno de otra version NO se lee a ciegas", () => {
+  // Leer un formato que no se conoce e interpretarlo igual es como llego el error de la v4 de
+  // Manejo de Cortes: mejor decir que no se entiende.
+  const r = S.archivoValido({ version:99, mes:"2026-07", movimientos:[] });
+  assert.equal(r.ok, false);
+  assert.ok(/versi/i.test(r.motivo||""));
+});
+t("uno sin movimientos o ilegible tampoco", () => {
+  assert.equal(S.archivoValido(null).ok, false);
+  assert.equal(S.archivoValido({ version:1, mes:"2026-07" }).ok, false);
+  assert.equal(S.archivoValido("no soy json").ok, false);
+});
+
+t("la cobertura dice que meses del rango estan archivados y cuales faltan", () => {
+  const c = S.coberturaArchivo("2026-07-01", "2026-09-30", ["2026-07","2026-08"], { "2026-07":true });
+  assert.deepEqual(c.meses, ["2026-07","2026-08","2026-09"]);
+  assert.deepEqual(c.archivados, ["2026-07","2026-08"]);
+  assert.deepEqual(c.cargados, ["2026-07"]);
+  assert.deepEqual(c.porCargar, ["2026-08"], "hay que poder decir que falta traer de la nube");
+});
+t("sin archivos, la cobertura no alarma", () => {
+  const c = S.coberturaArchivo("2026-09-01", "2026-09-30", [], {});
+  assert.deepEqual(c.archivados, []);
+  assert.deepEqual(c.porCargar, []);
+});
+
+t("leer un archivo valida antes de usarlo", () => {
+  const i = script.indexOf("async function leerArchivoMes(");
+  assert.ok(i > -1, "falta la funcion que lee de Storage");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/archivoValido\(/.test(b), "un archivo de formato desconocido no se interpreta a ciegas");
+  assert.ok(/alt=media/.test(b));
+});
+
+t("revisar compara contra el documento, y dice cuando ya no hay con que", () => {
+  // Tras la fase 3 el mes ya no esta en el documento: el archivo es la unica copia. Inventar una
+  // comparacion ahi seria reportar un OK que no significa nada.
+  const i = script.indexOf("async function revisarArchivoMes(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/soloArchivo/.test(b), "hay que distinguir 'cuadra' de 'no hay contra que comparar'");
+  assert.ok(/verificarArchivo\(/.test(b));
+  assert.ok(/leerArchivoMes\(mes, true\)/.test(b), "revisar tiene que releer, no usar la cache");
+});
+t("la fase 2 no altera el documento", () => {
+  // Leer no escribe. Si estas funciones tocaran `state`, consultar un mes archivado podria
+  // cambiar la contabilidad.
+  ["async function leerArchivoMes(", "async function listarArchivos(", "async function verArchivoMes("].forEach(firma=>{
+    const i = script.indexOf(firma);
+    assert.ok(i > -1, "falta "+firma);
+    let j = script.indexOf("{", i), d = 0, b = "";
+    for (let k = j; k < script.length; k++) {
+      if (script[k] === "{") d++;
+      else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+    }
+    const vivo = b.replace(/^\s*\/\/.*$/gm, "");
+    assert.ok(!/\bsave\(\)/.test(vivo) && !/state\s*=/.test(vivo) && !/\.splice\(/.test(vivo),
+      firma+" no puede modificar el estado");
+  });
+});
+t("el panel de la nube existe y se puede consultar", () => {
+  assert.ok(html.includes('id="archivoNubeBody"'));
+  assert.ok(html.includes('id="archivoDetalle"'));
+  assert.ok(/verArchivoMes\(/.test(script), "archivar sin poder consultar es perder de vista");
 });
 
 console.log("\n== archivar un mes: fase 1, escribir sin borrar ==");

@@ -700,6 +700,16 @@ body.snav-min .side-theme span { display:none; }
     </div>
     <div id="archivoBody"></div>
     <div class="status" id="archivoStatus" style="margin-top:8px"></div>
+    <div style="margin-top:14px;border-top:1px dashed var(--border);padding-top:12px">
+      <div style="font-weight:600;font-size:12.5px;margin-bottom:4px">📂 Meses ya archivados en la nube</div>
+      <div style="font-size:12px;color:var(--txt2);margin-bottom:8px;line-height:1.5">
+        Lo archivado se sigue consultando: se trae de la nube cuando se pide. <strong>Revisar</strong>
+        vuelve a compararlo contra el documento — entre que se escribió y hoy alguien pudo corregir un gasto.
+      </div>
+      <button class="btn btn-light" style="padding:4px 12px;font-size:12px" onclick="renderArchivosEnNube(true)">🔄 Buscar archivos</button>
+      <div id="archivoNubeBody" style="margin-top:10px"></div>
+      <div id="archivoDetalle" style="margin-top:10px"></div>
+    </div>
 
     <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
     <h4 style="margin:0 0 6px;color:var(--vd)">🛟 Respaldos</h4>
@@ -2111,7 +2121,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-30-egresos-v12";
+const APP_BUILD = "2026-09-30-egresos-v13";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -3284,9 +3294,113 @@ function mesesArchivables(st, hoyISO, ventanaMeses){
   return [...meses].sort();
 }
 
+// ── FASE 2: leer lo archivado ─────────────────────────────────────────────
+// El peligro propio de esta fase: mientras la fase 3 no quite nada, cada movimiento archivado
+// SIGUE estando en el documento. Unir las dos fuentes sin deduplicar duplicaría el dinero, y un
+// balance que suma dos veces es peor que uno que no llega tan atrás.
+
+// Los meses que toca un rango, de punta a punta.
+function mesesDelRango(ini, fin){
+  const a = String(ini||""), b = String(fin||"");
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(a) || !/^\d{4}-\d{2}-\d{2}$/.test(b)) return [];
+  // Un rango al revés no necesita guardia propia: la condición del bucle ya es falsa de entrada.
+  const out = [];
+  let y = parseInt(a.slice(0,4),10), m = parseInt(a.slice(5,7),10);
+  const yf = parseInt(b.slice(0,4),10), mf = parseInt(b.slice(5,7),10);
+  while(y < yf || (y === yf && m <= mf)){
+    out.push(`${y}-${String(m).padStart(2,"0")}`);
+    m++; if(m > 12){ m = 1; y++; }
+  }
+  return out;
+}
+
+// Une los movimientos del documento con los de un archivo, SIN duplicar.
+// Gana el documento: es la copia viva, y si un gasto se corrigió después de archivarlo, el bueno
+// es el de ahí. Lo que viene del archivo queda marcado para poder decirlo en pantalla.
+// Un movimiento sin id no se puede deduplicar, pero tampoco se pierde: deduplicar no puede
+// desaparecer nada.
+function unirConArchivo(movsDoc, movsArchivo){
+  const doc = (movsDoc||[]).filter(Boolean);
+  const vistos = new Set(doc.map(x=>x.id).filter(id=>id!=null).map(String));
+  const extra = (movsArchivo||[]).filter(Boolean)
+    .filter(x=> x.id == null || !vistos.has(String(x.id)))
+    .map(x=>({ ...x, _archivado:true }));
+  return doc.concat(extra);
+}
+
+// ¿Este archivo se puede leer? Interpretar a ciegas un formato desconocido es justo como entró
+// el problema de la v4 de Manejo de Cortes: mejor decir que no se entiende.
+function archivoValido(a){
+  if(!a || typeof a !== "object" || Array.isArray(a)) return { ok:false, motivo:"El archivo no es un objeto JSON." };
+  if(a.version !== ARCHIVO_VERSION) return { ok:false, motivo:`Versión de archivo no reconocida (${a.version}). Esta app lee la ${ARCHIVO_VERSION}.` };
+  if(!Array.isArray(a.movimientos)) return { ok:false, motivo:"El archivo no trae la lista de movimientos." };
+  return { ok:true, motivo:"" };
+}
+
+// Qué meses del rango están archivados y cuáles de esos ya se trajeron de la nube.
+function coberturaArchivo(ini, fin, mesesEnStorage, cargados){
+  const meses = mesesDelRango(ini, fin);
+  const enStorage = new Set(mesesEnStorage||[]);
+  const ya = cargados || {};
+  const archivados = meses.filter(m=>enStorage.has(m));
+  const cargadosOk = archivados.filter(m=>!!ya[m]);
+  return { meses, archivados, cargados:cargadosOk, porCargar: archivados.filter(m=>!ya[m]) };
+}
+
 function _urlArchivo(mes){
   const path = `${ARCHIVO_PREFIJO}/${mes}.json`;
   return `https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o/${encodeURIComponent(path)}`;
+}
+
+// Lo que ya se trajo de la nube en esta sesión. No se guarda en el estado: es caché de lectura.
+const _archivoCache = {};
+let _archivosEnStorage = null;   // lista de meses con archivo, o null si no se ha consultado
+
+// Lee un mes archivado de Storage. Valida el formato ANTES de usarlo.
+async function leerArchivoMes(mes, forzar){
+  const m = String(mes||"");
+  if(!m) return { ok:false, motivo:"Falta el mes." };
+  if(!forzar && _archivoCache[m]) return _archivoCache[m];
+  let cruda = null;
+  try{
+    const r = await fetchStorage(_urlArchivo(m)+"?alt=media");
+    if(r.status === 404) return { ok:false, motivo:`No hay archivo de ${m} en la nube.` };
+    if(!r.ok) return { ok:false, motivo:`Storage respondió ${r.status}.` };
+    cruda = await r.json();
+  }catch(e){ return { ok:false, motivo:`No se pudo leer: ${e.message||e}` }; }
+  const v = archivoValido(cruda);
+  if(!v.ok) return { ok:false, motivo:v.motivo };
+  const res = { ok:true, motivo:"", archivo:cruda, movimientos:cruda.movimientos };
+  _archivoCache[m] = res;
+  return res;
+}
+
+// Qué meses tienen archivo en Storage. Se consulta una vez por sesión salvo que se fuerce.
+async function listarArchivos(forzar){
+  if(_archivosEnStorage && !forzar) return _archivosEnStorage;
+  try{
+    const r = await fetchStorage(
+      `https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o?prefix=${encodeURIComponent(ARCHIVO_PREFIJO+"/")}`);
+    if(!r.ok) throw new Error(`Storage respondió ${r.status}`);
+    const d = await r.json();
+    _archivosEnStorage = (d.items||[])
+      .map(x=>String(x.name||"").replace(ARCHIVO_PREFIJO+"/","").replace(/\.json$/,""))
+      .filter(x=>/^\d{4}-\d{2}$/.test(x)).sort();
+  }catch(e){ console.warn("listarArchivos:", e); _archivosEnStorage = []; }
+  return _archivosEnStorage;
+}
+
+// Vuelve a comprobar un archivo YA escrito contra el documento, en cualquier momento.
+// No es lo mismo que verificar al escribir: entre una cosa y la otra alguien pudo corregir un
+// gasto. Antes de que la fase 3 quite nada, esto tiene que seguir cuadrando.
+async function revisarArchivoMes(mes){
+  const r = await leerArchivoMes(mes, true);
+  if(!r.ok) return { ok:false, problemas:[r.motivo] };
+  const enDoc = movimientosDelMes(state, mes);
+  // Si el documento ya no tiene ese mes (tras la fase 3), no hay contra qué comparar: el
+  // archivo es la única copia y decirlo es más honesto que inventar una comparación.
+  if(!enDoc.length) return { ok:true, problemas:[], soloArchivo:true, n:r.movimientos.length };
+  return { ...verificarArchivo(r.archivo, enDoc), n:r.movimientos.length };
 }
 
 // FASE 1 completa para un mes: escribe, vuelve a leer y compara. No toca el documento.
@@ -3367,6 +3481,61 @@ async function renderArchivoMeses(){
         : `<button class="btn btn-light" style="padding:3px 10px;font-size:11px" onclick="archivarMes('${escAttrJs(m)}')">📦 Escribir y verificar</button>`}</td>
     </tr>`).join("")}
   </tbody></table></div>`;
+}
+
+async function renderArchivosEnNube(forzar){
+  const body = document.getElementById("archivoNubeBody");
+  if(!body) return;
+  body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Buscando…</div>`;
+  const meses = await listarArchivos(forzar);
+  if(!meses.length){ body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Todavía no hay ningún mes archivado.</div>`; return; }
+  body.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>Mes</th><th>En el documento</th><th>Acciones</th></tr></thead><tbody>
+    ${meses.map(m=>{
+      const n = movimientosDelMes(state, m).length;
+      return `<tr><td><strong>${esc(m)}</strong></td>
+        <td style="font-size:11.5px;color:var(--txt2)">${n ? `sí, ${n} movimiento(s)` : "ya no está"}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-light" style="padding:3px 9px;font-size:11px" onclick="verArchivoMes('${escAttrJs(m)}')">👁 Consultar</button>
+          <button class="btn btn-light" style="padding:3px 9px;font-size:11px;margin-left:4px" onclick="revisarYMostrarArchivo('${escAttrJs(m)}')">✅ Revisar</button>
+        </td></tr>`;
+    }).join("")}
+  </tbody></table></div>`;
+}
+
+// Consultar un mes archivado: es la promesa de esta fase — que archivar no sea perder de vista.
+async function verArchivoMes(mes){
+  const el = document.getElementById("archivoDetalle");
+  if(!el) return;
+  el.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Trayendo ${esc(mes)} de la nube…</div>`;
+  const r = await leerArchivoMes(mes);
+  if(!r.ok){ el.innerHTML = `<div style="font-size:12px;color:var(--red)">❌ ${esc(r.motivo)}</div>`; return; }
+  const res = resumenArchivo(r.movimientos);
+  const filas = r.movimientos.slice().sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
+  el.innerHTML = `<div style="border:1px solid var(--border);border-radius:9px;padding:11px 13px">
+    <div style="font-weight:600;margin-bottom:6px">📂 ${esc(mes)} — ${res.n} movimiento(s)</div>
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:8px">
+      ${Object.keys(res.porTipo).map(k=>`${res.porTipo[k].n} ${esc(k)}(s) <strong>${fmt(res.porTipo[k].total)}</strong>`).join(" · ")}
+      <div style="margin-top:3px">Escrito por ${esc(r.archivo.por||"—")} el ${fmtDate(String(r.archivo.ts||"").slice(0,10))||"—"}.</div>
+    </div>
+    <div class="tbl-wrap" style="max-height:320px;overflow:auto"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th style="text-align:right">Importe</th></tr></thead><tbody>
+      ${filas.map(x=>`<tr><td>${fmtDate(x.fecha)||"—"}</td><td style="font-size:11.5px;color:var(--txt2)">${esc(x._tipo||"—")}</td>
+        <td>${esc(x.proveedor||x.motivo||x.label||x.concepto||"—")}</td>
+        <td class="amount-cell">${fmt(_montoMovimiento(x, x._tipo))}</td></tr>`).join("")}
+    </tbody></table></div></div>`;
+}
+
+async function revisarYMostrarArchivo(mes){
+  const el = document.getElementById("archivoDetalle");
+  if(!el) return;
+  el.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Revisando ${esc(mes)}…</div>`;
+  const r = await revisarArchivoMes(mes);
+  if(r.soloArchivo){
+    el.innerHTML = `<div style="font-size:12px;color:var(--txt2)">ℹ️ ${esc(mes)}: ${r.n} movimiento(s) en la nube. Ese mes ya no está en el documento, así que no hay contra qué compararlo — el archivo es la única copia.</div>`;
+    return;
+  }
+  el.innerHTML = r.ok
+    ? `<div style="font-size:12px;color:var(--vm)">✅ ${esc(mes)} cuadra con el documento (${r.n} movimiento(s)).</div>`
+    : `<div style="font-size:12px;color:var(--red)">❌ ${esc(mes)} NO cuadra:<br>· ${r.problemas.map(esc).join("<br>· ")}</div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -12404,6 +12573,7 @@ async function abrirAdminModal() {
   renderRespaldos();
   pintarMedidorEstado();
   try{ renderArchivoMeses(); }catch(_){}
+  try{ renderArchivosEnNube(); }catch(_){}
 }
 
 // Traduce la medición a algo accionable: no "812 KB" sino "te caben ~900 gastos más".
