@@ -1556,6 +1556,14 @@ t("sin CFDI del periodo, la tarjeta se calla", () => {
   }
   assert.ok(/utiles\.length *=== *0/.test(b), "hace falta la guardia de 'no hay con que comparar'");
 });
+t("el badge de version no repite la v", () => {
+  // APP_BUILD ya termina en "-v8". Anteponerle "v " lo dejaba como "v 2026-09-29-egresos-v8".
+  const i = script.indexOf('getElementById("buildBadge")');
+  assert.ok(i > -1);
+  const b = script.slice(i, i + 160);
+  assert.ok(!/"v "\s*\+\s*APP_BUILD/.test(b), "la v queda duplicada");
+  assert.ok(/textContent\s*=\s*APP_BUILD/.test(b), "y la version tiene que seguir pintandose");
+});
 t("las dos tarjetas existen en la pagina", () => {
   assert.ok(html.includes('id="satSinRespaldoCard"'));
   assert.ok(html.includes('id="satPropiasCard"'));
