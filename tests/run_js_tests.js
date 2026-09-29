@@ -105,7 +105,7 @@ const FUNCS = [
   "_b64ABytes", "_liberarAdjunto", "_gmailHuella", "_encolarMiniatura",
   "fbAuthHeader", "rfcPropio", "guardarRfcPropio",
   "claseGastoSinRespaldo", "gastosSinRespaldo", "resumenSinRespaldo", "gastosConImporteDeFacturaPropia",
-  "motivoNoEsGasto", "fechaBalanceCfdi", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
+  "motivoNoEsGasto", "deducirRfcPropio", "rfcPropioEfectivo", "fechaBalanceCfdi", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
   "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance", "facturasFueraDelPeriodo",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
@@ -1092,6 +1092,172 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== el RFC deducido: la defensa no puede depender de que este configurado ==");
+// El bloqueo de "esto es una venta, no un gasto" compara contra el RFC configurado. Si esta
+// vacio no bloquea NADA — y "el RFC estaba vacio" es exactamente la circunstancia que produjo el
+// error de $679,829.60: sin el, la factura 1426 que CICSA emitio aparecia en los faltantes como
+// "te falta capturar", con su boton de Capturar al lado.
+// La app ya sabe deducir el RFC sola. Aqui se separa esa deduccion de su efecto secundario
+// (autodetectarRfcPropio lo GUARDA) para poder usarla solo como deteccion.
+const _MIO = "CIC190426SD4";
+const _rc = (rfc, receptor) => ({ rfc, rfcReceptor:receptor, total:100, fecha:"2026-08-10", tipo:"I" });
+
+t("deduce el RFC que aparece en casi todos", () => {
+  // El propio sale como receptor en lo que te facturan y como emisor en lo que vendes: es el
+  // unico que esta en los dos papeles.
+  const cfdis = [
+    _rc("PROV1", _MIO), _rc("PROV2", _MIO), _rc("PROV3", _MIO),
+    _rc(_MIO, "CLIENTE1"), _rc("PROV4", _MIO),
+  ];
+  assert.equal(S.deducirRfcPropio(cfdis), _MIO);
+});
+t("deducir NO guarda nada", () => {
+  // Es la diferencia con autodetectarRfcPropio. Deducir sirve para ADVERTIR, no para configurar
+  // la empresa en silencio a espaldas de quien opera.
+  S.localStorage.removeItem("cicsa_rfc_propio");
+  S.state.rfcPropio = undefined;
+  S.deducirRfcPropio([_rc("P1",_MIO), _rc("P2",_MIO), _rc("P3",_MIO), _rc(_MIO,"C1")]);
+  assert.equal(S.rfcPropio(), "", "deducir no puede tener efectos secundarios");
+});
+t("un proveedor que factura mucho NO se confunde con la empresa", () => {
+  // El caso que encontro una prueba existente al romperse: tres CFDI del mismo proveedor y su
+  // RFC sale en el 100%. Contar solo la mayoria lo deducia como propio, con lo que sus facturas
+  // dejaban de pedirse en el cruce y el gasto real se escondia. El RFC propio es el unico que
+  // esta en LOS DOS papeles: receptor en lo que te facturan, emisor en lo que vendes.
+  const soloEmisor = [
+    { rfc:"SPA130228JW5", fecha:"2026-08-25", total:2000.04, tipo:"I" },
+    { rfc:"SPA130228JW5", fecha:"2026-08-26", total:2000.04, tipo:"I" },
+    { rfc:"SPA130228JW5", fecha:"2026-08-28", total:2000.04, tipo:"I" },
+  ];
+  assert.equal(S.deducirRfcPropio(soloEmisor), "", "esconder gastos es peor que no deducir");
+});
+t("un cliente grande tampoco", () => {
+  // Solo sale como receptor de lo que TU le facturas.
+  const soloReceptor = [
+    { rfc:"MIO010101AAA", rfcReceptor:"BAL010101AAA", fecha:"2026-08-25", total:100, tipo:"I" },
+    { rfc:"MIO010101AAA", rfcReceptor:"BAL010101AAA", fecha:"2026-08-26", total:100, tipo:"I" },
+    { rfc:"MIO010101AAA", rfcReceptor:"BAL010101AAA", fecha:"2026-08-27", total:100, tipo:"I" },
+  ];
+  assert.equal(S.deducirRfcPropio(soloReceptor), "", "MIO sale en los dos? no: solo como emisor");
+});
+t("quien solo sale como RECEPTOR tampoco es la empresa", () => {
+  // Cuatro facturas de cuatro emisores distintos, todas al mismo receptor. Ese receptor sale en
+  // el 100% pero nunca emite: no hay forma de saber que sean SUS libros.
+  const soloReceptor = [
+    { rfc:"P1", rfcReceptor:"BAL010101AAA", fecha:"2026-08-01", total:10, tipo:"I" },
+    { rfc:"P2", rfcReceptor:"BAL010101AAA", fecha:"2026-08-02", total:10, tipo:"I" },
+    { rfc:"P3", rfcReceptor:"BAL010101AAA", fecha:"2026-08-03", total:10, tipo:"I" },
+    { rfc:"P4", rfcReceptor:"BAL010101AAA", fecha:"2026-08-04", total:10, tipo:"I" },
+  ];
+  assert.equal(S.deducirRfcPropio(soloReceptor), "", "hace falta estar en LOS DOS papeles");
+});
+t("con dos comprobantes no alcanza ni cumpliendo los dos papeles", () => {
+  // MIO sale de emisor una vez y de receptor otra: cumple la regla de los dos papeles y aun asi
+  // dos documentos no son evidencia de nada.
+  const dos = [
+    { rfc:"P1", rfcReceptor:"MIO010101AAA", fecha:"2026-08-01", total:10, tipo:"I" },
+    { rfc:"MIO010101AAA", rfcReceptor:"C1", fecha:"2026-08-02", total:10, tipo:"I" },
+  ];
+  assert.equal(S.deducirRfcPropio(dos), "");
+});
+t("sin mayoria no se deduce, aunque cumpla los dos papeles", () => {
+  // MIO esta en los dos papeles pero solo en 2 de 5 comprobantes: 40%. Deducir con eso seria
+  // afirmar de quien son los libros a partir de una minoria.
+  const minoria = [
+    { rfc:"P1", rfcReceptor:"MIO010101AAA", fecha:"2026-08-01", total:10, tipo:"I" },
+    { rfc:"MIO010101AAA", rfcReceptor:"C1", fecha:"2026-08-02", total:10, tipo:"I" },
+    { rfc:"A1", rfcReceptor:"A2", fecha:"2026-08-03", total:10, tipo:"I" },
+    { rfc:"B1", rfcReceptor:"B2", fecha:"2026-08-04", total:10, tipo:"I" },
+    { rfc:"D1", rfcReceptor:"D2", fecha:"2026-08-05", total:10, tipo:"I" },
+  ];
+  assert.equal(S.deducirRfcPropio(minoria), "");
+});
+t("sin mayoria clara no se inventa nada", () => {
+  const cfdis = [_rc("A","B"), _rc("C","D"), _rc("E","F"), _rc("G","H")];
+  assert.equal(S.deducirRfcPropio(cfdis), "");
+});
+t("con muy pocos comprobantes tampoco", () => {
+  assert.equal(S.deducirRfcPropio([_rc("P1",_MIO), _rc("P2",_MIO)]), "");
+});
+t("no truena con nada", () => {
+  assert.equal(S.deducirRfcPropio(null), "");
+  assert.equal(S.deducirRfcPropio([]), "");
+  assert.equal(S.deducirRfcPropio([null, {}]), "");
+});
+
+t("el configurado manda sobre el deducido", () => {
+  const r = S.rfcPropioEfectivo([_rc("P1","OTRO"), _rc("P2","OTRO"), _rc("P3","OTRO"), _rc("OTRO","C")], _MIO);
+  assert.equal(r.rfc, _MIO);
+  assert.equal(r.origen, "configurado");
+});
+t("sin configurar, se usa el deducido y se dice que lo es", () => {
+  const cfdis = [_rc("P1",_MIO), _rc("P2",_MIO), _rc("P3",_MIO), _rc(_MIO,"C1")];
+  const r = S.rfcPropioEfectivo(cfdis, "");
+  assert.equal(r.rfc, _MIO);
+  assert.equal(r.origen, "deducido", "hay que poder decirlo en pantalla: se dedujo, no se configuro");
+});
+t("si no hay ni uno ni otro, queda vacio", () => {
+  const r = S.rfcPropioEfectivo([_rc("A","B")], "");
+  assert.equal(r.rfc, ""); assert.equal(r.origen, "");
+});
+
+t("una factura propia se excluye del cruce AUNQUE no este configurado el RFC", () => {
+  // Es el caso exacto del 28 de agosto. Sin esto, la 1426 volvia a salir en los faltantes con su
+  // boton de Capturar, que es por donde entro el error.
+  S.state.weeks = [{ id:"1", gastos:[] }];
+  const cfdis = [
+    { uuid:"U1", rfc:_MIO, proveedor:"COMEDORES INDUSTRIALES DE CUAUHTEMOC", rfcReceptor:"BAL010101AAA",
+      total:679829.60, fecha:"2026-08-28", tipo:"I", folioComp:"1426" },
+    { uuid:"U2", rfc:"PROV1", rfcReceptor:_MIO, total:100, fecha:"2026-08-10", tipo:"I" },
+    { uuid:"U3", rfc:"PROV2", rfcReceptor:_MIO, total:200, fecha:"2026-08-11", tipo:"I" },
+    { uuid:"U4", rfc:"PROV3", rfcReceptor:_MIO, total:300, fecha:"2026-08-12", tipo:"I" },
+  ];
+  const r = S.conciliarSAT(cfdis, "", "", "");    // <- RFC propio VACIO, como aquel dia
+  assert.equal(r.omitidos.PROPIO, 1, "tu propia venta no es un gasto por capturar");
+  assert.ok(!r.faltantes.some(c=>c.uuid==="U1"), "no puede ofrecerse Capturar sobre una venta tuya");
+  assert.equal(r.faltantes.length, 3, "las de proveedor si siguen pidiendose");
+});
+t("con el RFC configurado se comporta igual que siempre", () => {
+  S.state.weeks = [{ id:"1", gastos:[] }];
+  const cfdis = [
+    { uuid:"U1", rfc:_MIO, rfcReceptor:"BAL010101AAA", total:679829.60, fecha:"2026-08-28", tipo:"I" },
+    { uuid:"U2", rfc:"PROV1", rfcReceptor:_MIO, total:100, fecha:"2026-08-10", tipo:"I" },
+  ];
+  const r = S.conciliarSAT(cfdis, "", "", _MIO);
+  assert.equal(r.omitidos.PROPIO, 1);
+  assert.equal(r.faltantes.length, 1);
+});
+t("el cruce dice si el RFC lo dedujo el solo", () => {
+  S.state.weeks = [{ id:"1", gastos:[] }];
+  const cfdis = [_rc("P1",_MIO), _rc("P2",_MIO), _rc("P3",_MIO), _rc(_MIO,"C1")];
+  const r = S.conciliarSAT(cfdis, "", "", "");
+  assert.equal(r.rfcOrigen, "deducido", "usar un RFC deducido sin avisarlo es actuar a espaldas del usuario");
+  assert.equal(r.rfcUsado, _MIO);
+  // Y tiene que llegar a lo que pinta la pantalla, no quedarse en el objeto.
+  assert.equal(r.omitidos._rfcDeducido, _MIO, "sin esto el aviso no se pinta nunca");
+});
+t("con el RFC configurado NO se dice que se dedujo", () => {
+  S.state.weeks = [{ id:"1", gastos:[] }];
+  const r = S.conciliarSAT([_rc("P1",_MIO), _rc("P2",_MIO), _rc("P3",_MIO), _rc(_MIO,"C1")], "", "", _MIO);
+  assert.equal(r.rfcOrigen, "configurado");
+  assert.equal(r.omitidos._rfcDeducido, undefined, "avisar de una deduccion que no hubo es ruido");
+});
+t("el guardado tambien usa el RFC deducido", () => {
+  const i = script.indexOf("function guardarGasto(");
+  const b = script.slice(i, i + 9000);
+  assert.ok(/rfcPropioEfectivo\(/.test(b),
+    "si el bloqueo depende de que alguien haya tecleado el RFC, no protege el caso que fallo");
+});
+t("la pantalla avisa cuando el RFC se dedujo", () => {
+  const i = script.indexOf("function pintarCfdisOmitidos(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/dedujo|_rfcDeducido/.test(b), "hay que decir que se dedujo y pedir que lo confirmen");
 });
 
 console.log("\n== el cierre cada 4 semanas y el timbrado no van al mismo paso ==");
