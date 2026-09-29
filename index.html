@@ -2111,7 +2111,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-29-egresos-v11";
+const APP_BUILD = "2026-09-30-egresos-v12";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -12410,7 +12410,14 @@ async function abrirAdminModal() {
 // Cuánto tiempo, no solo cuántos movimientos. "Caben 1,214 más" suena holgado; "unas 16 semanas
 // al ritmo de las últimas" es lo que deja decidir si hay que actuar. El ritmo se saca de los
 // datos reales de la empresa, no de una constante.
-function ritmoSemanal(st){
+// Se mide el ritmo RECIENTE, no el promedio de toda la historia.
+// Promediar todo subestima cuando la captura ha ido a más: en esta empresa el promedio de vida
+// daba 45 movimientos por semana y el ritmo real de las últimas era 74, así que el medidor
+// prometía 27 semanas de margen cuando quedaban 16. Para un aviso de capacidad, equivocarse por
+// optimista es el lado malo del error: alarga el plazo justo cuando hay que empezar a actuar.
+// Si hay menos historia que la ventana, se usa toda la que haya.
+const RITMO_VENTANA_SEMANAS = 8;
+function ritmoSemanal(st, ventanaSemanas){
   const weeks = ((st||{}).weeks)||[];
   const fechas = [];
   weeks.forEach(w=>{
@@ -12420,9 +12427,14 @@ function ritmoSemanal(st){
   fechas.sort();
   const d0 = new Date(fechas[0]+"T12:00:00").getTime();
   const d1 = new Date(fechas[fechas.length-1]+"T12:00:00").getTime();
-  const semanas = (d1-d0)/(7*86400000);
-  if(!(semanas > 1)) return 0;
-  return fechas.length/semanas;
+  const span = (d1-d0)/(7*86400000);
+  if(!(span > 1)) return 0;
+  const vent = (ventanaSemanas == null) ? RITMO_VENTANA_SEMANAS : ventanaSemanas;
+  const usar = Math.min(vent, span);
+  if(!(usar >= 1)) return 0;
+  const desde = d1 - usar*7*86400000;
+  const n = fechas.filter(fx => new Date(fx+"T12:00:00").getTime() >= desde).length;
+  return n/usar;
 }
 function semanasRestantes(movimientosQueCaben, porSemana){
   if(!(porSemana > 0) || movimientosQueCaben == null) return null;

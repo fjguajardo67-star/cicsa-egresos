@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
+const CONSTS = ["RITMO_VENTANA_SEMANAS", "ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
 const CONSTS_ARR = ["_TIPOS_MOV", "COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK", "MARCA_PERIODO"];
 
@@ -1329,6 +1329,32 @@ const _semanas = (desde, n, dias) => {
   return out;
 };
 
+t("el ritmo mide lo RECIENTE, no el promedio de toda la historia", () => {
+  // Es el error que cometio el medidor en produccion: promedio de vida 45/semana, ritmo real de
+  // las ultimas semanas 74, y por eso prometia 27 semanas de margen cuando quedaban 16.
+  // 20 semanas flojas (2 por semana) y luego 8 intensas (20 por semana).
+  const flojo = _semanas("2026-01-05", 40, 140);
+  const fuerte = _semanas("2026-05-25", 160, 56);
+  const st = { weeks:[{ id:"1", gastos:flojo.concat(fuerte), cortes:[], retiros:[] }] };
+  const r = S.ritmoSemanal(st);
+  assert.ok(r > 15, "esperaba ~20/semana del tramo reciente, salio "+r.toFixed(1));
+  // El promedio de toda la historia seria ~10: la mitad, y el doble de plazo prometido.
+  const promedio = S.ritmoSemanal(st, 999);
+  assert.ok(promedio < r, "promediar todo subestima cuando la captura va a mas");
+});
+t("una ventana de cero no devuelve Infinity", () => {
+  // Dividir entre cero daria un "plazo" infinito, que en un aviso de capacidad se lee como
+  // "no te preocupes nunca".
+  const st = { weeks:[{ id:"1", gastos:_semanas("2026-07-01", 70, 70), cortes:[], retiros:[] }] };
+  assert.equal(S.ritmoSemanal(st, 0), 0);
+  assert.ok(Number.isFinite(S.ritmoSemanal(st, 0)));
+});
+t("con menos historia que la ventana se usa toda la que hay", () => {
+  // 70 movimientos en 70 dias = 10 semanas, menos que la ventana de 8... no: mas. Se usan 8.
+  const st = { weeks:[{ id:"1", gastos:_semanas("2026-07-01", 35, 21), cortes:[], retiros:[] }] };
+  const r = S.ritmoSemanal(st);
+  assert.ok(r > 9 && r < 14, "35 movimientos en 3 semanas son ~12/semana, salio "+r.toFixed(1));
+});
 t("el ritmo sale de los datos reales, no de una constante", () => {
   // 70 movimientos repartidos en 70 dias = 10 semanas -> 7 por semana.
   const st = { weeks:[{ id:"1", gastos:_semanas("2026-07-01", 70, 70), cortes:[], retiros:[] }] };
