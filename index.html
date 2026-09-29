@@ -1453,6 +1453,17 @@ body.snav-min .side-theme span { display:none; }
   </div>
   <div class="summary-grid" id="satSummary" style="display:none;margin-bottom:16px"></div>
   <div id="satOmitidos" style="display:none;background:#F0F7F0;border:1.5px solid var(--vm);border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:12px;color:var(--txt2)"></div>
+  <div class="card" id="satPropiasCard" style="display:none;margin-bottom:16px;border:2px solid var(--red)">
+    <div class="card-title" style="color:var(--red)">🚨 Gastos con el importe de una factura TUYA<span id="satPropiasCount" class="dup-badge" style="background:#FFEBEE;color:var(--red);margin-left:8px"></span></div>
+    <p style="font-size:12.5px;color:var(--txt2);margin:0 0 12px">El importe de estos gastos es idéntico al total de un comprobante que <strong>emitió tu empresa</strong>, o sea un <strong>ingreso</strong>. Un número así no llegó solo: salió de esa factura. Revisa cada uno contra su documento — si el gasto es real, su importe tendría que ser otro. <em>Coincidir de importe no es prueba por sí sola; por eso se muestra de cuál factura salió.</em></p>
+    <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Proveedor del gasto</th><th>Folio</th><th style="text-align:right">Importe</th><th>Factura TUYA con ese total</th></tr></thead><tbody id="satPropiasBody"></tbody></table></div>
+  </div>
+  <div class="card" id="satSinRespaldoCard" style="display:none;margin-bottom:16px">
+    <div class="card-title" style="color:var(--do)">📄 Gastos sin comprobante fiscal<span id="satSinRespCount" class="dup-badge" style="background:#FFF3E0;margin-left:8px"></span></div>
+    <p style="font-size:12.5px;color:var(--txt2);margin:0 0 12px">La pregunta inversa: gastos capturados en el periodo que <strong>ningún CFDI ampara</strong>. Hasta ahora el cruce solo preguntaba lo contrario, y por eso un gasto sin documento detrás no aparecía en ninguna tarjeta. Lo de <strong>caja y efectivo</strong> se lista aparte y casi nunca es un hallazgo: una compra con ticket no tiene comprobante timbrado.</p>
+    <div id="satSinRespaldoAviso" style="display:none;background:#FFFBF2;border:1px solid var(--do);border-radius:8px;padding:9px 11px;margin-bottom:12px;font-size:12px"></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th>Folio</th><th style="text-align:right">Importe</th><th>Por qué aparece</th></tr></thead><tbody id="satSinRespaldoBody"></tbody></table></div>
+  </div>
   <div class="card" id="satFaltantesCard" style="display:none;margin-bottom:16px">
     <div class="card-title" style="color:var(--red)">❌ En SAT pero NO en CICSA<span id="satFaltantesCount" class="dup-badge" style="background:#FFEBEE;color:var(--red);margin-left:8px"></span></div>
     <div class="tbl-wrap"><table><thead><tr><th>Folio Fiscal</th><th>Proveedor (SAT)</th><th>RFC</th><th>Fecha</th><th style="text-align:right">Total SAT</th><th>Acción</th></tr></thead><tbody id="satFaltantesBody"></tbody></table></div>
@@ -2080,7 +2091,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-26-egresos-v5";
+const APP_BUILD = "2026-09-29-egresos-v7";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -3816,6 +3827,23 @@ let _esComplementoIA=false;
 //                persona; pero por omisión NO se guarda.
 // Un complemento de pago nunca es un egreso: ampara facturas que ya se registraron, y contarlo
 // duplica el dinero. Se detectaron 5 así en un solo mes, por $296,385.79.
+// Un comprobante que emitió la PROPIA empresa es una venta, no una compra. Registrarlo como
+// gasto pone el mismo dinero en los dos lados del balance.
+// Pasó de verdad: la factura 1426 que CICSA le emitió a su cliente el 28 de agosto —subtotal
+// $586,060.00, total con IVA $679,829.60— se capturó como gasto de hielo, con el folio 1426 y la
+// misma fecha. El subtotal contaba como ingreso y el total como egreso: el resultado de agosto
+// salía en $716,437.27 cuando era $1,396,266.87. El error valía el 95% del número que se leía.
+// Este es el mismo candado que ya existía para los complementos de pago, aplicado al caso que
+// faltaba. Sin RFC configurado no se bloquea nada: bloquear sin saber cuál es tu RFC sería
+// adivinar, y un bloqueo en falso impide trabajar.
+function motivoNoEsGasto(cfdi, rfcEmpresa){
+  if(!cfdi) return "";
+  const propio = String(rfcEmpresa||"").trim().toUpperCase();
+  const emisor = String(cfdi.rfc||"").trim().toUpperCase();
+  if(propio && emisor && emisor === propio) return "propio";
+  return "";
+}
+
 function bloqueoComplementoPago(cfdi, sospechaIA){
   if(cfdi && String(cfdi.tipo||"").toUpperCase().slice(0,1)==="P") return "bloqueo";
   if(sospechaIA) return "confirmar";
@@ -4333,6 +4361,17 @@ function guardarGasto(){
   };
   if(!gasto.proveedor||!(gasto.importe>0)){ setStatus("statusGuardar","⚠ Proveedor e importe (mayor que cero) son obligatorios.","err"); return; }
   let _saltarExtraccion=false;   // no gastar una 2ª lectura de IA si es duplicado ya en catálogo
+  // Una venta propia no se discute: el RFC del emisor es el tuyo y eso lo dice el timbrado.
+  if(motivoNoEsGasto(_cfdiGmail, (typeof rfcPropio==="function"?rfcPropio():"")) === "propio"){
+    const _fp = (_cfdiGmail.serie||"")+(_cfdiGmail.folioComp||"") || _cfdiGmail.folio || "";
+    alert(`🚫 NO se puede registrar como gasto.\n\n`+
+          `El comprobante ${_fp} lo EMITIÓ TU EMPRESA (RFC ${_cfdiGmail.rfc}): es una venta, un `+
+          `INGRESO — no una compra.\n\n`+
+          `Si se captura como gasto, el mismo dinero queda de los dos lados del balance: el `+
+          `subtotal como ingreso y el total como egreso.\n\n`+
+          `Tus ventas ya entran solas al Balance desde el XML. Aquí no hay nada que capturar.`);
+    return;
+  }
   const _bloq = bloqueoComplementoPago(_cfdiGmail, _esComplementoIA);
   if(_bloq === "bloqueo"){
     // El XML timbrado dice que es tipo P. Eso no se discute: no se guarda como gasto.
@@ -5223,6 +5262,86 @@ function desglosarPorOrigen(movs, campo){
   return Object.values(g).sort((a,b)=>b.monto-a.monto);
 }
 
+// ── El cierre y el timbrado no van al mismo paso ──────────────────────────
+// El balance se cierra cada 4 semanas y se emiten 4 facturas, pero el timbrado se desfasa: una
+// factura del periodo que cierra sale timbrada unos días después y su ingreso se corre al
+// siguiente, o al revés. Cuadrar el cierre exige poder reacomodarlo.
+// Lo que NO se puede hacer es tocar la fecha del comprobante: esa es la del timbrado, es lo que
+// se declara, y reescribirla sería falsear el CFDI. Se guarda aparte una fecha que vale SOLO
+// para el balance, con quién la puso, cuándo y por qué.
+// Es exactamente el criterio que ya existe entre `importe` (lo que dice la factura) y
+// `montoCaja` (lo que salió del concentrado): dos números separados, cada pantalla usa el suyo.
+const MARCA_PERIODO = ["fechaBalance", "fechaBalancePor", "fechaBalanceTs", "fechaBalanceNota"];
+
+// La fecha con la que este comprobante entra al balance. Cae en la fiscal si no hay ajuste.
+function fechaBalanceCfdi(c){
+  if(!c) return "";
+  const ov = String(c.fechaBalance||"").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(ov) ? ov : String(c.fecha||"");
+}
+
+// Si está movido, de dónde a dónde y por quién. null si no lo está.
+function cfdiMovidoDePeriodo(c){
+  if(!c) return null;
+  const a = String(c.fechaBalance||"").trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(a)) return null;
+  const de = String(c.fecha||"");
+  if(a === de) return null;
+  return { de, a, por: c.fechaBalancePor||"", ts: c.fechaBalanceTs||"", nota: c.fechaBalanceNota||"" };
+}
+
+// ¿Se puede mover? Devuelve el motivo cuando no, para poder decirlo en vez de fallar callado.
+function puedeMoverPeriodo(c, nuevaFecha, rfcEmpresa){
+  if(!c) return { ok:false, motivo:"No hay comprobante." };
+  const nf = String(nuevaFecha||"").trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(nf)) return { ok:false, motivo:"La fecha tiene que ser AAAA-MM-DD." };
+  // Solo se reacomodan TUS ventas. Mover la factura de un proveedor sería falsear cuándo te la
+  // cobraron, que es cosa distinta de cuadrar tu propio corte.
+  const propio = String(rfcEmpresa||"").trim().toUpperCase();
+  if(propio && String(c.rfc||"").trim().toUpperCase() !== propio)
+    return { ok:false, motivo:"Solo se pueden reacomodar las facturas que emitió tu empresa." };
+  if(nf === fechaBalanceCfdi(c)) return { ok:false, motivo:"Ya cuenta en esa misma fecha." };
+  return { ok:true, motivo:"" };
+}
+
+// Aplica el ajuste SOBRE el objeto. Deja rastro: sin quién y cuándo, un movimiento de periodo es
+// indistinguible de un error.
+function aplicarFechaBalance(c, nuevaFecha, quien, nota){
+  if(!c) return null;
+  c.fechaBalance = String(nuevaFecha||"").trim();
+  c.fechaBalancePor = String(quien||"");
+  c.fechaBalanceTs = new Date().toISOString();
+  c.fechaBalanceNota = String(nota||"");
+  return c;
+}
+function quitarFechaBalance(c){
+  if(!c) return null;
+  MARCA_PERIODO.forEach(k=>{ delete c[k]; });
+  return c;
+}
+
+// Qué entró a este periodo desde otro, y qué salió hacia otro. Las dos listas se enseñan juntas:
+// un ingreso que se mueve tiene que poder seguirse de un lado al otro, o "cuadrar el cierre" se
+// vuelve indistinguible de esconder un faltante.
+function movimientosDePeriodo(cfdis, ini, fin, rfcEmpresa){
+  const propio = String(rfcEmpresa||"").trim().toUpperCase();
+  const enRango = f => !!f && (!ini || f>=ini) && (!fin || f<=fin);
+  const entran=[], salen=[];
+  (cfdis||[]).forEach(c=>{
+    if(!c || c.ignorado) return;
+    if(!propio || String(c.rfc||"").trim().toUpperCase() !== propio) return;
+    const mov = cfdiMovidoDePeriodo(c);
+    if(!mov) return;
+    const base = (parseFloat(c.subtotal)||0) > 0 ? parseFloat(c.subtotal) : (parseFloat(c.total)||0);
+    const fila = { uuid:String(c.uuid||c.folio||""), folio:((c.serie||"")+(c.folioComp||"")).trim(),
+                   cliente:c.nombreReceptor||c.rfcReceptor||"—", monto:base, ...mov };
+    if(enRango(mov.a) && !enRango(mov.de)) entran.push(fila);
+    else if(enRango(mov.de) && !enRango(mov.a)) salen.push(fila);
+  });
+  const suma = xs => Math.round(xs.reduce((s,x)=>s+x.monto,0)*100)/100;
+  return { entran, salen, totalEntran:suma(entran), totalSalen:suma(salen) };
+}
+
 function balanceOperativo(cfdis, ini, fin, rfcEmpresa){
   const propio=(rfcEmpresa||"").trim().toUpperCase();
   const enRango=(f)=>!!f && (!ini || f>=ini) && (!fin || f<=fin);
@@ -5230,7 +5349,9 @@ function balanceOperativo(cfdis, ini, fin, rfcEmpresa){
   (cfdis||[]).forEach(c=>{
     if(!c || c.ignorado) return;
     if(!propio || (c.rfc||"").trim().toUpperCase()!==propio) return;   // solo lo EMITIDO por nosotros
-    if(!enRango(c.fecha)) return;
+    // La fecha de BALANCE, no la del timbrado: es lo que permite cuadrar un cierre desfasado sin
+    // tocar el comprobante. Sin ajuste son la misma.
+    if(!enRango(fechaBalanceCfdi(c))) return;
     const t=(c.tipo||"I").toUpperCase().slice(0,1);
     const sub=parseFloat(c.subtotal)||0;
     const monto= sub>0 ? sub : (parseFloat(c.total)||0);   // CFDIs guardados antes de leer el subtotal
@@ -5266,14 +5387,18 @@ function ingresosDetalle(cfdis, ini, fin, rfcEmpresa){
   (cfdis||[]).forEach(c=>{
     if(!c || c.ignorado) return;
     if(!propio || (c.rfc||"").trim().toUpperCase()!==propio) return;
-    if(!enRango(c.fecha)) return;
+    // Igual que el total de arriba: si el detalle usara otra fecha, el reporte se contradiría.
+    if(!enRango(fechaBalanceCfdi(c))) return;
     const t=(c.tipo||"I").toUpperCase().slice(0,1);
     if(t!=="I" && t!=="E") return;                       // los complementos de pago no son venta
     const sub=parseFloat(c.subtotal)||0;
     const base= sub>0 ? sub : (parseFloat(c.total)||0);
     const folioLegible=((c.serie||"")+(c.folioComp||"")).trim();
+    const _mov = cfdiMovidoDePeriodo(c);
     facturas.push({
       fecha: c.fecha||"",
+      // Aparecer en un periodo que no es el de su fecha, sin decir por qué, se lee como un error.
+      movida: !!_mov, movimiento: _mov,
       tipo: t,
       // Sin folio (CFDIs guardados antes de leerlo) se cae al principio del UUID: sigue siendo
       // localizable, aunque menos cómodo que el folio real.
@@ -5283,12 +5408,68 @@ function ingresosDetalle(cfdis, ini, fin, rfcEmpresa){
       monto: t==="E" ? -base : base,
     });
   });
-  facturas.sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||""));
+  // Se ordenan por la fecha con la que cuentan, que es el orden en el que se leen en el cierre.
+  facturas.sort((a,b)=>{
+    const fa = (a.movimiento && a.movimiento.a) || a.fecha || "";
+    const fb = (b.movimiento && b.movimiento.a) || b.fecha || "";
+    return fa.localeCompare(fb);
+  });
   const cortes=(typeof todosLosCortes==="function"?todosLosCortes():[])
     .filter(c=>enRango(c.fecha))
     .map(c=>({ fecha:c.fecha||"", label:c.label||c.tipo||"", monto:parseFloat(c.monto)||0 }))
     .sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||""));
   return { facturas, cortes };
+}
+
+// Mueve una factura emitida a otro corte SIN tocar su fecha fiscal. Es lo que permite cerrar un
+// periodo cuando el timbrado se desfasó: la venta es del corte que cierra, pero el XML salió
+// unos días después (o al revés) y el ingreso caía en el periodo equivocado.
+async function moverFacturaDePeriodo(uuid){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede reacomodar un cierre."); return; }
+  const c = (_cfdisStore||[]).find(x=>String(x.uuid||x.id||"").toUpperCase()===String(uuid||"").toUpperCase());
+  if(!c){ alert("No se encontró ese comprobante."); return; }
+  const folio = ((c.serie||"")+(c.folioComp||"")).trim() || String(c.uuid||"").slice(0,8);
+  const nueva = prompt(
+    `Mover la factura ${folio} a otro corte.\n\n`+
+    `Timbrada el ${c.fecha} · ${c.nombreReceptor||c.rfcReceptor||""} · ${fmt((parseFloat(c.subtotal)||0)||parseFloat(c.total)||0)}\n\n`+
+    `Su FECHA FISCAL no cambia: sigue siendo ${c.fecha} para el SAT. Lo único que cambia es en qué\n`+
+    `corte cuenta el ingreso.\n\n`+
+    `Escribe la fecha con la que debe contar (AAAA-MM-DD):`, fechaBalanceCfdi(c));
+  if(nueva===null) return;
+  const v = puedeMoverPeriodo(c, String(nueva).trim(), (typeof rfcPropio==="function"?rfcPropio():""));
+  if(!v.ok){ alert("No se puede mover:\n\n"+v.motivo); return; }
+  // Sin motivo no hay rastro: dentro de tres meses, un ingreso en un corte que no es el de su
+  // fecha es indistinguible de un error.
+  const nota = prompt("¿Por qué se mueve? (queda guardado junto con tu nombre y la fecha)", "Cierre desfasado: la venta es de ese corte, el XML se timbró después");
+  if(nota===null) return;
+  const antes = { ...c };
+  aplicarFechaBalance(c, String(nueva).trim(), (currentNombre||currentUser?.email||""), String(nota).trim());
+  const { id, ...datos } = c;
+  const ok = await fbUpdateDoc(CFDIS_COL, c.id, datos);
+  if(!ok){
+    MARCA_PERIODO.forEach(k=>{ if(antes[k]==null) delete c[k]; else c[k]=antes[k]; });
+    alert("❌ No se pudo guardar. No se cambió nada.");
+    return;
+  }
+  renderBalance();
+}
+
+// Deshace el ajuste: la factura vuelve a contar en el corte de su fecha fiscal.
+async function devolverFacturaAsuPeriodo(uuid){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede reacomodar un cierre."); return; }
+  const c = (_cfdisStore||[]).find(x=>String(x.uuid||x.id||"").toUpperCase()===String(uuid||"").toUpperCase());
+  if(!c) return;
+  const mov = cfdiMovidoDePeriodo(c);
+  if(!mov) return;
+  if(!confirm(`¿Devolver esta factura al corte de su fecha fiscal?\n\nAhora cuenta el ${mov.a} y volvería a contar el ${mov.de}.${mov.nota?`\n\nSe movió con el motivo: «${mov.nota}»`:""}`)) return;
+  const antes = { ...c };
+  quitarFechaBalance(c);
+  const { id, ...datos } = c;
+  // fbUpdateDoc REEMPLAZA el campo json completo, así que mandar el documento ya sin las marcas
+  // es justamente lo que las borra.
+  const ok = await fbUpdateDoc(CFDIS_COL, c.id, datos);
+  if(!ok){ MARCA_PERIODO.forEach(k=>{ if(antes[k]!=null) c[k]=antes[k]; }); alert("❌ No se pudo guardar. No se cambió nada."); return; }
+  renderBalance();
 }
 
 // Rango del periodo elegido, en fechas concretas (la semana guardada trae ini/fin propios).
@@ -5333,6 +5514,26 @@ function renderBalance(){
   const avisoCfdi = _cfdisError
     ? `<div style="background:#FFEBEE;border:1.5px solid var(--red);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px">❌ <strong>No se pudieron leer los CFDI de la nube</strong>, así que lo facturado NO es confiable en este reporte. ${esc(_cfdisError)}<br>Recarga la página e inténtalo de nuevo.</div>`
     : "";
+  // El doble conteo se ve AQUÍ, que es donde alguien lee el resultado y decide con él. Ponerlo
+  // solo en la pantalla SAT lo deja donde nadie lo estaba mirando.
+  let dobleConteo = "";
+  try{
+    const _r = _rangoBalance();
+    const _gs = (typeof allGastosAllWeeks==="function"?allGastosAllWeeks():[])
+      .filter(g=>g && g.fecha && (!_r.ini || g.fecha>=_r.ini) && (!_r.fin || g.fecha<=_r.fin));
+    const _dup = gastosConImporteDeFacturaPropia(_gs, _cfdisStore||[], rfc);
+    if(_dup.length){
+      const _t = _dup.reduce((s,x)=>s+(parseFloat(x.gasto.importe)||0),0);
+      dobleConteo = `<div id="balDobleConteo" style="background:#FFEBEE;border:2px solid var(--red);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;line-height:1.55">`+
+        `🚨 <strong>${_dup.length} gasto(s) por ${fmt(_t)} tienen el importe exacto de una factura que TÚ emitiste.</strong> `+
+        `Si alguno es la misma venta capturada como compra, está contada de los dos lados y el resultado de abajo se queda corto por esa cantidad.`+
+        _dup.map(x=>`<div style="margin-top:7px;padding-left:10px;border-left:3px solid var(--red)">`+
+          `<strong>${esc(x.gasto.proveedor||"—")}</strong> · ${fmtDate(x.gasto.fecha)||"—"} · folio ${esc(x.gasto.factura||"—")} · <strong>${fmt(x.gasto.importe)}</strong>`+
+          `<div style="color:var(--txt2);font-size:11.5px">= tu factura ${esc(((x.cfdi.serie||"")+(x.cfdi.folioComp||""))||String(x.cfdi.uuid||"").slice(0,8))} a ${esc(x.cfdi.nombreReceptor||x.cfdi.rfcReceptor||"—")}, ${fmtDate(x.cfdi.fecha)||"—"}, total ${fmt(x.cfdi.total)}</div>`+
+          `</div>`).join("")+
+        `<div style="margin-top:9px;color:var(--txt2)">Revísalos en <strong>Gastos</strong>. Coincidir de importe no es prueba por sí sola — por eso se dice de cuál factura salió.</div></div>`;
+    }
+  }catch(e){ console.warn("dobleConteo:", e); }
   const sano=b.resultado>=0;
   const aviso = !rfc
     ? `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px">⚠️ Falta el <strong>RFC de tu empresa</strong> (se pone en la pantalla SAT): sin él no se puede saber cuáles CFDI emitiste tú, y lo facturado sale en cero.</div>`
@@ -5350,7 +5551,7 @@ function renderBalance(){
   const avisoCuadre = Math.abs(_descuadre) >= 0.01
     ? `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12px">⚠️ El desglose por categoría suma <strong>${fmt(totCats)}</strong>, que no cuadra con las salidas (<strong>${fmt(b.salidas)}</strong>): faltan ${fmt(Math.abs(_descuadre))}. Revisa las facturas divididas cuyo desglose no cubre el importe total.</div>`
     : "";
-  cont.innerHTML = avisoCfdi + aviso + avisoCuadre + `
+  cont.innerHTML = dobleConteo + avisoCfdi + aviso + avisoCuadre + `
     <div class="summary-grid" style="margin-bottom:16px">
       <div class="scard"><div class="scard-label">⬆️ Entradas</div><div class="scard-val" style="color:var(--vd)">${fmt(b.entradas)}</div><div class="scard-sub">facturado + efectivo</div></div>
       <div class="scard"><div class="scard-label">⬇️ Salidas</div><div class="scard-val" style="color:var(--red)">${fmt(b.salidas)}</div><div class="scard-sub">${b.nGastos} gasto(s)</div></div>
@@ -5378,13 +5579,31 @@ function renderBalance(){
     ${b.retiros>0?`<div style="font-size:12px;color:var(--txt2);margin-top:12px">Retiros de caja del periodo: <strong>${fmt(b.retiros)}</strong> — no cuentan como salida: es efectivo que se movió, y lo que se pagó con él ya está en los egresos.</div>`:""}
     ${(()=>{ const _r=_rangoBalance(); const d=ingresosDetalle(_cfdisStore||[], _r.ini, _r.fin, rfc); return `
       <div class="card-title" style="margin-top:22px">🧾 Detalle de facturas emitidas</div>
-      ${d.facturas.length ? `<div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Folio</th><th>Cliente</th><th style="text-align:right">Subtotal</th></tr></thead><tbody>
-        ${d.facturas.map(f=>`<tr><td>${fmtDate(f.fecha)||"—"}</td>
+      ${(()=>{ const m=movimientosDePeriodo(_cfdisStore||[], _r.ini, _r.fin, rfc);
+        if(!m.entran.length && !m.salen.length) return "";
+        // Las dos direcciones juntas y a la vista: un ingreso que se mueve tiene que poder
+        // seguirse de un periodo al otro, o "cuadrar el cierre" se vuelve indistinguible de
+        // esconder un faltante.
+        const linea = (x,dir) => `<div style="margin-top:5px;padding-left:10px;border-left:3px solid var(--do)">
+          <strong>${esc(x.folio||x.uuid.slice(0,8))}</strong> · ${esc(x.cliente)} · <strong>${fmt(x.monto)}</strong>
+          <div style="color:var(--txt2);font-size:11.5px">timbrada ${fmtDate(x.de)} · ${dir} ${fmtDate(x.a)}${x.por?` · movida por ${esc(x.por)}`:""}${x.nota?` · «${esc(x.nota)}»`:""}</div></div>`;
+        return `<div style="background:#FFFBF2;border:1px solid var(--do);border-radius:9px;padding:10px 12px;margin:10px 0;font-size:12px">
+          <strong>📅 Ajustes de cierre en este periodo.</strong> La fecha fiscal de cada comprobante NO se tocó; solo con cuál corte cuenta.
+          ${m.entran.length?`<div style="margin-top:8px"><strong>Entran</strong> ${m.entran.length} por ${fmt(m.totalEntran)}:</div>${m.entran.map(x=>linea(x,"cuenta en")).join("")}`:""}
+          ${m.salen.length?`<div style="margin-top:8px"><strong>Salen</strong> ${m.salen.length} por ${fmt(m.totalSalen)}:</div>${m.salen.map(x=>linea(x,"se fue a")).join("")}`:""}
+        </div>`; })()}
+      ${d.facturas.length ? `<div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Folio</th><th>Cliente</th><th style="text-align:right">Subtotal</th><th>Cierre</th></tr></thead><tbody>
+        ${d.facturas.map(f=>`<tr${f.movida?' style="background:#FFFBF2"':""}><td>${fmtDate(f.fecha)||"—"}${f.movida?`<div style="font-size:10.5px;color:var(--do)">cuenta el ${fmtDate(f.movimiento.a)}</div>`:""}</td>
           <td style="font-family:'JetBrains Mono',monospace;font-size:11px" title="${esc(f.uuid)}">${esc(f.folio)}${f.tipo==="E"?` <span style="color:var(--red);font-size:10px">N/C</span>`:""}</td>
           <td>${esc(f.cliente)}</td>
-          <td class="amount-cell" style="color:${f.monto<0?"var(--red)":"var(--vd)"}">${fmt(f.monto)}</td></tr>`).join("")}
+          <td class="amount-cell" style="color:${f.monto<0?"var(--red)":"var(--vd)"}">${fmt(f.monto)}</td>
+          <td style="white-space:nowrap">${currentRole==="admin"
+            ? (f.movida
+              ? `<button class="btn btn-light" style="padding:3px 9px;font-size:11px" title="Devolverla al periodo de su fecha fiscal" onclick="devolverFacturaAsuPeriodo('${escAttrJs(f.uuid)}')">↩︎ Deshacer</button>`
+              : `<button class="btn btn-light" style="padding:3px 9px;font-size:11px" title="Contarla en otro corte sin tocar su fecha fiscal" onclick="moverFacturaDePeriodo('${escAttrJs(f.uuid)}')">📅 Mover</button>`)
+            : (f.movida?`<span style="font-size:11px;color:var(--do)">movida</span>`:"")}</td></tr>`).join("")}
         <tr style="border-top:2px solid var(--border)"><td colspan="3"><strong>Total facturado</strong></td>
-          <td class="amount-cell" style="font-weight:700;color:var(--vd)">${fmt(d.facturas.reduce((s,f)=>s+f.monto,0))}</td></tr>
+          <td class="amount-cell" style="font-weight:700;color:var(--vd)">${fmt(d.facturas.reduce((s,f)=>s+f.monto,0))}</td><td></td></tr>
       </tbody></table></div>` : `<div style="font-size:12px;color:var(--txt2);padding:8px 0">Sin facturas emitidas en el periodo.</div>`}
       <div class="card-title" style="margin-top:22px">💵 Detalle de cortes de caja</div>
       ${d.cortes.length ? `<div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Día</th><th style="text-align:right">Monto</th></tr></thead><tbody>
@@ -6861,6 +7080,9 @@ async function guardarCfdisEnStore(cfdis){
     const prev = _cfdisStore.find(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase());
     const data = { uuid, folio:c.folio||"", serie:c.serie||"", rfc:c.rfc||"", proveedor:c.proveedor||"", fecha:c.fecha||"", fecha_hora:c.fecha_hora||prev?.fecha_hora||"", total:parseFloat(c.total)||0, subtotal:parseFloat(c.subtotal)||0, tipo:(c.tipo||""), rfcReceptor:(c.rfcReceptor||""), nombreReceptor:(c.nombreReceptor||""), folioComp:(c.folioComp||""), mes:cfdiMes(c.fecha), conceptos:Array.isArray(c.conceptos)&&c.conceptos.length?c.conceptos:(prev?.conceptos||[]), nomina:c.nomina||null, subidoPor:currentNombre||currentUser?.email||"", subidoTs:new Date().toISOString() };
     if(prev && prev.ignorado){ data.ignorado=true; data.ignoradoPor=prev.ignoradoPor||""; data.ignoradoTs=prev.ignoradoTs||""; }
+    // El ajuste de periodo también sobrevive: sin esto, resubir los XML de un mes deshace en
+    // silencio todos los cierres ya cuadrados, y el descuadre reaparece sin que nadie lo note.
+    if(prev) MARCA_PERIODO.forEach(k=>{ if(prev[k]!=null && prev[k]!=="") data[k]=prev[k]; });
     tareas.push({ docId, data });
     if(yaHay.has(uuid.toUpperCase())){ existentes++; const i=_cfdisStore.findIndex(x=>String(x.uuid||x.id).toUpperCase()===uuid.toUpperCase()); if(i>=0)_cfdisStore[i]={id:docId,...data}; }
     else { nuevos++; _cfdisStore.push({ id:docId, ...data }); yaHay.add(uuid.toUpperCase()); }
@@ -7981,6 +8203,75 @@ function reconciliarSiHay(){
   }catch(_){}
 }
 
+// ── La dirección que le faltaba al cruce ──────────────────────────────────
+// conciliarSAT recorre los CFDI y pregunta "este comprobante, ¿tiene gasto?". Nunca recorría los
+// gastos para preguntar lo contrario: "este gasto, ¿tiene comprobante?". Las cinco tarjetas del
+// resumen cuentan CFDI, y `totalCICSA` —el total de lo capturado en el periodo— se calculaba y
+// se tiraba: aparecía UNA vez en toda la app, en la línea que lo creaba.
+// El agujero no es teórico. Un gasto de $679,829.60 fechado el 28 de agosto era en realidad el
+// total de una factura que CICSA le EMITIÓ a su cliente. Mientras no estuvo puesto el RFC propio
+// ese comprobante entraba al cruce como "gasto por capturar", se emparejaba con el gasto por
+// importe y fecha, y la pantalla marcaba la pareja como conciliada. El cruce no solo no lo
+// detectó: lo avaló. Y al poner el RFC, el comprobante salió del cruce por propio y el gasto se
+// volvió invisible, porque ya ningún CFDI lo reclamaba.
+
+// Qué tan raro es que un gasto no tenga CFDI. No todos lo son: una compra de caja con ticket
+// jamás va a tener comprobante timbrado, y señalar los cientos de renglones de caja taparía al
+// que sí importa.
+function claseGastoSinRespaldo(g){
+  if(!g) return null;
+  const folio = String(g.factura||"").trim();
+  // Del concentrado de caja: es una salida de efectivo con ticket, no una factura.
+  if(g._folioEgreso) return { clase:"caja", grave:false, motivo:"salida de caja (Manejo de Cortes)" };
+  if(esGastoEfectivo(g)) return { clase:"efectivo", grave:false, motivo:"pagado en efectivo" };
+  // Tiene folio y ningún CFDI lo ampara: el renglón AFIRMA que existe un comprobante timbrado
+  // que el SAT no conoce. Es el caso grave, y es exactamente la forma del error de agosto.
+  if(folio) return { clase:"dice-factura", grave:true, motivo:`dice tener la factura ${folio}, y ningún CFDI la ampara` };
+  return { clase:"sin-folio", grave:true, motivo:"sin folio de factura y sin comprobante que lo respalde" };
+}
+
+// Los gastos del periodo que ningún comprobante reclamó. `usados` es el conjunto de ids que el
+// cruce ya apartó; lo que sobra es, literalmente, dinero declarado sin documento detrás.
+function gastosSinRespaldo(gastos, usados){
+  const u = (usados instanceof Set) ? usados : new Set(usados||[]);
+  return (gastos||[])
+    .filter(g => g && !u.has(g.id))
+    .map(g => ({ gasto:g, ...claseGastoSinRespaldo(g) }))
+    // Lo grave primero y, dentro de eso, lo más caro: una salida de caja de un millón no puede
+    // empujar hacia abajo a la factura fantasma.
+    .sort((a,b)=> (b.grave?1:0)-(a.grave?1:0)
+               || (parseFloat(b.gasto.importe)||0)-(parseFloat(a.gasto.importe)||0));
+}
+
+function resumenSinRespaldo(lista){
+  const l = (lista||[]).filter(Boolean);
+  const suma = xs => Math.round(xs.reduce((s,x)=>s+(parseFloat(x.gasto&&x.gasto.importe)||0),0)*100)/100;
+  const graves = l.filter(x=>x.grave);
+  return { n:l.length, total:suma(l), nGraves:graves.length, totalGraves:suma(graves) };
+}
+
+// La huella del error del 28 de agosto: un gasto cuyo importe es idéntico al total de un CFDI
+// que emitió la PROPIA empresa. Eso no es un gasto, es una venta — el número salió de un ingreso.
+// Es evidencia para revisar, no un veredicto: dos importes pueden coincidir por casualidad. Por
+// eso devuelve también DE CUÁL factura salió, para poder juzgarlo de un vistazo.
+function gastosConImporteDeFacturaPropia(gastos, cfdis, rfcEmpresa, tol){
+  const propio = String(rfcEmpresa||"").trim().toUpperCase();
+  if(!propio) return [];   // sin el RFC no se sabe cuál factura es propia; inventar es peor que callar
+  const mias = (cfdis||[]).filter(c => c
+    && String(c.rfc||"").trim().toUpperCase() === propio
+    && Number.isFinite(parseFloat(c.total)) && parseFloat(c.total) > 0);
+  if(!mias.length) return [];
+  const t = (tol==null) ? 0.01 : tol;
+  const out = [];
+  (gastos||[]).forEach(g=>{
+    const imp = parseFloat(g && g.importe);
+    if(!Number.isFinite(imp) || imp <= 0) return;
+    const hit = mias.find(c => Math.abs(parseFloat(c.total)-imp) <= t);
+    if(hit) out.push({ gasto:g, cfdi:hit });
+  });
+  return out.sort((a,b)=>(parseFloat(b.gasto.importe)||0)-(parseFloat(a.gasto.importe)||0));
+}
+
 function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
   const gastosCICSA=allGastosAllWeeks().filter(g=>{ if(fechaIni&&g.fecha<fechaIni) return false; if(fechaFin&&g.fecha>fechaFin) return false; return true; });
   const rfcEmp = rfcEmpresa!==undefined ? rfcEmpresa : (typeof rfcPropio==="function" ? rfcPropio() : "");
@@ -8078,7 +8369,12 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
     // suposición, y sin decirlo se ve igual de firme que una por UUID.
     else { x.cfdi._via = x.via; x.cfdi._gastoId = x.match.id; conciliadas.push(x.cfdi); }
   });
-  return{faltantes,diferencias,duplicados,conciliadas,cfdisUtiles:utiles,omitidos:filtro.omitidos,totalSAT:utiles.reduce((s,c)=>s+c.total,0),totalCICSA:gastosCICSA.reduce((s,g)=>s+g.importe,0)};
+  const _totalCICSA = gastosCICSA.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+  return{faltantes,diferencias,duplicados,conciliadas,cfdisUtiles:utiles,omitidos:filtro.omitidos,
+    totalSAT:utiles.reduce((s,c)=>s+c.total,0), totalCICSA:_totalCICSA,
+    // La pregunta inversa, la que faltaba.
+    sinRespaldo: gastosSinRespaldo(gastosCICSA, _usados),
+    propias: gastosConImporteDeFacturaPropia(gastosCICSA, cfdis, rfcEmp)};
 }
 
 // Deja ver POR QUÉ el número bajó: si la cuenta se reduce en silencio, nadie confía en ella.
@@ -8110,11 +8406,14 @@ function renderConciliacion(r){
   const utiles=r.cfdisUtiles||satCFDIs||[];
   const pct=utiles.length>0?Math.round((r.conciliadas.length/utiles.length)*100):0;
   pintarCfdisOmitidos(r.omitidos);
+  const _rs = resumenSinRespaldo(r.sinRespaldo||[]);
   sumEl.innerHTML=`<div class="scard"><div class="scard-label">Facturas de gasto en SAT</div><div class="scard-val">${utiles.length}</div><div class="scard-sub">${fmt(r.totalSAT)}</div></div>
     <div class="scard ${r.faltantes.length>0?'alert':''}"><div class="scard-label">No capturados en CICSA</div><div class="scard-val" style="color:${r.faltantes.length>0?'var(--red)':'var(--vm)'}">${r.faltantes.length}</div><div class="scard-sub">${fmt(r.faltantes.reduce((s,c)=>s+c.total,0))}</div></div>
     <div class="scard"><div class="scard-label">Con diferencia de monto</div><div class="scard-val">${r.diferencias.length}</div></div>
     <div class="scard ${(r.duplicados||[]).length>0?'alert':''}"><div class="scard-label">Contados de más</div><div class="scard-val" style="color:${(r.duplicados||[]).length>0?'var(--red)':'var(--vm)'}">${(r.duplicados||[]).length}</div><div class="scard-sub">${fmt((r.duplicados||[]).reduce((s,d)=>s+((d.clase&&d.clase.excedente)||0),0))} de más</div></div>
-    <div class="scard"><div class="scard-label">Conciliadas ✅</div><div class="scard-val">${r.conciliadas.length}</div><div class="scard-sub">${pct}% del total</div></div>`;
+    <div class="scard"><div class="scard-label">Conciliadas ✅</div><div class="scard-val">${r.conciliadas.length}</div><div class="scard-sub">${pct}% del total</div></div>
+    ${_rs.nGraves>0?`<div class="scard alert"><div class="scard-label">Gastos sin comprobante</div><div class="scard-val" style="color:var(--red)">${_rs.nGraves}</div><div class="scard-sub">${fmt(_rs.totalGraves)}</div></div>`:""}`;
+  try{ renderSinRespaldo(r); }catch(e){ console.warn("renderSinRespaldo:",e); }
   document.getElementById("satFaltantesCard").style.display=r.faltantes.length>0?"block":"none";
   document.getElementById("satFaltantesCount").textContent=r.faltantes.length;
   document.getElementById("satFaltantesBody").innerHTML=r.faltantes.map(c=>`<tr style="background:#FFF8F6">
@@ -8208,6 +8507,65 @@ function preLlenarCaptura(proveedor,fecha,folio,importe,uuid){
   document.getElementById("fProv").value=proveedor; document.getElementById("fFecha").value=fecha;
   document.getElementById("fFactura").value=folio; document.getElementById("fImporte").value=importe;
   document.getElementById("extractedCard").style.display="block"; checkDuplicateForm(); window.scrollTo(0,0);
+}
+
+// Pinta las dos preguntas que antes no se hacían. Se llama al final de renderConciliacion.
+function renderSinRespaldo(r){
+  const utiles = r.cfdisUtiles || [];
+  // ── Gastos que ningún comprobante reclamó ──
+  const card = document.getElementById("satSinRespaldoCard");
+  const body = document.getElementById("satSinRespaldoBody");
+  const avi  = document.getElementById("satSinRespaldoAviso");
+  if(card && body){
+    const lista = r.sinRespaldo || [];
+    const rs = resumenSinRespaldo(lista);
+    // Sin CFDI cargados del periodo, TODO sale sin respaldo y el hallazgo no significa nada.
+    // Gritar ahí enseña a ignorar la tarjeta, que es la peor forma de perder una alarma.
+    const sinDatos = utiles.length === 0;
+    if(!lista.length || sinDatos){
+      card.style.display = "none"; body.innerHTML = "";
+      if(avi) avi.style.display = "none";
+    } else {
+      card.style.display = "block";
+      const cnt = document.getElementById("satSinRespCount");
+      if(cnt) cnt.textContent = `${rs.nGraves} · ${fmt(rs.totalGraves)}`;
+      if(avi){
+        const leves = rs.n - rs.nGraves;
+        avi.style.display = leves > 0 ? "block" : "none";
+        avi.innerHTML = `Además hay <strong>${leves}</strong> gasto(s) de caja o efectivo por ${fmt(rs.total - rs.totalGraves)} sin comprobante timbrado. Eso es normal —una compra con ticket no lo tiene— y por eso van al final de la lista, no en el conteo de arriba.`;
+      }
+      body.innerHTML = lista.map(x=>{
+        const g = x.gasto;
+        return `<tr style="${x.grave?"background:#FFF8F6":"opacity:.62"}">
+          <td>${fmtDate(g.fecha)||"—"}</td>
+          <td><strong>${esc(g.proveedor||"—")}</strong></td>
+          <td>${esc(g.categoria||"—")}</td>
+          <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(g.factura||"—")}</td>
+          <td class="amount-cell" style="${x.grave?"color:var(--red)":""}">${fmt(g.importe)}</td>
+          <td style="font-size:11.5px;color:var(--txt2)">${x.grave?"⚠ ":""}${esc(x.motivo||"")}</td>
+        </tr>`;
+      }).join("");
+    }
+  }
+  // ── Gastos con el importe de una factura propia ──
+  const pc = document.getElementById("satPropiasCard");
+  const pb = document.getElementById("satPropiasBody");
+  if(pc && pb){
+    const props = r.propias || [];
+    if(!props.length){ pc.style.display="none"; pb.innerHTML=""; }
+    else {
+      pc.style.display = "block";
+      const cnt = document.getElementById("satPropiasCount");
+      if(cnt) cnt.textContent = `${props.length} · ${fmt(props.reduce((s,x)=>s+(parseFloat(x.gasto.importe)||0),0))}`;
+      pb.innerHTML = props.map(x=>`<tr style="background:#FFEBEE">
+        <td>${fmtDate(x.gasto.fecha)||"—"}</td>
+        <td><strong>${esc(x.gasto.proveedor||"—")}</strong></td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(x.gasto.factura||"—")}</td>
+        <td class="amount-cell" style="color:var(--red)">${fmt(x.gasto.importe)}</td>
+        <td style="font-size:11.5px">${esc(x.cfdi.proveedor||"—")} · ${fmtDate(x.cfdi.fecha)||"—"} · <strong>${fmt(x.cfdi.total)}</strong></td>
+      </tr>`).join("");
+    }
+  }
 }
 
 function exportarConciliacion(){
