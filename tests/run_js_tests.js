@@ -104,6 +104,7 @@ const FUNCS = [
   "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte", "cfdiIncompleto",
   "_b64ABytes", "_liberarAdjunto", "_gmailHuella", "_encolarMiniatura",
   "fbAuthHeader", "rfcPropio", "guardarRfcPropio",
+  "claseGastoSinRespaldo", "gastosSinRespaldo", "resumenSinRespaldo", "gastosConImporteDeFacturaPropia",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
@@ -1089,6 +1090,194 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== la direccion que le faltaba al cruce ==");
+// conciliarSAT recorre los CFDI y pregunta "este comprobante, ?tiene gasto?". Nunca recorre los
+// gastos para preguntar "este gasto, ?tiene comprobante?". Las cinco tarjetas del resumen
+// cuentan CFDI, y hasta totalCICSA —el total de lo capturado— se calculaba y se tiraba.
+// Por eso un gasto de $679,829.60 que en realidad era el total de una factura que CICSA le
+// EMITIO a su cliente vivio semanas sin que nada lo señalara.
+
+const _g = (id, imp, extra) => ({ id, fecha:"2026-08-28", proveedor:"JOSE LEONARDO DURAN PARRA",
+                                  factura:"F-1426", importe:imp, categoria:"Hielo", ...(extra||{}) });
+
+t("un gasto que ningun CFDI reclamo sale a la luz", () => {
+  const r = S.gastosSinRespaldo([_g("g1", 679829.60), _g("g2", 17400)], new Set(["g2"]));
+  assert.equal(r.length, 1);
+  assert.equal(r[0].gasto.id, "g1");
+});
+t("el que dice traer factura es el grave", () => {
+  // El folio AFIRMA que existe un comprobante timbrado que el SAT no conoce.
+  const c = S.claseGastoSinRespaldo(_g("g1", 679829.60));
+  assert.equal(c.clase, "dice-factura");
+  assert.equal(c.grave, true);
+  assert.ok(/F-1426/.test(c.motivo), "hay que decir QUE folio se esta reclamando");
+});
+t("una salida de caja no es un hallazgo", () => {
+  // Una compra de caja con ticket NUNCA va a tener CFDI. Señalar los cientos de renglones de
+  // caja taparia al que si importa.
+  const c = S.claseGastoSinRespaldo(_g("g9", 250, { _folioEgreso:"EGR-2026-00044", factura:"" }));
+  assert.equal(c.clase, "caja");
+  assert.equal(c.grave, false);
+});
+t("lo pagado en efectivo tampoco", () => {
+  const c = S.claseGastoSinRespaldo(_g("g8", 300, { formaPago:"efectivo", factura:"" }));
+  assert.equal(c.grave, false);
+});
+t("una transferencia sin folio y sin CFDI si lo es", () => {
+  const c = S.claseGastoSinRespaldo(_g("g7", 50000, { formaPago:"transferencia", factura:"" }));
+  assert.equal(c.clase, "sin-folio");
+  assert.equal(c.grave, true);
+});
+t("lo grave va primero, y dentro de eso lo mas caro", () => {
+  const r = S.gastosSinRespaldo([
+    _g("caja", 900000, { _folioEgreso:"E1", factura:"" }),
+    _g("chico", 500),
+    _g("grande", 679829.60),
+  ], new Set());
+  assert.deepEqual(r.map(x=>x.gasto.id), ["grande","chico","caja"],
+    "una salida de caja de un millon no puede tapar la factura fantasma");
+});
+t("el resumen separa lo grave del ruido", () => {
+  const r = S.resumenSinRespaldo(S.gastosSinRespaldo([
+    _g("grande", 679829.60), _g("caja", 250, { _folioEgreso:"E1", factura:"" }),
+  ], new Set()));
+  assert.equal(r.n, 2);
+  close(r.total, 680079.60, 0.01);
+  assert.equal(r.nGraves, 1);
+  close(r.totalGraves, 679829.60, 0.01);
+});
+t("sin nada, cero — no NaN ni undefined", () => {
+  const r = S.resumenSinRespaldo([]);
+  assert.equal(r.n, 0); assert.equal(r.total, 0); assert.equal(r.nGraves, 0); assert.equal(r.totalGraves, 0);
+  assert.deepEqual(S.gastosSinRespaldo(null, null), []);
+  assert.equal(S.claseGastoSinRespaldo(null), null);
+});
+
+t("el caso de agosto, de extremo a extremo", () => {
+  // El gasto real que vivio semanas sin que nada lo señalara. El CFDI del que salio el numero es
+  // PROPIO, asi que el cruce lo excluye y el gasto queda sin nadie que lo reclame.
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"malo", proveedor:"JOSE LEONARDO DURAN PARRA", factura:"F-1426", importe:679829.60,
+      fecha:"2026-08-28", categoria:"Hielo", formaPago:"transferencia" },
+    { id:"bueno", proveedor:"JOSE LEONARDO DURAN PARRA", factura:"F1514", importe:17400,
+      fecha:"2026-08-26", categoria:"Hielo", formaPago:"transferencia" },
+  ]}];
+  const r = S.conciliarSAT([
+    { uuid:"U1", folio:"U1", folioComp:"", rfc:"CIC190426SD4", proveedor:"COMEDORES INDUSTRIALES DE CUAUHTEMOC",
+      total:679829.60, fecha:"2026-08-28", tipo:"I" },
+    { uuid:"U2", folio:"U2", folioComp:"F1514", rfc:"DUPJ800101ABC", proveedor:"JOSE LEONARDO DURAN PARRA",
+      total:17400, fecha:"2026-08-26", tipo:"I" },
+  ], "", "", "CIC190426SD4");
+  // La factura propia sale del cruce, como debe.
+  assert.equal(r.omitidos.PROPIO, 1);
+  assert.equal(r.conciliadas.length, 1, "solo la de hielo de verdad");
+  assert.equal(r.faltantes.length, 0, "y nada que capturar");
+  // Antes esto era TODO lo que decia la pantalla, y el gasto malo no salia por ningun lado.
+  const graves = (r.sinRespaldo||[]).filter(x=>x.grave);
+  assert.equal(graves.length, 1, "el gasto sin comprobante tiene que aparecer");
+  assert.equal(graves[0].gasto.id, "malo");
+  close(graves[0].gasto.importe, 679829.60, 0.01);
+  // Y ademas se dice de donde salio el numero.
+  assert.equal((r.propias||[]).length, 1);
+  assert.equal(r.propias[0].gasto.id, "malo");
+  assert.equal(r.propias[0].cfdi.uuid, "U1");
+});
+t("un gasto que SI tiene su comprobante no se señala", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"bueno", proveedor:"JOSE LEONARDO DURAN PARRA", factura:"F1514", importe:17400,
+      fecha:"2026-08-26", categoria:"Hielo", formaPago:"transferencia" },
+  ]}];
+  const r = S.conciliarSAT([
+    { uuid:"U2", folio:"U2", folioComp:"F1514", rfc:"DUPJ800101ABC", proveedor:"JOSE LEONARDO DURAN PARRA",
+      total:17400, fecha:"2026-08-26", tipo:"I" },
+  ], "", "", "CIC190426SD4");
+  assert.deepEqual((r.sinRespaldo||[]).filter(x=>x.grave), [],
+    "acusar a un gasto bien capturado enseña a ignorar la tarjeta");
+});
+
+console.log("\n== el importe que salio de una factura PROPIA ==");
+// La huella del error del 28 de agosto: el numero del gasto es identico al total de un CFDI que
+// emitio la propia empresa. Eso no es un gasto, es una venta.
+const _CFDI_PROPIO = { uuid:"U1", rfc:"CIC190426SD4", proveedor:"COMEDORES INDUSTRIALES DE CUAUHTEMOC",
+                       fecha:"2026-08-28", total:679829.60, tipo:"I" };
+const _CFDI_PROV = { uuid:"U2", rfc:"DUPJ800101ABC", proveedor:"JOSE LEONARDO DURAN PARRA",
+                     fecha:"2026-08-26", total:17400, tipo:"I" };
+
+t("un gasto con el importe exacto de una factura propia se señala", () => {
+  const r = S.gastosConImporteDeFacturaPropia([_g("g1", 679829.60), _g("g2", 17400)],
+                                              [_CFDI_PROPIO, _CFDI_PROV], "CIC190426SD4");
+  assert.equal(r.length, 1);
+  assert.equal(r[0].gasto.id, "g1");
+  assert.equal(r[0].cfdi.uuid, "U1", "hay que enseñar DE CUAL factura salio el numero");
+});
+t("el importe de un proveedor real no se señala", () => {
+  const r = S.gastosConImporteDeFacturaPropia([_g("g2", 17400)], [_CFDI_PROPIO, _CFDI_PROV], "CIC190426SD4");
+  assert.deepEqual(r, []);
+});
+t("sin RFC propio no se puede afirmar nada", () => {
+  // Sin el RFC no se sabe cual factura es propia: inventar señalamientos seria peor que callar.
+  assert.deepEqual(S.gastosConImporteDeFacturaPropia([_g("g1", 679829.60)], [_CFDI_PROPIO], ""), []);
+  // Y el caso que de verdad muerde: un CFDI al que le falta el RFC. Sin la guardia, "" del
+  // comprobante casaria con "" del RFC propio y CUALQUIER gasto de ese importe saldria acusado
+  // de venir de una factura propia. Acusar en falso quema la tarjeta entera.
+  const sinRfc = { uuid:"U9", rfc:"", proveedor:"?", fecha:"2026-08-28", total:679829.60, tipo:"I" };
+  assert.deepEqual(S.gastosConImporteDeFacturaPropia([_g("g1", 679829.60)], [sinRfc], ""), []);
+  assert.deepEqual(S.gastosConImporteDeFacturaPropia([_g("g1", 679829.60)], [sinRfc], "   "), []);
+});
+t("el RFC se compara sin importar mayusculas ni espacios", () => {
+  const r = S.gastosConImporteDeFacturaPropia([_g("g1", 679829.60)], [_CFDI_PROPIO], "  cic190426sd4 ");
+  assert.equal(r.length, 1);
+});
+t("un gasto en cero no casa con nada", () => {
+  const r = S.gastosConImporteDeFacturaPropia([_g("g0", 0)], [{ ..._CFDI_PROPIO, total:0 }], "CIC190426SD4");
+  assert.deepEqual(r, []);
+});
+t("no truena con listas vacias", () => {
+  assert.deepEqual(S.gastosConImporteDeFacturaPropia(null, null, "CIC190426SD4"), []);
+});
+
+t("el cruce ya devuelve los gastos sin respaldo", () => {
+  // Es la prueba de que la direccion nueva quedo CONECTADA, no solo escrita.
+  const i = script.indexOf("function conciliarSAT(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/sinRespaldo/.test(b), "sin esto el hallazgo no llega a la pantalla");
+  assert.ok(/gastosSinRespaldo\(/.test(b));
+});
+t("el hallazgo llega a la pantalla, no solo al objeto", () => {
+  const i = script.indexOf("function renderConciliacion(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/renderSinRespaldo\(/.test(b), "calcularlo y no pintarlo lo deja igual de invisible");
+  assert.ok(/resumenSinRespaldo\(/.test(b), "y tiene que contar en el resumen de arriba");
+});
+t("sin CFDI del periodo, la tarjeta se calla", () => {
+  // Si no se han subido los XML, TODO sale sin respaldo. Gritar ahi enseña a ignorar la alarma,
+  // que es la peor forma de perderla.
+  const i = script.indexOf("function renderSinRespaldo(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/utiles\.length *=== *0/.test(b), "hace falta la guardia de 'no hay con que comparar'");
+});
+t("las dos tarjetas existen en la pagina", () => {
+  assert.ok(html.includes('id="satSinRespaldoCard"'));
+  assert.ok(html.includes('id="satPropiasCard"'));
+});
+t("totalCICSA deja de calcularse para tirarse", () => {
+  // Aparecia UNA vez en toda la app: la linea que lo creaba.
+  assert.ok(script.split("totalCICSA").length - 1 > 1,
+    "calcular el total de lo capturado y no confrontarlo con nada es el hueco de fondo");
 });
 
 console.log("\n== la v4 de Manejo de Cortes ==");
