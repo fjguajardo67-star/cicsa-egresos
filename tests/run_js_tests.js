@@ -88,9 +88,9 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
+const CONSTS = ["ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
-const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK", "MARCA_PERIODO"];
+const CONSTS_ARR = ["_TIPOS_MOV", "COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK", "MARCA_PERIODO"];
 
 
 const FUNCS = [
@@ -106,7 +106,9 @@ const FUNCS = [
   "fbAuthHeader", "rfcPropio", "guardarRfcPropio",
   "claseGastoSinRespaldo", "gastosSinRespaldo", "resumenSinRespaldo", "gastosConImporteDeFacturaPropia",
   "motivoNoEsGasto", "deducirRfcPropio", "rfcPropioEfectivo", "fechaBalanceCfdi",
-  "ritmoSemanal", "semanasRestantes", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
+  "ritmoSemanal", "semanasRestantes",
+  "_montoMovimiento", "movimientosDelMes", "resumenArchivo", "construirArchivoMes",
+  "verificarArchivo", "mesesArchivables", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
   "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance", "facturasFueraDelPeriodo",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
@@ -1076,7 +1078,8 @@ t("el descarte FUSIONA, no reemplaza", () => {
     if (script[k] === "{") d++;
     else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
   }
-  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  // Ojo: quitar todo lo que siga a "//" se come las URLs (https://...). Solo lineas completas.
+  const vivo = b.replace(/^\s*\/\/.*$/gm, "");
   assert.ok(!/fbUpdateDoc\(CFDIS_COL,\s*c\.id,\s*marca\)/.test(vivo),
     "pasarle solo la marca destruye el comprobante");
   assert.ok(/\.\.\.datos,\s*\.\.\.marca/.test(vivo), "tiene que mandar el documento completo mas la marca");
@@ -1093,6 +1096,222 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== archivar un mes: fase 1, escribir sin borrar ==");
+// Todo el estado vive en UN documento con tope de 1 MiB y ya va al 44%. La fase 1 escribe el mes
+// en Storage y lo VERIFICA contra el documento; no quita nada. Verificar antes de borrar —nunca
+// al reves— es lo que separa un archivado de una perdida de datos.
+const _stArch = () => ({
+  weeks: [
+    { id:"w1", gastos:[
+        { id:"g1", fecha:"2026-07-03", importe:100.50, proveedor:"A" },
+        { id:"g2", fecha:"2026-07-28", importe:200.25, proveedor:"B" },
+        { id:"g3", fecha:"2026-08-01", importe:999.99, proveedor:"C" } ],
+      cortes:[ { id:"c1", fecha:"2026-07-05", monto:50.10 } ],
+      retiros:[ { id:"r1", fecha:"2026-07-09", monto:25.00 } ],
+      aportaciones:[ { id:"a1", fecha:"2026-07-11", monto:10.00 } ] },
+    { id:"w2", gastos:[ { id:"g4", fecha:"2026-07-30", importe:1.01, proveedor:"D" } ], cortes:[], retiros:[] },
+  ],
+});
+
+t("el importe se lee del campo que le toca a cada tipo", () => {
+  // Un gasto usa `importe`; cortes, retiros y aportaciones usan `monto`. Leer el campo
+  // equivocado da cero y el archivo cuadraria contra un total falso.
+  close(S._montoMovimiento({ importe:100.50 }, "gasto"), 100.50, 0.001);
+  close(S._montoMovimiento({ monto:50.10 }, "corte"), 50.10, 0.001);
+  close(S._montoMovimiento({ monto:25 }, "retiro"), 25, 0.001);
+  close(S._montoMovimiento({ importe:10 }, "aportacion"), 10, 0.001);
+  assert.equal(S._montoMovimiento(null, "gasto"), 0);
+});
+
+t("junta los movimientos del mes, de todas las semanas", () => {
+  const m = S.movimientosDelMes(_stArch(), "2026-07");
+  assert.deepEqual(m.map(x=>x.id).sort(), ["a1","c1","g1","g2","g4","r1"]);
+  assert.ok(!m.some(x=>x.id==="g3"), "agosto no es julio");
+});
+t("cada movimiento recuerda su semana y su tipo", () => {
+  // Sin eso no se puede devolver a su sitio, y un archivo que no se puede restaurar no es un
+  // archivo: es un borrado con copia.
+  const m = S.movimientosDelMes(_stArch(), "2026-07");
+  const g4 = m.find(x=>x.id==="g4");
+  assert.equal(g4._semana, "w2");
+  assert.equal(g4._tipo, "gasto");
+  assert.equal(m.find(x=>x.id==="c1")._tipo, "corte");
+  assert.equal(m.find(x=>x.id==="a1")._tipo, "aportacion");
+});
+t("no se lleva un movimiento sin fecha", () => {
+  // No hay forma de saber a que mes pertenece. Archivarlo seria desaparecerlo.
+  const st = { weeks:[{ id:"w1", gastos:[{ id:"x", importe:5 }] }] };
+  assert.deepEqual(S.movimientosDelMes(st, "2026-07"), []);
+});
+t("no truena con un estado vacio", () => {
+  assert.deepEqual(S.movimientosDelMes(null, "2026-07"), []);
+  assert.deepEqual(S.movimientosDelMes({ weeks:[] }, ""), []);
+});
+
+t("el resumen cuenta y suma por tipo", () => {
+  const r = S.resumenArchivo(S.movimientosDelMes(_stArch(), "2026-07"));
+  assert.equal(r.n, 6);
+  close(r.porTipo.gasto.total, 301.76, 0.005);
+  assert.equal(r.porTipo.gasto.n, 3);
+  close(r.porTipo.corte.total, 50.10, 0.005);
+  close(r.porTipo.retiro.total, 25.00, 0.005);
+  close(r.porTipo.aportacion.total, 10.00, 0.005);
+});
+
+t("el archivo lleva version, mes, quien y cuando", () => {
+  const a = S.construirArchivoMes(_stArch(), "2026-07", "Francisco");
+  assert.equal(a.version, 1, "sin version, dentro de un año nadie sabe leerlo");
+  assert.equal(a.mes, "2026-07");
+  assert.equal(a.por, "Francisco");
+  assert.ok(a.ts);
+  assert.equal(a.movimientos.length, 6);
+  assert.equal(a.resumen.n, 6);
+});
+
+t("verificar cuadra cuando el archivo esta completo", () => {
+  const st = _stArch();
+  const orig = S.movimientosDelMes(st, "2026-07");
+  const leido = JSON.parse(JSON.stringify(S.construirArchivoMes(st, "2026-07", "F")));
+  const v = S.verificarArchivo(leido, orig);
+  assert.equal(v.ok, true, v.problemas.join(" / "));
+  assert.deepEqual(v.problemas, []);
+});
+t("si falta un movimiento, NO cuadra", () => {
+  const st = _stArch();
+  const orig = S.movimientosDelMes(st, "2026-07");
+  const leido = S.construirArchivoMes(st, "2026-07", "F");
+  leido.movimientos = leido.movimientos.filter(x=>x.id!=="g2");
+  const v = S.verificarArchivo(leido, orig);
+  assert.equal(v.ok, false);
+  assert.ok(v.problemas.join(" ").includes("g2"), "hay que decir CUAL falta");
+});
+t("si un importe cambio por un centavo, NO cuadra", () => {
+  // Un centavo de diferencia es un archivo que no es el original. Redondear para que cuadre es
+  // justo lo que nunca se debe hacer con datos contables.
+  const st = _stArch();
+  const orig = S.movimientosDelMes(st, "2026-07");
+  const leido = S.construirArchivoMes(st, "2026-07", "F");
+  leido.movimientos.find(x=>x.id==="g1").importe = 100.51;
+  const v = S.verificarArchivo(leido, orig);
+  assert.equal(v.ok, false);
+  assert.ok(/total|suma/i.test(v.problemas.join(" ")));
+});
+t("si sobra un movimiento que no estaba, tampoco", () => {
+  const st = _stArch();
+  const orig = S.movimientosDelMes(st, "2026-07");
+  const leido = S.construirArchivoMes(st, "2026-07", "F");
+  leido.movimientos.push({ id:"intruso", _tipo:"gasto", _semana:"w1", fecha:"2026-07-15", importe:1 });
+  assert.equal(S.verificarArchivo(leido, orig).ok, false);
+});
+t("un id cambiado se caza aunque el conteo y las sumas cuadren", () => {
+  // El caso dificil: mismo numero de movimientos y misma suma, pero NO son los mismos. Solo lo
+  // detecta comparar los ids uno a uno.
+  const st = _stArch();
+  const orig = S.movimientosDelMes(st, "2026-07");
+  const leido = S.construirArchivoMes(st, "2026-07", "F");
+  leido.movimientos.find(x=>x.id==="g1").id = "otro";
+  const v = S.verificarArchivo(leido, orig);
+  assert.equal(v.ok, false);
+  const txt = v.problemas.join(" ");
+  assert.ok(/g1/.test(txt) && /otro/.test(txt), "hay que decir cual falta y cual sobra");
+});
+t("un archivo ilegible no se da por bueno", () => {
+  assert.equal(S.verificarArchivo(null, []).ok, false);
+  assert.equal(S.verificarArchivo({}, [{ id:"x", _tipo:"gasto", importe:1 }]).ok, false);
+});
+
+t("los meses archivables son los de FUERA de la ventana", () => {
+  const st = _stArch();
+  // Ventana de 3 meses desde el 30 de septiembre: entran julio, agosto y septiembre.
+  assert.deepEqual(S.mesesArchivables(st, "2026-09-30", 3), []);
+  // Con ventana de 1 mes desde el 30 de septiembre se conservan agosto y septiembre; julio sale.
+  assert.deepEqual(S.mesesArchivables(st, "2026-09-30", 1), ["2026-07"]);
+});
+t("nunca se propone archivar el mes en curso", () => {
+  // Archivar lo que se esta capturando es pedir un conflicto de sincronizacion. Con ventana 0 el
+  // limite es el mes de hoy, asi que el mes en curso queda fuera por definicion.
+  const st = { weeks:[{ id:"w1", gastos:[
+    { id:"g", fecha:"2026-09-15", importe:1 }, { id:"h", fecha:"2026-08-15", importe:1 } ] }] };
+  assert.deepEqual(S.mesesArchivables(st, "2026-09-30", 0), ["2026-08"]);
+});
+
+t("el archivado relee de Storage, no se cree lo que acaba de construir", () => {
+  // Comparar contra el objeto en memoria no probaria nada: lo que hay que demostrar es que el
+  // archivo QUE QUEDO EN LA NUBE se puede volver a leer y dice lo mismo.
+  const i = script.indexOf("async function archivarMes(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  // Ojo: quitar todo lo que siga a "//" se come las URLs (https://...). Solo lineas completas.
+  const vivo = b.replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(/alt=media/.test(vivo), "hay que releerlo de Storage");
+  assert.ok(/verificarArchivo\(\s*leido/.test(vivo),
+    "verificar el objeto que se acaba de construir en memoria no prueba nada");
+  const subir = vivo.indexOf("uploadType=media");
+  const releer = vivo.indexOf("alt=media");
+  const verificar = vivo.indexOf("verificarArchivo(");
+  assert.ok(subir > -1 && releer > subir && verificar > releer,
+    "el orden es subir -> releer -> verificar, y no otro");
+});
+t("el archivado no toca el estado", () => {
+  // Es lo que hace segura a la fase 1 en produccion: el peor caso es un archivo de mas.
+  const i = script.indexOf("async function archivarMes(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  // Ojo: quitar todo lo que siga a "//" se come las URLs (https://...). Solo lineas completas.
+  const vivo = b.replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(!/\bsave\(\)/.test(vivo) && !/\.splice\(/.test(vivo) && !/state\s*=/.test(vivo),
+    "la fase 1 escribe y verifica; quitar es la fase 3");
+});
+t("si la verificacion falla, se dice y no se da por bueno", () => {
+  const i = script.indexOf("async function archivarMes(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/const v = verificarArchivo\(/.test(b) && /if\(!v\.ok\)\{/.test(b),
+    "un archivo que no cuadra no puede reportarse como listo");
+  assert.ok(/v\.problemas/.test(b), "y hay que decir QUE no cuadro");
+});
+t("el mes en curso no se ofrece para archivar", () => {
+  const i = script.indexOf("async function renderArchivoMeses(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/mesActual/.test(b), "archivar lo que se esta capturando es pedir un conflicto");
+});
+t("la fase 1 NO borra del documento", () => {
+  // Es la propiedad que la hace segura de correr en produccion. Si esta funcion tocara `state`,
+  // dejaria de serlo.
+  const i = script.indexOf("function construirArchivoMes(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(!/state\s*=|\.splice\(|delete /.test(b), "construir el archivo no puede modificar nada");
+});
+t("subir verifica ANTES de darlo por bueno", () => {
+  const i = script.indexOf("async function archivarMes(");
+  assert.ok(i > -1, "falta la funcion que orquesta la fase 1");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/verificarArchivo\(/.test(b), "subir sin releer no prueba que el archivo sirva");
+  assert.ok(/currentRole!=="admin"/.test(b));
 });
 
 console.log("\n== el medidor de espacio, en tiempo y a la vista ==");
@@ -1514,7 +1733,8 @@ t("traer tambien valida y tambien exige motivo", () => {
     if (script[k] === "{") d++;
     else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
   }
-  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  // Ojo: quitar todo lo que siga a "//" se come las URLs (https://...). Solo lineas completas.
+  const vivo = b.replace(/^\s*\/\/.*$/gm, "");
   assert.ok(/puedeMoverPeriodo\(/.test(vivo), "hay que validar antes de escribir");
   assert.ok(/aplicarFechaBalance\(/.test(vivo));
   assert.ok(!/c\.fecha *=/.test(vivo), "la fecha del timbrado no se reescribe jamas");
@@ -1553,7 +1773,8 @@ t("mover exige motivo y no toca la fecha fiscal", () => {
     if (script[k] === "{") d++;
     else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
   }
-  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  // Ojo: quitar todo lo que siga a "//" se come las URLs (https://...). Solo lineas completas.
+  const vivo = b.replace(/^\s*\/\/.*$/gm, "");
   assert.ok(/puedeMoverPeriodo\(/.test(vivo), "hay que validar antes de escribir");
   assert.ok(/aplicarFechaBalance\(/.test(vivo));
   assert.ok(!/c\.fecha *=/.test(vivo), "la fecha del timbrado no se reescribe jamas");
@@ -2111,7 +2332,8 @@ t("la pantalla de descartados no puede escribir $NaN", () => {
     if (script[k] === "{") d++;
     else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
   }
-  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  // Ojo: quitar todo lo que siga a "//" se come las URLs (https://...). Solo lineas completas.
+  const vivo = b.replace(/^\s*\/\/.*$/gm, "");
   // El importe se puede seguir pintando: lo que no puede es pintarse SIN preguntar antes si el
   // comprobante lo tiene. fmt(undefined) imprime "$NaN" en una pantalla de contabilidad.
   const guarda = vivo.indexOf("cfdiIncompleto(");
@@ -2660,7 +2882,8 @@ t("el detalle y las metas se repintan juntos", () => {
   }
   // Sin los comentarios: una llamada comentada sigue conteniendo el texto, asi que buscarlo tal
   // cual daria por buena una pantalla que ya no repinta nada.
-  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  // Ojo: quitar todo lo que siga a "//" se come las URLs (https://...). Solo lineas completas.
+  const vivo = b.replace(/^\s*\/\/.*$/gm, "");
   assert.ok(vivo.includes("renderDetallePresupuesto("), "renderPresupuesto tiene que repintar su detalle");
 });
 t("los exportadores siguen colgados de un boton", () => {

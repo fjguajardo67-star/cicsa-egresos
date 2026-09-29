@@ -691,6 +691,17 @@ body.snav-min .side-theme span { display:none; }
     <div id="medidorEstado"></div>
 
     <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
+    <h4 style="margin:0 0 6px;color:var(--vd)">📦 Archivar meses viejos <span style="font-weight:400;font-size:11px;color:var(--txt2)">— fase 1: escribir y verificar</span></h4>
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:10px;line-height:1.5">
+      Escribe un mes completo en la nube (Storage) y lo <strong>vuelve a leer para comprobar</strong> que
+      coincide con el documento: mismos movimientos y mismas sumas al centavo.
+      <strong>Esta fase no quita nada.</strong> Sirve para verificar que el archivo se puede escribir y
+      leer bien antes de que, más adelante, se use para aligerar el documento.
+    </div>
+    <div id="archivoBody"></div>
+    <div class="status" id="archivoStatus" style="margin-top:8px"></div>
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
     <h4 style="margin:0 0 6px;color:var(--vd)">🛟 Respaldos</h4>
     <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Cada día se guarda solo una copia de toda la información, en cuanto alguien entra a la app. Se conservan los últimos 30 días. Descarga un archivo de vez en cuando y guárdalo fuera de la computadora: es la única copia que sobrevive si se pierde el proyecto de Firebase entero.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
@@ -2100,7 +2111,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-29-egresos-v10";
+const APP_BUILD = "2026-09-29-egresos-v11";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -3151,6 +3162,211 @@ async function ejecutarSync(){
     if(typeof actualizarEstadoCaptura==='function') actualizarEstadoCaptura();
     if(_syncPending&&!failed) programarSync();
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ARCHIVO DE MESES VIEJOS — FASE 1: escribir y verificar, sin borrar
+// ═══════════════════════════════════════════════════════════════════
+// Todo el estado vive en UN documento de Firestore con tope de 1 MiB, y cada gasto de toda la
+// historia viaja en cada guardado. A 74 movimientos por semana el tope llega en unos 4 meses.
+// La salida es archivar los meses que ya salieron de la ventana de consulta a Firebase Storage
+// —donde ya viven los cortes— y dejar en el documento solo lo reciente.
+//
+// Esta fase NO borra nada. Escribe el mes en Storage, lo vuelve a leer y lo compara contra el
+// documento: mismo número de movimientos, los mismos ids, y las mismas sumas al centavo.
+// Verificar antes de borrar —nunca al revés— es lo único que separa un archivado de una pérdida
+// de datos. Mientras la fase 1 corre sola, el peor caso es un archivo de más en Storage.
+const ARCHIVO_VERSION = 1;
+const ARCHIVO_PREFIJO = "archivo";
+
+// Cada tipo de movimiento guarda su importe en un campo distinto: un gasto en `importe`, y
+// cortes, retiros y aportaciones en `monto`. Leer el campo equivocado da cero, y entonces el
+// archivo "cuadraría" contra un total falso — que es la forma más silenciosa de perder dinero.
+function _montoMovimiento(m, tipo){
+  if(!m) return 0;
+  const v = (tipo === "gasto") ? m.importe : (m.monto != null ? m.monto : m.importe);
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+const _TIPOS_MOV = [["gastos","gasto"], ["cortes","corte"], ["retiros","retiro"], ["aportaciones","aportacion"]];
+
+// Los movimientos de un mes, de todas las semanas, con su procedencia pegada.
+// Guardar la semana y el tipo no es decorativo: sin eso no se puede devolver cada uno a su
+// sitio, y un archivo que no se puede restaurar no es un archivo, es un borrado con copia.
+function movimientosDelMes(st, mes){
+  const m = String(mes||"");
+  if(!m) return [];
+  const out = [];
+  (((st||{}).weeks)||[]).forEach(w=>{
+    if(!w) return;
+    _TIPOS_MOV.forEach(([campo, tipo])=>{
+      (w[campo]||[]).forEach(x=>{
+        // Sin fecha no hay forma de saber a qué mes pertenece. Llevárselo sería desaparecerlo.
+        if(!x || !x.fecha || String(x.fecha).slice(0,7) !== m) return;
+        out.push({ ...x, _semana: w.id, _tipo: tipo });
+      });
+    });
+  });
+  return out;
+}
+
+// Lo que hay que poder comparar después: cuántos y cuánto, separado por tipo.
+function resumenArchivo(movs){
+  const porTipo = {};
+  (movs||[]).forEach(x=>{
+    const t = (x && x._tipo) || "?";
+    if(!porTipo[t]) porTipo[t] = { n:0, total:0 };
+    porTipo[t].n++;
+    porTipo[t].total += _montoMovimiento(x, t);
+  });
+  Object.keys(porTipo).forEach(t=>{ porTipo[t].total = Math.round(porTipo[t].total*100)/100; });
+  return { n: (movs||[]).length, porTipo };
+}
+
+function construirArchivoMes(st, mes, quien){
+  const movimientos = movimientosDelMes(st, mes);
+  return {
+    version: ARCHIVO_VERSION,
+    mes: String(mes||""),
+    por: String(quien||""),
+    ts: new Date().toISOString(),
+    resumen: resumenArchivo(movimientos),
+    movimientos,
+  };
+}
+
+// Compara lo que se LEYÓ de Storage contra lo que hay en el documento. No vale "parece igual":
+// tienen que coincidir los ids uno a uno y las sumas al centavo. Redondear para que cuadre es
+// exactamente lo que nunca se hace con datos contables.
+function verificarArchivo(leido, original){
+  const problemas = [];
+  const orig = (original||[]).filter(Boolean);
+  if(!leido || typeof leido !== "object" || !Array.isArray(leido.movimientos)){
+    return { ok:false, problemas:["El archivo leído no tiene movimientos: no se puede dar por bueno."] };
+  }
+  const idsLeidos = new Set(leido.movimientos.map(x=>String(x && x.id)));
+  const idsOrig = new Set(orig.map(x=>String(x.id)));
+  const faltan = [...idsOrig].filter(id=>!idsLeidos.has(id));
+  const sobran = [...idsLeidos].filter(id=>!idsOrig.has(id));
+  if(faltan.length) problemas.push(`Faltan ${faltan.length} movimiento(s) en el archivo: ${faltan.slice(0,5).join(", ")}${faltan.length>5?"…":""}`);
+  if(sobran.length) problemas.push(`Sobran ${sobran.length} movimiento(s) que no están en el documento: ${sobran.slice(0,5).join(", ")}${sobran.length>5?"…":""}`);
+  const a = resumenArchivo(leido.movimientos), b = resumenArchivo(orig);
+  if(a.n !== b.n) problemas.push(`El archivo trae ${a.n} movimiento(s) y el documento tiene ${b.n}.`);
+  new Set([...Object.keys(a.porTipo), ...Object.keys(b.porTipo)]).forEach(t=>{
+    const ta = (a.porTipo[t]||{}).total || 0, tb = (b.porTipo[t]||{}).total || 0;
+    if(Math.abs(ta-tb) >= 0.005) problemas.push(`La suma de ${t} no coincide: archivo ${ta}, documento ${tb}.`);
+  });
+  return { ok: problemas.length === 0, problemas };
+}
+
+// Los meses que ya salieron de la ventana de consulta. El mes en curso nunca se propone:
+// archivar lo que se está capturando es pedir un conflicto de sincronización.
+function mesesArchivables(st, hoyISO, ventanaMeses){
+  const hoy = String(hoyISO||"").slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(hoy)) return [];
+  const d = new Date(hoy+"T12:00:00");
+  d.setMonth(d.getMonth() - Math.max(0, parseInt(ventanaMeses,10)||0));
+  const limite = d.toISOString().slice(0,7);
+  // No hace falta excluir el mes en curso aparte: con una ventana de 0 o más meses, `limite`
+  // nunca queda después del mes de hoy, así que `m < limite` ya lo deja fuera siempre.
+  const meses = new Set();
+  (((st||{}).weeks)||[]).forEach(w=>{
+    if(!w) return;
+    _TIPOS_MOV.forEach(([campo])=>{
+      (w[campo]||[]).forEach(x=>{
+        if(!x || !x.fecha) return;
+        const m = String(x.fecha).slice(0,7);
+        if(m < limite) meses.add(m);
+      });
+    });
+  });
+  return [...meses].sort();
+}
+
+function _urlArchivo(mes){
+  const path = `${ARCHIVO_PREFIJO}/${mes}.json`;
+  return `https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o/${encodeURIComponent(path)}`;
+}
+
+// FASE 1 completa para un mes: escribe, vuelve a leer y compara. No toca el documento.
+// El orden importa y no es negociable: se sube, se RELEE de Storage y solo entonces se compara.
+// Comparar contra lo que se acaba de construir en memoria no probaría nada — lo que hay que
+// demostrar es que el archivo que quedó en la nube se puede volver a leer y dice lo mismo.
+async function archivarMes(mes, opts){
+  const silencioso = !!(opts && opts.silencioso);
+  const di = (msg, cls) => { if(!silencioso) setStatus("archivoStatus", msg, cls); };
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede archivar."); return { ok:false }; }
+  const movs = movimientosDelMes(state, mes);
+  if(!movs.length){ di(`No hay movimientos de ${mes}.`, "err"); return { ok:false, problemas:["Sin movimientos"] }; }
+
+  di(`Escribiendo ${movs.length} movimiento(s) de ${mes}…`, "loading");
+  const archivo = construirArchivoMes(state, mes, (currentNombre||currentUser?.email||""));
+  const path = `${ARCHIVO_PREFIJO}/${mes}.json`;
+  try{
+    const blob = new Blob([JSON.stringify(archivo)], { type:"application/json" });
+    const r = await fetchStorage(
+      `https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o?uploadType=media&name=${encodeURIComponent(path)}`,
+      { method:"POST", headers:{ "Content-Type":"application/json" }, body: blob });
+    if(!r.ok) throw new Error(`Storage respondió ${r.status} al subir`);
+  }catch(e){
+    di(`❌ No se pudo escribir el archivo de ${mes}: ${e.message||e}. No se cambió nada.`, "err");
+    return { ok:false, problemas:[String(e.message||e)] };
+  }
+
+  di(`Releyendo el archivo de ${mes} para comprobarlo…`, "loading");
+  let leido = null;
+  try{
+    const r2 = await fetchStorage(_urlArchivo(mes)+"?alt=media");
+    if(!r2.ok) throw new Error(`Storage respondió ${r2.status} al leer`);
+    leido = await r2.json();
+  }catch(e){
+    di(`❌ El archivo de ${mes} se subió pero NO se pudo volver a leer: ${e.message||e}. No confíes en él.`, "err");
+    return { ok:false, problemas:[String(e.message||e)] };
+  }
+
+  const v = verificarArchivo(leido, movs);
+  if(!v.ok){
+    di(`❌ El archivo de ${mes} NO cuadra con el documento:\n· ${v.problemas.join("\n· ")}`, "err");
+    return { ok:false, problemas:v.problemas };
+  }
+  const r = archivo.resumen;
+  const detalle = Object.keys(r.porTipo).map(k=>`${r.porTipo[k].n} ${k}(s) ${fmt(r.porTipo[k].total)}`).join(" · ");
+  di(`✅ ${mes} archivado y verificado — ${r.n} movimiento(s): ${detalle}. `+
+     `Nada se quitó del documento: esta fase solo escribe.`, "ok");
+  try{ renderArchivoMeses(); }catch(_){}
+  return { ok:true, resumen:r };
+}
+
+// Qué meses hay en el documento y cuáles ya tienen archivo. Solo lectura.
+async function renderArchivoMeses(){
+  const body = document.getElementById("archivoBody");
+  if(!body) return;
+  const meses = {};
+  (((state||{}).weeks)||[]).forEach(w=>{
+    if(!w) return;
+    _TIPOS_MOV.forEach(([campo, tipo])=>{
+      (w[campo]||[]).forEach(x=>{
+        if(!x || !x.fecha) return;
+        const m = String(x.fecha).slice(0,7);
+        if(!meses[m]) meses[m] = { n:0, total:0 };
+        meses[m].n++; meses[m].total += _montoMovimiento(x, tipo);
+      });
+    });
+  });
+  const lista = Object.keys(meses).sort();
+  if(!lista.length){ body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Todavía no hay movimientos.</div>`; return; }
+  const mesActual = todayStr().slice(0,7);
+  body.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>Mes</th><th style="text-align:right">Movimientos</th><th style="text-align:right">Importe</th><th>Archivo</th></tr></thead><tbody>
+    ${lista.map(m=>`<tr${m===mesActual?' style="opacity:.6"':""}>
+      <td><strong>${esc(m)}</strong>${m===mesActual?' <span style="font-size:11px;color:var(--txt2)">(en curso)</span>':""}</td>
+      <td class="amount-cell">${meses[m].n}</td>
+      <td class="amount-cell">${fmt(Math.round(meses[m].total*100)/100)}</td>
+      <td>${m===mesActual
+        ? `<span style="font-size:11px;color:var(--txt2)">no se archiva el mes en curso</span>`
+        : `<button class="btn btn-light" style="padding:3px 10px;font-size:11px" onclick="archivarMes('${escAttrJs(m)}')">📦 Escribir y verificar</button>`}</td>
+    </tr>`).join("")}
+  </tbody></table></div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -12187,6 +12403,7 @@ async function abrirAdminModal() {
   cargarUsuarios();
   renderRespaldos();
   pintarMedidorEstado();
+  try{ renderArchivoMeses(); }catch(_){}
 }
 
 // Traduce la medición a algo accionable: no "812 KB" sino "te caben ~900 gastos más".
