@@ -105,7 +105,8 @@ const FUNCS = [
   "_b64ABytes", "_liberarAdjunto", "_gmailHuella", "_encolarMiniatura",
   "fbAuthHeader", "rfcPropio", "guardarRfcPropio",
   "claseGastoSinRespaldo", "gastosSinRespaldo", "resumenSinRespaldo", "gastosConImporteDeFacturaPropia",
-  "motivoNoEsGasto", "deducirRfcPropio", "rfcPropioEfectivo", "fechaBalanceCfdi", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
+  "motivoNoEsGasto", "deducirRfcPropio", "rfcPropioEfectivo", "fechaBalanceCfdi",
+  "ritmoSemanal", "semanasRestantes", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
   "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance", "facturasFueraDelPeriodo",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
@@ -1092,6 +1093,93 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== el medidor de espacio, en tiempo y a la vista ==");
+// El tope de 1 MiB no avisa por su cuenta: el dia que se cruza, la app deja de poder guardar.
+// El medidor vivia dentro del modal de administracion y decia "caben 1,214 mas", que suena
+// holgado hasta que lo traduces: al ritmo real son unos cuatro meses.
+const _mov = (fecha) => ({ id:fecha+Math.random(), fecha, importe:100 });
+const _semanas = (desde, n, dias) => {
+  // n movimientos repartidos uno por dia a partir de `desde`.
+  const out = [];
+  for(let i=0;i<n;i++){
+    const d = new Date(desde+"T12:00:00"); d.setDate(d.getDate()+Math.floor(i*dias/n));
+    out.push(_mov(d.toISOString().slice(0,10)));
+  }
+  return out;
+};
+
+t("el ritmo sale de los datos reales, no de una constante", () => {
+  // 70 movimientos repartidos en 70 dias = 10 semanas -> 7 por semana.
+  const st = { weeks:[{ id:"1", gastos:_semanas("2026-07-01", 70, 70), cortes:[], retiros:[] }] };
+  const r = S.ritmoSemanal(st);
+  assert.ok(r > 6.5 && r < 8.5, "esperaba ~7/semana, salio "+r);
+});
+t("cuenta gastos, cortes y retiros juntos", () => {
+  const st = { weeks:[{ id:"1",
+    gastos:_semanas("2026-07-01", 30, 70), cortes:_semanas("2026-07-01", 30, 70), retiros:_semanas("2026-07-01", 10, 70) }] };
+  assert.ok(S.ritmoSemanal(st) > 6.5, "los cortes son la mayoria de los movimientos: ignorarlos subestima");
+});
+t("con poca historia no se estima un ritmo", () => {
+  // Inventar un ritmo con cuatro capturas daria una fecha de tope sin ningun fundamento.
+  assert.equal(S.ritmoSemanal({ weeks:[{ id:"1", gastos:[_mov("2026-09-01"), _mov("2026-09-02")] }] }), 0);
+  // Y el caso que muerde: POCAS capturas pero bien repartidas en el tiempo. El periodo es largo,
+  // asi que la guardia de "mas de una semana" no las atrapa; hace falta el minimo de 30.
+  assert.equal(S.ritmoSemanal({ weeks:[{ id:"1", gastos:_semanas("2026-07-01", 5, 60) }] }), 0,
+    "cinco capturas en dos meses no son un ritmo del que fiarse");
+  assert.equal(S.ritmoSemanal(null), 0);
+  assert.equal(S.ritmoSemanal({ weeks:[] }), 0);
+});
+t("todo el mismo dia no es un ritmo", () => {
+  const mismos = [];
+  for(let i=0;i<50;i++) mismos.push(_mov("2026-09-01"));
+  assert.equal(S.ritmoSemanal({ weeks:[{ id:"1", gastos:mismos }] }), 0, "dividir entre cero periodo daria Infinity");
+});
+
+t("las semanas restantes salen de lo que cabe y del ritmo", () => {
+  assert.equal(S.semanasRestantes(1214, 74), 16);
+  assert.equal(S.semanasRestantes(0, 74), 0);
+});
+t("sin ritmo no se promete una fecha", () => {
+  assert.equal(S.semanasRestantes(1214, 0), null);
+  assert.equal(S.semanasRestantes(null, 74), null);
+});
+
+t("el medidor se pinta en el Resumen, no solo en el modal", () => {
+  assert.ok(html.includes('id="medidorEstadoResumen"'), "en el modal solo lo ve quien va a buscarlo");
+  assert.ok(html.includes('id="rsEspacioCard"'));
+  // Que el hueco exista en la pagina no basta: hay que escribir en el.
+  const p = script.indexOf("function pintarMedidorEstado(");
+  let j = script.indexOf("{", p), d = 0, pb = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { pb = script.slice(p, k + 1); break; } }
+  }
+  assert.ok(/medidorEstadoResumen/.test(pb), "un hueco que nadie llena deja la tarjeta en blanco");
+  const i = script.indexOf("function renderResumen(");
+  const b = script.slice(i, i + 600);
+  assert.ok(/pintarMedidorEstado\(/.test(b), "tiene que repintarse con la pantalla que se abre a diario");
+});
+t("y solo lo ve el admin", () => {
+  const i = script.indexOf("function pintarMedidorEstado(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/currentRole *=== *"admin"/.test(b), "un operativo no puede hacer nada con este numero");
+});
+t("el medidor dice el tiempo, no solo el conteo", () => {
+  const i = script.indexOf("function _pintarMedidorEn(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/semanasRestantes\(/.test(b) && /ritmoSemanal\(/.test(b),
+    "'caben 1,214 mas' se lee como holgura cuando son cuatro meses");
 });
 
 console.log("\n== el RFC deducido: la defensa no puede depender de que este configurado ==");

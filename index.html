@@ -873,6 +873,15 @@ body.snav-min .side-theme span { display:none; }
     </div>
     <div id="rsMovsEmpty" style="display:none;color:var(--txt2);font-size:13px;padding:10px 0">Aún no hay capturas en esta semana guardada.</div>
   </div>
+  <!-- El medidor vivía dentro del modal de administración, donde solo se veía si alguien iba a
+       buscarlo. El tope de 1 MiB no avisa por su cuenta: el día que se cruza, la app deja de
+       poder guardar. Aquí queda a la vista en la pantalla que se abre a diario. Solo admin: un
+       operativo no puede hacer nada con este número. -->
+  <div class="card" id="rsEspacioCard" style="display:none;margin-top:20px">
+    <div class="card-title">📦 Espacio del archivo</div>
+    <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Toda la información vive en un solo archivo en la nube, y ese archivo tiene un tope. Cuando se llene, la app deja de poder guardar.</div>
+    <div id="medidorEstadoResumen"></div>
+  </div>
 </div>
 
 <!-- ═══════════════ PAGE: CAPTURA ═══════════════ -->
@@ -2091,7 +2100,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-29-egresos-v9";
+const APP_BUILD = "2026-09-29-egresos-v10";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -6354,6 +6363,9 @@ function exportarPDF(){
 // y la última conciliación SAT guardada en este dispositivo.
 // ═══════════════════════════════════════════════════════════
 function renderResumen(){
+  // El medidor de espacio se repinta con el Resumen: es la pantalla que se abre a diario, y un
+  // tope que no avisa solo tiene que verse sin ir a buscarlo.
+  try{ pintarMedidorEstado(); }catch(_){}
   const kpis=document.getElementById("rsKpis"); if(!kpis) return;
   const wk=getActiveWeek();
   const sem=document.getElementById("rsSemana"); if(sem) sem.textContent=wk?.label||"Sin semana";
@@ -12178,19 +12190,53 @@ async function abrirAdminModal() {
 }
 
 // Traduce la medición a algo accionable: no "812 KB" sino "te caben ~900 gastos más".
+// Cuánto tiempo, no solo cuántos movimientos. "Caben 1,214 más" suena holgado; "unas 16 semanas
+// al ritmo de las últimas" es lo que deja decidir si hay que actuar. El ritmo se saca de los
+// datos reales de la empresa, no de una constante.
+function ritmoSemanal(st){
+  const weeks = ((st||{}).weeks)||[];
+  const fechas = [];
+  weeks.forEach(w=>{
+    [...(w.gastos||[]), ...(w.cortes||[]), ...(w.retiros||[])].forEach(m=>{ if(m && m.fecha) fechas.push(m.fecha); });
+  });
+  if(fechas.length < 30) return 0;          // muy poca historia para estimar un ritmo
+  fechas.sort();
+  const d0 = new Date(fechas[0]+"T12:00:00").getTime();
+  const d1 = new Date(fechas[fechas.length-1]+"T12:00:00").getTime();
+  const semanas = (d1-d0)/(7*86400000);
+  if(!(semanas > 1)) return 0;
+  return fechas.length/semanas;
+}
+function semanasRestantes(movimientosQueCaben, porSemana){
+  if(!(porSemana > 0) || movimientosQueCaben == null) return null;
+  return Math.max(0, Math.round(movimientosQueCaben/porSemana));
+}
+
 function pintarMedidorEstado(){
-  const el = document.getElementById("medidorEstado");
+  // Se pinta en los dos sitios: el modal de administración y la tarjeta del Resumen.
+  [ "medidorEstado", "medidorEstadoResumen" ].forEach(id=>_pintarMedidorEn(id));
+  const card = document.getElementById("rsEspacioCard");
+  if(card) card.style.display = (typeof currentRole!=="undefined" && currentRole==="admin") ? "block" : "none";
+}
+function _pintarMedidorEn(elId){
+  const el = document.getElementById(elId);
   if(!el) return;
   const m = medirEstado(JSON.stringify(state), contarMovimientos(state));
   const kb = (m.bytes/1024).toFixed(0);
   const tope = (FIRESTORE_TOPE_DOC/1024).toFixed(0);
   const color = m.nivel==="critico" ? "var(--red)" : (m.nivel==="aviso" ? "var(--do)" : "var(--vm)");
   const caben = m.movimientosQueCaben;
+  const _sem = semanasRestantes(caben, ritmoSemanal(state));
+  // El tiempo es lo accionable. Sin él, "1,214 más" se lee como holgura cuando pueden ser
+  // cuatro meses.
+  const _enTiempo = _sem == null ? "" :
+    (_sem >= 104 ? ` — más de dos años al ritmo de las últimas semanas`
+                 : ` — unas <strong>${_sem.toLocaleString("es-MX")} semanas</strong> al ritmo de las últimas`);
   const restante = caben == null
     ? "Todavía no hay movimientos suficientes para estimar cuánto falta."
     : (caben > 20000
         ? `Al ritmo actual caben decenas de miles de movimientos más: no es una preocupación cercana.`
-        : `Al peso promedio de tus movimientos (${m.porMovimiento} bytes cada uno) caben unos <strong>${caben.toLocaleString("es-MX")}</strong> más.`);
+        : `Al peso promedio de tus movimientos (${m.porMovimiento} bytes cada uno) caben unos <strong>${caben.toLocaleString("es-MX")}</strong> más${_enTiempo}.`);
   const alerta = m.nivel==="ok" ? "" :
     `<div style="margin-top:10px;padding:10px 12px;background:${m.nivel==="critico"?"var(--red-bg)":"#FFF8E1"};border-left:3px solid ${color};font-size:12.5px;line-height:1.5">
        <strong style="color:${color}">${m.nivel==="critico"?"Hay que actuar":"Conviene planearlo"}</strong> —
