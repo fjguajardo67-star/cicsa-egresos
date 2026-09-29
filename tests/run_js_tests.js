@@ -90,7 +90,7 @@ function extractConst(name) {
 // ninguna prueba lo notara.
 const CONSTS = ["CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
-const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK"];
+const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK", "MARCA_PERIODO"];
 
 
 const FUNCS = [
@@ -105,6 +105,8 @@ const FUNCS = [
   "_b64ABytes", "_liberarAdjunto", "_gmailHuella", "_encolarMiniatura",
   "fbAuthHeader", "rfcPropio", "guardarRfcPropio",
   "claseGastoSinRespaldo", "gastosSinRespaldo", "resumenSinRespaldo", "gastosConImporteDeFacturaPropia",
+  "motivoNoEsGasto", "fechaBalanceCfdi", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
+  "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
@@ -1090,6 +1092,200 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(b.includes("resumenDescarte("), "tiene que decir el importe total");
   assert.ok(/fmtDate\(c\.fecha\)/.test(b), "y listar la fecha de cada uno");
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
+});
+
+console.log("\n== el cierre cada 4 semanas y el timbrado no van al mismo paso ==");
+// Se cierra cada 4 semanas y se emiten 4 facturas. El timbrado se desfasa: una factura del
+// periodo que cierra sale timbrada unos dias despues y el ingreso se corre al siguiente, o al
+// reves. La fecha FISCAL no se puede tocar —es la del timbrado y es lo que declaras— asi que se
+// guarda aparte una fecha SOLO para efectos de balance, con quien, cuando y por que. Es el mismo
+// criterio que ya existia entre `importe` (lo que dice el comprobante) y `montoCaja` (lo que
+// salio del concentrado): dos numeros separados, cada pantalla usa el suyo.
+const _FAC = (uuid, fecha, extra) => ({ uuid, rfc:"CIC190426SD4", fecha, subtotal:100000,
+  total:116000, tipo:"I", folioComp:"1430", nombreReceptor:"AGROINDUSTRIAS DEL BALSAS", ...(extra||{}) });
+
+t("sin ajuste, manda la fecha del timbrado", () => {
+  assert.equal(S.fechaBalanceCfdi(_FAC("A","2026-09-02")), "2026-09-02");
+});
+t("con ajuste, manda la fecha de balance", () => {
+  assert.equal(S.fechaBalanceCfdi(_FAC("A","2026-09-02",{ fechaBalance:"2026-08-28" })), "2026-08-28");
+});
+t("la fecha FISCAL nunca se toca", () => {
+  const c = _FAC("A","2026-09-02");
+  S.aplicarFechaBalance(c, "2026-08-28", "Francisco", "cierre de agosto");
+  assert.equal(c.fecha, "2026-09-02", "la fecha del timbrado es lo que declaras: no se reescribe");
+  assert.equal(c.fechaBalance, "2026-08-28");
+  assert.equal(c.fechaBalancePor, "Francisco");
+  assert.equal(c.fechaBalanceNota, "cierre de agosto");
+  assert.ok(c.fechaBalanceTs, "sin cuando, no hay rastro");
+});
+t("una fecha con mala forma se rechaza, no se guarda a medias", () => {
+  const c = _FAC("A","2026-09-02");
+  assert.equal(S.puedeMoverPeriodo(c, "02/09/2026").ok, false);
+  assert.equal(S.puedeMoverPeriodo(c, "").ok, false);
+  assert.equal(S.puedeMoverPeriodo(c, "2026-08-28").ok, true);
+});
+t("mover a su propia fecha no es mover", () => {
+  const r = S.puedeMoverPeriodo(_FAC("A","2026-09-02"), "2026-09-02");
+  assert.equal(r.ok, false);
+  assert.ok(/misma/i.test(r.motivo||""));
+});
+t("no se puede mover un comprobante ajeno", () => {
+  // Solo TUS ventas se reacomodan por cierre. Mover la factura de un proveedor seria falsear
+  // cuando te lo cobraron.
+  const r = S.puedeMoverPeriodo({ rfc:"DUPJ800101ABC", fecha:"2026-09-02", tipo:"I" }, "2026-08-28", "CIC190426SD4");
+  assert.equal(r.ok, false);
+});
+t("quitar el ajuste lo deja como estaba", () => {
+  const c = _FAC("A","2026-09-02",{ fechaBalance:"2026-08-28", fechaBalancePor:"F", fechaBalanceTs:"t", fechaBalanceNota:"n" });
+  S.quitarFechaBalance(c);
+  assert.equal(c.fechaBalance, undefined);
+  assert.equal(c.fechaBalancePor, undefined);
+  assert.equal(c.fechaBalanceTs, undefined);
+  assert.equal(c.fechaBalanceNota, undefined);
+  assert.equal(S.fechaBalanceCfdi(c), "2026-09-02");
+});
+
+t("una factura movida SALE del periodo donde se timbro", () => {
+  const cfdis = [_FAC("A","2026-09-02",{ fechaBalance:"2026-08-28" })];
+  const b = S.balanceOperativo(cfdis, "2026-09-01", "2026-09-28", "CIC190426SD4");
+  assert.equal(b.nFacturas, 0, "si no sale de aqui, el mismo ingreso se cuenta dos veces");
+  close(b.facturado, 0, 0.01);
+});
+t("y ENTRA al periodo al que se movio", () => {
+  const cfdis = [_FAC("A","2026-09-02",{ fechaBalance:"2026-08-28" })];
+  const b = S.balanceOperativo(cfdis, "2026-08-01", "2026-08-31", "CIC190426SD4");
+  assert.equal(b.nFacturas, 1);
+  close(b.facturado, 100000, 0.01);
+});
+t("el detalle tambien la mueve, o el reporte se contradice", () => {
+  const cfdis = [_FAC("A","2026-09-02",{ fechaBalance:"2026-08-28" })];
+  const d = S.ingresosDetalle(cfdis, "2026-08-01", "2026-08-31", "CIC190426SD4");
+  assert.equal(d.facturas.length, 1, "el total y su desglose tienen que decir lo mismo");
+  assert.equal(d.facturas[0].movida, true, "y hay que decir que fue movida");
+});
+
+t("el periodo declara lo que le entro y lo que le salio", () => {
+  const cfdis = [
+    _FAC("entra","2026-09-02",{ fechaBalance:"2026-08-28" }),   // timbrada en sep, cuenta en ago
+    _FAC("sale","2026-08-30",{ fechaBalance:"2026-09-03" }),    // timbrada en ago, cuenta en sep
+    _FAC("queda","2026-08-15"),
+  ];
+  const m = S.movimientosDePeriodo(cfdis, "2026-08-01", "2026-08-31", "CIC190426SD4");
+  assert.deepEqual(m.entran.map(x=>x.uuid), ["entra"]);
+  assert.deepEqual(m.salen.map(x=>x.uuid), ["sale"]);
+  close(m.totalEntran, 100000, 0.01);
+  close(m.totalSalen, 100000, 0.01);
+});
+t("sin movimientos, las dos listas vacias", () => {
+  const m = S.movimientosDePeriodo([_FAC("q","2026-08-15")], "2026-08-01", "2026-08-31", "CIC190426SD4");
+  assert.deepEqual(m.entran, []); assert.deepEqual(m.salen, []);
+  assert.equal(m.totalEntran, 0); assert.equal(m.totalSalen, 0);
+});
+t("cfdiMovidoDePeriodo dice si hay ajuste y de donde", () => {
+  assert.equal(S.cfdiMovidoDePeriodo(_FAC("A","2026-09-02")), null);
+  const m = S.cfdiMovidoDePeriodo(_FAC("A","2026-09-02",{ fechaBalance:"2026-08-28", fechaBalancePor:"Francisco" }));
+  assert.equal(m.de, "2026-09-02");
+  assert.equal(m.a, "2026-08-28");
+  assert.equal(m.por, "Francisco");
+});
+t("el balance ofrece mover y deshacer, y solo al admin", () => {
+  const i = script.indexOf("function renderBalance(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/moverFacturaDePeriodo\(/.test(b), "sin boton, la funcion no le sirve a nadie");
+  assert.ok(/devolverFacturaAsuPeriodo\(/.test(b), "un ajuste que no se puede deshacer es una trampa");
+  assert.ok(/movimientosDePeriodo\(/.test(b), "hay que enseñar que entro y que salio");
+  assert.ok(/currentRole *=== *"admin"/.test(b), "reacomodar un cierre no es para cualquiera");
+});
+t("mover exige motivo y no toca la fecha fiscal", () => {
+  const i = script.indexOf("async function moverFacturaDePeriodo(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  assert.ok(/puedeMoverPeriodo\(/.test(vivo), "hay que validar antes de escribir");
+  assert.ok(/aplicarFechaBalance\(/.test(vivo));
+  assert.ok(!/c\.fecha *=/.test(vivo), "la fecha del timbrado no se reescribe jamas");
+  assert.ok(/prompt\([^)]*por qu|nota/i.test(vivo), "sin motivo guardado no hay rastro que auditar");
+});
+t("si no se pudo guardar, el ajuste se revierte en memoria", () => {
+  // Dejarlo aplicado en pantalla tras un fallo de red hace creer que el cierre quedo cuadrado.
+  const i = script.indexOf("async function moverFacturaDePeriodo(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/if\(!ok\)/.test(b) && /antes/.test(b), "hace falta deshacer el cambio local");
+});
+t("volver a subir el XML no borra el ajuste", () => {
+  // guardarCfdisEnStore reescribe el documento entero. Si el ajuste no se conserva, resubir los
+  // XML de un mes deshace en silencio todos los cierres ya cuadrados.
+  const i = script.indexOf("async function guardarCfdisEnStore(");
+  const b = script.slice(i, i + 3000);
+  assert.ok(/MARCA_PERIODO|fechaBalance/.test(b), "el ajuste tiene que sobrevivir a resubir el XML");
+});
+
+console.log("\n== la puerta por donde entro: capturar una venta como gasto ==");
+// La factura 1426 que CICSA le emitio a AGROINDUSTRIAS DEL BALSAS el 28 de agosto: subtotal
+// $586,060.00, total con IVA $679,829.60. Ese total se capturo como gasto de hielo, con el folio
+// 1426 —el numero de la propia factura— y la misma fecha. La venta acabo en los DOS lados del
+// balance: el subtotal como ingreso y el total como egreso.
+const _MI_RFC = "CIC190426SD4";
+const _F1426 = { uuid:"U1426", rfc:_MI_RFC, proveedor:"COMEDORES INDUSTRIALES DE CUAUHTEMOC",
+                 nombreReceptor:"AGROINDUSTRIAS DEL BALSAS", fecha:"2026-08-28",
+                 subtotal:586060, total:679829.60, tipo:"I", folioComp:"1426" };
+
+t("un comprobante que emitio la propia empresa NO es un gasto", () => {
+  assert.equal(S.motivoNoEsGasto(_F1426, _MI_RFC), "propio");
+});
+t("la factura de un proveedor real si lo es", () => {
+  assert.equal(S.motivoNoEsGasto({ rfc:"DUPJ800101ABC", tipo:"I", total:17400 }, _MI_RFC), "");
+});
+t("sin RFC configurado no se bloquea nada", () => {
+  // Bloquear sin saber cual es tu RFC seria adivinar, y un bloqueo en falso impide trabajar.
+  assert.equal(S.motivoNoEsGasto(_F1426, ""), "");
+  assert.equal(S.motivoNoEsGasto(_F1426, "   "), "");
+});
+t("un CFDI sin RFC no se confunde con uno propio", () => {
+  assert.equal(S.motivoNoEsGasto({ rfc:"", tipo:"I", total:100 }, _MI_RFC), "");
+  // Y el caso que de verdad muerde: NINGUNO de los dos RFC se conoce. Sin la guardia, "" del
+  // comprobante seria igual a "" del RFC propio y la app bloquearia una factura legitima de
+  // proveedor. Un bloqueo en falso no descuadra nada: impide trabajar, que es peor.
+  assert.equal(S.motivoNoEsGasto({ rfc:"", tipo:"I", total:100 }, ""), "");
+  assert.equal(S.motivoNoEsGasto({ tipo:"I", total:100 }, "   "), "");
+});
+t("el RFC se compara sin mayusculas ni espacios", () => {
+  assert.equal(S.motivoNoEsGasto({ ..._F1426, rfc:"  cic190426sd4 " }, _MI_RFC), "propio");
+});
+t("sin comprobante no hay nada que juzgar", () => {
+  assert.equal(S.motivoNoEsGasto(null, _MI_RFC), "");
+});
+t("guardar bloquea de verdad, no solo avisa", () => {
+  const i = script.indexOf("function guardarGasto(");
+  assert.ok(i > -1);
+  const b = script.slice(i, i + 9000);
+  assert.ok(/motivoNoEsGasto\(/.test(b), "el bloqueo tiene que estar en el guardado, no solo en la pantalla");
+});
+t("el balance avisa cuando la misma factura esta de los dos lados", () => {
+  const i = script.indexOf("function renderBalance(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/gastosConImporteDeFacturaPropia\(/.test(b),
+    "es donde el doble conteo se ve, y donde se estaba leyendo el numero equivocado");
+});
+t("el aviso del balance existe en la pagina", () => {
+  assert.ok(html.includes('id="balDobleConteo"'));
 });
 
 console.log("\n== la direccion que le faltaba al cruce ==");
