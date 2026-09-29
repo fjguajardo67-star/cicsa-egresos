@@ -2091,7 +2091,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-29-egresos-v8";
+const APP_BUILD = "2026-09-29-egresos-v9";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -4365,7 +4365,9 @@ function guardarGasto(){
   if(!gasto.proveedor||!(gasto.importe>0)){ setStatus("statusGuardar","⚠ Proveedor e importe (mayor que cero) son obligatorios.","err"); return; }
   let _saltarExtraccion=false;   // no gastar una 2ª lectura de IA si es duplicado ya en catálogo
   // Una venta propia no se discute: el RFC del emisor es el tuyo y eso lo dice el timbrado.
-  if(motivoNoEsGasto(_cfdiGmail, (typeof rfcPropio==="function"?rfcPropio():"")) === "propio"){
+  // El mismo RFC efectivo que usa el cruce: si el bloqueo dependiera de que alguien tecleó el
+  // RFC, no protegería justo el caso que falló.
+  if(motivoNoEsGasto(_cfdiGmail, rfcPropioEfectivo(_cfdisStore||[], (typeof rfcPropio==="function"?rfcPropio():"")).rfc) === "propio"){
     const _fp = (_cfdiGmail.serie||"")+(_cfdiGmail.folioComp||"") || _cfdiGmail.folio || "";
     alert(`🚫 NO se puede registrar como gasto.\n\n`+
           `El comprobante ${_fp} lo EMITIÓ TU EMPRESA (RFC ${_cfdiGmail.rfc}): es una venta, un `+
@@ -8105,17 +8107,49 @@ function filtrarCfdisConciliables(cfdis, rfcEmpresa){
 // único que aparece en TODOS los comprobantes: como emisor en lo que factura y como receptor en
 // lo que le facturan. El de un cliente grande solo sale como receptor, el de un proveedor solo
 // como emisor — por eso contar ambos papeles distingue bien y contar solo receptores no.
-function autodetectarRfcPropio(cfdis){
-  if(rfcPropio()) return "";
+// Deduce el RFC de la empresa SIN guardarlo. Es la misma cuenta de siempre, separada de su
+// efecto secundario para poder usarla como DETECCIÓN.
+// Hacía falta porque la defensa contra "esto es una venta, no un gasto" comparaba contra el RFC
+// configurado, y si estaba vacío no bloqueaba nada — que es exactamente la circunstancia que
+// produjo el error de $679,829.60: sin RFC, la factura 1426 que CICSA emitió salía en la lista
+// de faltantes como "te falta capturar", con su botón de Capturar al lado.
+function deducirRfcPropio(cfdis){
   const lista=(cfdis||[]).filter(c=>c && (c.rfc||c.rfcReceptor));
   if(lista.length<3) return "";                       // muy pocos datos para deducir nada
-  const cuenta={};
+  const cuenta={}, comoEmisor={}, comoReceptor={};
   lista.forEach(c=>{
-    const partes=new Set([(c.rfc||"").trim().toUpperCase(), (c.rfcReceptor||"").trim().toUpperCase()].filter(Boolean));
-    partes.forEach(x=>{ cuenta[x]=(cuenta[x]||0)+1; });
+    const e=(c.rfc||"").trim().toUpperCase(), r=(c.rfcReceptor||"").trim().toUpperCase();
+    if(e) comoEmisor[e]=true;
+    if(r) comoReceptor[r]=true;
+    new Set([e,r].filter(Boolean)).forEach(x=>{ cuenta[x]=(cuenta[x]||0)+1; });
   });
   const top=Object.keys(cuenta).sort((a,b)=>cuenta[b]-cuenta[a])[0];
   if(!top || cuenta[top] < lista.length*0.6) return "";  // sin mayoría clara, que lo escriba el usuario
+  // Y tiene que aparecer en LOS DOS papeles. Contar la mayoría no basta: un proveedor que factura
+  // mucho sale como emisor en el 100% de sus comprobantes y se deducía como si fuera la empresa
+  // —con lo que sus facturas dejaban de pedirse y el gasto real se escondía, que es peor que el
+  // problema que esto viene a resolver—. El RFC propio es el único que está de los dos lados:
+  // receptor en lo que te facturan, emisor en lo que vendes.
+  // Si no se puede afirmar, se devuelve vacío: no excluir nada deja las facturas a la vista, que
+  // es el fallo seguro. Quien quiera la exclusión, que teclee el RFC.
+  if(!comoEmisor[top] || !comoReceptor[top]) return "";
+  return top;
+}
+
+// El RFC con el que se puede razonar AHORA: el configurado si lo hay, y si no el deducido.
+// Devuelve también de dónde salió: usar uno deducido sin decirlo es actuar a espaldas de quien
+// opera. Deducir sirve para ADVERTIR; configurar la empresa lo sigue haciendo una persona.
+function rfcPropioEfectivo(cfdis, rfcConfigurado){
+  const conf = String(rfcConfigurado||"").trim().toUpperCase();
+  if(conf) return { rfc: conf, origen: "configurado" };
+  const ded = deducirRfcPropio(cfdis);
+  return ded ? { rfc: ded, origen: "deducido" } : { rfc: "", origen: "" };
+}
+
+function autodetectarRfcPropio(cfdis){
+  if(rfcPropio()) return "";
+  const top = deducirRfcPropio(cfdis);
+  if(!top) return "";
   guardarRfcPropio(top);
   const inp=document.getElementById("satRfcPropio"); if(inp) inp.value=top;
   return top;
@@ -8373,7 +8407,12 @@ function gastosConImporteDeFacturaPropia(gastos, cfdis, rfcEmpresa, tol){
 
 function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
   const gastosCICSA=allGastosAllWeeks().filter(g=>{ if(fechaIni&&g.fecha<fechaIni) return false; if(fechaFin&&g.fecha>fechaFin) return false; return true; });
-  const rfcEmp = rfcEmpresa!==undefined ? rfcEmpresa : (typeof rfcPropio==="function" ? rfcPropio() : "");
+  const _rfcConf = rfcEmpresa!==undefined ? rfcEmpresa : (typeof rfcPropio==="function" ? rfcPropio() : "");
+  // Si nadie ha tecleado el RFC, se deduce de los propios comprobantes en vez de rendirse. Sin
+  // esto, tus ventas vuelven a aparecer como "facturas de gasto no capturadas" y la pantalla
+  // invita a registrarlas — que es por donde entró el error de agosto.
+  const _rfcEf = rfcPropioEfectivo(cfdis, _rfcConf);
+  const rfcEmp = _rfcEf.rfc;
   // La lista de gastos ya viene recortada por la fecha de corte. Si los CFDIs no se recortaran
   // igual, cada comprobante del periodo cerrado saldría como "falta capturar" — justo el
   // trabajo que el corte pretende evitar.
@@ -8385,6 +8424,7 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
   });
   const filtro = filtrarCfdisConciliables(cfdisVigentes, rfcEmp);
   if(_fueraDeCorte) filtro.omitidos.CORTE = _fueraDeCorte;
+  if(_rfcEf.origen === "deducido") filtro.omitidos._rfcDeducido = _rfcEf.rfc;
   const utiles = filtro.utiles;
   const faltantes=[],diferencias=[],conciliadas=[],duplicados=[];
 
@@ -8471,6 +8511,7 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
   const _totalCICSA = gastosCICSA.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
   return{faltantes,diferencias,duplicados,conciliadas,cfdisUtiles:utiles,omitidos:filtro.omitidos,
     totalSAT:utiles.reduce((s,c)=>s+c.total,0), totalCICSA:_totalCICSA,
+    rfcUsado:_rfcEf.rfc, rfcOrigen:_rfcEf.origen,
     // La pregunta inversa, la que faltaba.
     sinRespaldo: gastosSinRespaldo(gastosCICSA, _usados),
     propias: gastosConImporteDeFacturaPropia(gastosCICSA, cfdis, rfcEmp)};
@@ -8481,10 +8522,14 @@ function pintarCfdisOmitidos(om){
   const el=document.getElementById("satOmitidos"); if(!el) return;
   // Los CFDIs guardados antes de esta versión no traen Receptor, así que el RFC no se puede
   // deducir solo: hay que decirlo, o las facturas propias siguen saliendo como pendientes.
-  const faltaRfc = (typeof rfcPropio==="function") && !rfcPropio();
+  const faltaRfc = (typeof rfcPropio==="function") && !rfcPropio() && !(om && om._rfcDeducido);
   const avisoRfc = faltaRfc
     ? `<div style="margin-top:6px;color:var(--do)">⚠️ No has puesto el <strong>RFC de tu empresa</strong> (arriba): sin él no se pueden excluir las facturas que tú emites.</div>`
-    : "";
+    : ((om && om._rfcDeducido)
+      // Se está usando un RFC que nadie tecleó. Funciona, pero hay que decirlo: si la deducción
+      // fuera errónea se estarían excluyendo facturas de un proveedor real.
+      ? `<div style="margin-top:6px;color:var(--do)">ℹ️ No has puesto el RFC de tu empresa, así que se <strong>dedujo</strong> de tus comprobantes: <strong>${esc(om._rfcDeducido)}</strong>. Con él se excluyen tus ventas. <strong>Confírmalo arriba</strong> para no depender de una deducción.</div>`
+      : "");
   const etiquetas=[["PROPIO","factura que emitió tu empresa (es un ingreso)","facturas que emitió tu empresa (son ingresos)"],
                    ["CORTE","CFDI del periodo ya cerrado","CFDI del periodo ya cerrado"],
                    ["DESCARTADO","CFDI que descartaste a mano","CFDI que descartaste a mano"],
