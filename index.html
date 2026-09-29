@@ -2094,7 +2094,10 @@ body.snav-min .side-theme span { display:none; }
 const APP_BUILD = "2026-09-29-egresos-v8";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
-  const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
+  // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
+  // anteponerle "v " lo dejaba como "v 2026-09-29-egresos-v8", con la v repetida. El badge existe
+  // para comparar de un vistazo si dos equipos traen lo mismo; la cadena sola basta y se lee mejor.
+  const b=document.getElementById("buildBadge"); if(b) b.textContent=APP_BUILD;
   const l=document.getElementById("loginVersion"); if(l) l.textContent="v3.0 — "+APP_BUILD;
 })();
 // Recarga saltándose la caché del navegador y de GitHub Pages: el parámetro ?v= hace que
