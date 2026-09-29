@@ -2091,7 +2091,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-29-egresos-v7";
+const APP_BUILD = "2026-09-29-egresos-v8";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   const b=document.getElementById("buildBadge"); if(b) b.textContent="v "+APP_BUILD;
@@ -5342,6 +5342,46 @@ function movimientosDePeriodo(cfdis, ini, fin, rfcEmpresa){
   return { entran, salen, totalEntran:suma(entran), totalSalen:suma(salen) };
 }
 
+// Las facturas propias que hoy NO cuentan en este periodo, para poder traerlas.
+// Sacar una factura ya se podía; traer una, no: una factura timbrada en septiembre no aparece en
+// el balance de agosto, así que no había ningún botón al que darle. Para cuadrar el cierre había
+// que irse al periodo donde vive, buscarla y moverla desde allá. La estimación de la última
+// semana del mes, timbrada unos días después, es exactamente ese caso — y es el más frecuente.
+// Se ordenan por CERCANÍA al periodo: al cerrar agosto interesa lo que quedó pegado al borde, no
+// lo de hace tres meses. Y hay ventana, porque sin tope cerrar un periodo ofrecería todas las
+// facturas de la historia.
+const VENTANA_TRAER_DIAS = 90;
+function facturasFueraDelPeriodo(cfdis, ini, fin, rfcEmpresa, ventanaDias){
+  const propio = String(rfcEmpresa||"").trim().toUpperCase();
+  if(!propio) return [];
+  const dias = (ventanaDias==null) ? VENTANA_TRAER_DIAS : ventanaDias;
+  const enRango = f => !!f && (!ini || f>=ini) && (!fin || f<=fin);
+  const dist = f => {
+    const t = new Date(f+"T12:00:00").getTime();
+    if(ini && t < new Date(ini+"T12:00:00").getTime()) return (new Date(ini+"T12:00:00").getTime()-t)/86400000;
+    if(fin && t > new Date(fin+"T12:00:00").getTime()) return (t-new Date(fin+"T12:00:00").getTime())/86400000;
+    return 0;
+  };
+  const out = [];
+  (cfdis||[]).forEach(c=>{
+    if(!c || c.ignorado) return;
+    if(String(c.rfc||"").trim().toUpperCase() !== propio) return;
+    const t = String(c.tipo||"I").toUpperCase().slice(0,1);
+    if(t!=="I" && t!=="E") return;                       // un complemento de pago no es venta
+    // Se mira la fecha con la que CUENTA. Una que ya se movió a este periodo no se vuelve a
+    // ofrecer: invitaría a moverla dos veces y a creer que falta cuando ya está.
+    const cuentaEn = fechaBalanceCfdi(c);
+    if(!cuentaEn || enRango(cuentaEn)) return;
+    const d = dist(cuentaEn);
+    if(!Number.isFinite(d) || d > dias) return;
+    const base = (parseFloat(c.subtotal)||0) > 0 ? parseFloat(c.subtotal) : (parseFloat(c.total)||0);
+    out.push({ uuid:String(c.uuid||c.folio||""), folio:((c.serie||"")+(c.folioComp||"")).trim(),
+               cliente:c.nombreReceptor||c.rfcReceptor||"—", fecha:String(c.fecha||""),
+               cuentaEn, monto: t==="E" ? -base : base, dias:Math.round(d), movida:!!cfdiMovidoDePeriodo(c) });
+  });
+  return out.sort((a,b)=> a.dias-b.dias || a.cuentaEn.localeCompare(b.cuentaEn));
+}
+
 function balanceOperativo(cfdis, ini, fin, rfcEmpresa){
   const propio=(rfcEmpresa||"").trim().toUpperCase();
   const enRango=(f)=>!!f && (!ini || f>=ini) && (!fin || f<=fin);
@@ -5441,6 +5481,42 @@ async function moverFacturaDePeriodo(uuid){
   // Sin motivo no hay rastro: dentro de tres meses, un ingreso en un corte que no es el de su
   // fecha es indistinguible de un error.
   const nota = prompt("¿Por qué se mueve? (queda guardado junto con tu nombre y la fecha)", "Cierre desfasado: la venta es de ese corte, el XML se timbró después");
+  if(nota===null) return;
+  const antes = { ...c };
+  aplicarFechaBalance(c, String(nueva).trim(), (currentNombre||currentUser?.email||""), String(nota).trim());
+  const { id, ...datos } = c;
+  const ok = await fbUpdateDoc(CFDIS_COL, c.id, datos);
+  if(!ok){
+    MARCA_PERIODO.forEach(k=>{ if(antes[k]==null) delete c[k]; else c[k]=antes[k]; });
+    alert("❌ No se pudo guardar. No se cambió nada.");
+    return;
+  }
+  renderBalance();
+}
+
+// Trae una factura de otro periodo a ÉSTE. Es el mismo ajuste que «Mover», visto desde el lado
+// del que cierra: la fecha que se le pone es la del periodo que se está cuadrando.
+async function traerFacturaAEstePeriodo(uuid){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede reacomodar un cierre."); return; }
+  const c = (_cfdisStore||[]).find(x=>String(x.uuid||x.id||"").toUpperCase()===String(uuid||"").toUpperCase());
+  if(!c){ alert("No se encontró ese comprobante."); return; }
+  const r = _rangoBalance();
+  const folio = ((c.serie||"")+(c.folioComp||"")).trim() || String(c.uuid||"").slice(0,8);
+  // Se propone el ÚLTIMO día del periodo que se está cerrando, que es lo que casi siempre se
+  // quiere: la venta es de este corte aunque el XML saliera después.
+  const sugerida = r.fin || fechaBalanceCfdi(c);
+  const nueva = prompt(
+    `Traer la factura ${folio} a este periodo.\n\n`+
+    `${c.nombreReceptor||c.rfcReceptor||""} · ${fmt((parseFloat(c.subtotal)||0)||parseFloat(c.total)||0)}\n`+
+    `Timbrada el ${c.fecha} · hoy cuenta el ${fechaBalanceCfdi(c)}\n`+
+    `Periodo que estás cerrando: ${r.ini} al ${r.fin}\n\n`+
+    `Su FECHA FISCAL no cambia: sigue siendo ${c.fecha} para el SAT.\n\n`+
+    `Fecha con la que debe contar (AAAA-MM-DD):`, sugerida);
+  if(nueva===null) return;
+  const v = puedeMoverPeriodo(c, String(nueva).trim(), (typeof rfcPropio==="function"?rfcPropio():""));
+  if(!v.ok){ alert("No se puede traer:\n\n"+v.motivo); return; }
+  const nota = prompt("¿Por qué se trae a este periodo? (queda guardado con tu nombre y la fecha)",
+                      "Cierre desfasado: la estimación es de este corte, el XML se timbró después");
   if(nota===null) return;
   const antes = { ...c };
   aplicarFechaBalance(c, String(nueva).trim(), (currentNombre||currentUser?.email||""), String(nota).trim());
@@ -5579,6 +5655,26 @@ function renderBalance(){
     ${b.retiros>0?`<div style="font-size:12px;color:var(--txt2);margin-top:12px">Retiros de caja del periodo: <strong>${fmt(b.retiros)}</strong> — no cuentan como salida: es efectivo que se movió, y lo que se pagó con él ya está en los egresos.</div>`:""}
     ${(()=>{ const _r=_rangoBalance(); const d=ingresosDetalle(_cfdisStore||[], _r.ini, _r.fin, rfc); return `
       <div class="card-title" style="margin-top:22px">🧾 Detalle de facturas emitidas</div>
+      ${(()=>{ // La mitad que faltaba: traer una factura que hoy cuenta en otro corte.
+        // Sin esto, cuadrar un cierre exigía irse al periodo donde vive la factura y moverla
+        // desde allá — y la estimación de la última semana, timbrada después, es justo el caso
+        // más frecuente.
+        if(currentRole!=="admin") return "";
+        const fuera = facturasFueraDelPeriodo(_cfdisStore||[], _r.ini, _r.fin, rfc);
+        if(!fuera.length) return "";
+        return `<details style="margin:10px 0;border:1px solid var(--border);border-radius:9px;padding:9px 12px;font-size:12px">
+          <summary style="cursor:pointer;font-weight:600">📥 Traer una factura de otro periodo <span style="color:var(--txt2);font-weight:400">— ${fuera.length} cerca de este corte</span></summary>
+          <div style="color:var(--txt2);margin:8px 0 10px;line-height:1.5">Facturas que emitiste y que hoy NO cuentan aquí. Úsalo cuando la venta es de este corte pero el XML se timbró fuera. <strong>La fecha fiscal no se toca.</strong> Si la que buscas no aparece, todavía no has subido su XML: hazlo en la pantalla <strong>SAT</strong>.</div>
+          <div class="tbl-wrap"><table><thead><tr><th>Timbrada</th><th>Folio</th><th>Cliente</th><th style="text-align:right">Subtotal</th><th>Hoy cuenta</th><th></th></tr></thead><tbody>
+          ${fuera.map(x=>`<tr>
+            <td>${fmtDate(x.fecha)||"—"}</td>
+            <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(x.folio||x.uuid.slice(0,8))}</td>
+            <td>${esc(x.cliente)}</td>
+            <td class="amount-cell">${fmt(x.monto)}</td>
+            <td style="font-size:11.5px;color:var(--txt2)">${fmtDate(x.cuentaEn)}${x.movida?" <span style='color:var(--do)'>(movida)</span>":""} · a ${x.dias} día(s)</td>
+            <td><button class="btn btn-light" style="padding:3px 9px;font-size:11px;white-space:nowrap" onclick="traerFacturaAEstePeriodo('${escAttrJs(x.uuid)}')">📥 Traer</button></td>
+          </tr>`).join("")}
+          </tbody></table></div></details>`; })()}
       ${(()=>{ const m=movimientosDePeriodo(_cfdisStore||[], _r.ini, _r.fin, rfc);
         if(!m.entran.length && !m.salen.length) return "";
         // Las dos direcciones juntas y a la vista: un ingreso que se mueve tiene que poder

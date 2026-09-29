@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
+const CONSTS = ["VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
 const CONSTS_ARR = ["COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK", "MARCA_PERIODO"];
 
@@ -106,7 +106,7 @@ const FUNCS = [
   "fbAuthHeader", "rfcPropio", "guardarRfcPropio",
   "claseGastoSinRespaldo", "gastosSinRespaldo", "resumenSinRespaldo", "gastosConImporteDeFacturaPropia",
   "motivoNoEsGasto", "fechaBalanceCfdi", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
-  "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance",
+  "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance", "facturasFueraDelPeriodo",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
@@ -1189,6 +1189,96 @@ t("cfdiMovidoDePeriodo dice si hay ajuste y de donde", () => {
   assert.equal(m.a, "2026-08-28");
   assert.equal(m.por, "Francisco");
 });
+t("se pueden ver las facturas que estan FUERA del periodo", () => {
+  // Sacar una factura funcionaba; traer una, no. Una factura timbrada en septiembre no aparece
+  // en el balance de agosto, asi que no habia ningun boton al que darle: para cuadrar el cierre
+  // habia que irse al periodo donde vive. La estimacion 08 (24 al 30 de agosto) timbrada en
+  // septiembre es exactamente ese caso.
+  const cfdis = [
+    _FAC("dentro","2026-08-15"),
+    _FAC("despues","2026-09-03"),
+    _FAC("antes","2026-07-28"),
+  ];
+  const r = S.facturasFueraDelPeriodo(cfdis, "2026-08-01", "2026-08-31", "CIC190426SD4");
+  assert.deepEqual(r.map(x=>x.uuid).sort(), ["antes","despues"]);
+});
+t("se ordenan por cercania al periodo, no por fecha", () => {
+  // Al cerrar agosto, lo que interesa es lo que quedo pegado al borde, no lo de hace tres meses.
+  const cfdis = [
+    _FAC("lejos","2026-05-10"),
+    _FAC("pegada","2026-09-02"),
+    _FAC("media","2026-07-01"),
+  ];
+  const r = S.facturasFueraDelPeriodo(cfdis, "2026-08-01", "2026-08-31", "CIC190426SD4");
+  assert.deepEqual(r.map(x=>x.uuid), ["pegada","media","lejos"]);
+});
+t("fuera de la ventana no se listan", () => {
+  // Sin tope, cerrar un periodo ofreceria todas las facturas de la historia.
+  const r = S.facturasFueraDelPeriodo([_FAC("vieja","2025-01-05")], "2026-08-01", "2026-08-31", "CIC190426SD4", 90);
+  assert.deepEqual(r, []);
+});
+t("una factura YA movida a este periodo no se ofrece de nuevo", () => {
+  // Su fecha fiscal esta fuera, pero ya cuenta aqui: ofrecerla otra vez invita a moverla dos
+  // veces y a creer que falta cuando ya esta.
+  const cfdis = [_FAC("ya","2026-09-03",{ fechaBalance:"2026-08-30" })];
+  assert.deepEqual(S.facturasFueraDelPeriodo(cfdis, "2026-08-01", "2026-08-31", "CIC190426SD4"), []);
+});
+t("dice de que periodo viene y con que fecha cuenta hoy", () => {
+  const r = S.facturasFueraDelPeriodo([_FAC("x","2026-09-03")], "2026-08-01", "2026-08-31", "CIC190426SD4");
+  assert.equal(r[0].fecha, "2026-09-03");
+  assert.equal(r[0].cuentaEn, "2026-09-03");
+  close(r[0].monto, 100000, 0.01);
+  assert.equal(r[0].cliente, "AGROINDUSTRIAS DEL BALSAS");
+});
+t("solo facturas propias, y nunca las descartadas", () => {
+  const cfdis = [
+    { uuid:"ajena", rfc:"DUPJ800101ABC", fecha:"2026-09-03", subtotal:100, total:116, tipo:"I" },
+    _FAC("descartada","2026-09-03",{ ignorado:true }),
+    _FAC("pago","2026-09-03",{ tipo:"P" }),
+  ];
+  assert.deepEqual(S.facturasFueraDelPeriodo(cfdis, "2026-08-01", "2026-08-31", "CIC190426SD4"), []);
+});
+t("sin RFC propio no se ofrece nada", () => {
+  assert.deepEqual(S.facturasFueraDelPeriodo([_FAC("x","2026-09-03")], "2026-08-01", "2026-08-31", ""), []);
+  // Y el caso que muerde, otra vez: un CFDI SIN RFC cuando tampoco hay RFC propio. Sin la
+  // guardia, "" seria igual a "" y se ofreceria traer al cierre la factura de un proveedor.
+  const sinRfc = { uuid:"n", rfc:"", fecha:"2026-09-03", subtotal:100, total:116, tipo:"I" };
+  assert.deepEqual(S.facturasFueraDelPeriodo([sinRfc], "2026-08-01", "2026-08-31", ""), []);
+  assert.deepEqual(S.facturasFueraDelPeriodo([sinRfc], "2026-08-01", "2026-08-31", "  "), []);
+});
+t("no truena sin datos", () => {
+  assert.deepEqual(S.facturasFueraDelPeriodo(null, "", "", "CIC190426SD4"), []);
+});
+
+t("traer tambien valida y tambien exige motivo", () => {
+  // Es la misma escritura que mover, desde el otro lado: si esta se salta la validacion, la
+  // proteccion existe solo a medias.
+  const i = script.indexOf("async function traerFacturaAEstePeriodo(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  const vivo = b.replace(/\/\/[^\n]*/g, "");
+  assert.ok(/puedeMoverPeriodo\(/.test(vivo), "hay que validar antes de escribir");
+  assert.ok(/aplicarFechaBalance\(/.test(vivo));
+  assert.ok(!/c\.fecha *=/.test(vivo), "la fecha del timbrado no se reescribe jamas");
+  assert.ok(/nota/.test(vivo), "sin motivo guardado no hay rastro que auditar");
+  assert.ok(/if\(!ok\)/.test(vivo) && /antes/.test(vivo), "y si falla la escritura hay que revertir");
+  assert.ok(/currentRole!=="admin"/.test(vivo), "reacomodar un cierre no es para cualquiera");
+});
+t("el balance deja TRAER una factura, no solo sacarla", () => {
+  const i = script.indexOf("function renderBalance(");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/facturasFueraDelPeriodo\(/.test(b), "sin esto no hay forma de traer una factura desfasada");
+  assert.ok(/traerFacturaAEstePeriodo\(/.test(b));
+});
+
 t("el balance ofrece mover y deshacer, y solo al admin", () => {
   const i = script.indexOf("function renderBalance(");
   let j = script.indexOf("{", i), d = 0, b = "";
