@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
+const CONSTS = ["RITMO_VENTANA_SEMANAS", "ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
 const CONSTS_ARR = ["_TIPOS_MOV", "COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK", "MARCA_PERIODO"];
 
@@ -108,7 +108,8 @@ const FUNCS = [
   "motivoNoEsGasto", "deducirRfcPropio", "rfcPropioEfectivo", "fechaBalanceCfdi",
   "ritmoSemanal", "semanasRestantes",
   "_montoMovimiento", "movimientosDelMes", "resumenArchivo", "construirArchivoMes",
-  "verificarArchivo", "mesesArchivables", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
+  "verificarArchivo", "mesesArchivables",
+  "mesesDelRango", "unirConArchivo", "archivoValido", "coberturaArchivo", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
   "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance", "facturasFueraDelPeriodo",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
@@ -1098,6 +1099,179 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
 });
 
+console.log("\n== el catalogo de productos no corre en el camino de guardado ==");
+// El subsistema de productos se va a MiDespensa. Mientras tanto deja de ejecutarse: corria SOLO
+// en cada captura —nadie tenia que pedirlo— y escribia `_productos` dentro del gasto, un campo
+// que en las 14,949 lineas de la app se escribe una vez y NUNCA se lee.
+// Estas guardas son sobre el codigo fuente a proposito: ninguna prueba ejecuta guardarGasto (las
+// que lo mencionan solo inspeccionan su texto), asi que una regresion ahi no se veria en verde.
+// Y extraerProductosEnSegundoPlano NO es async: si volviera a llamarse y fallara, lanzaria de
+// forma SINCRONA y el gasto no se guardaria. Es la operacion mas critica de la app.
+function _cuerpoDe(nombre){
+  const i = script.indexOf("function " + nombre + "(");
+  assert.ok(i > -1, "no se encontro " + nombre);
+  let j = script.indexOf("{", i), d = 0;
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) return script.slice(i, k + 1); }
+  }
+  return "";
+}
+
+t("guardar un gasto no dispara la lectura de productos", () => {
+  assert.ok(!/extraerProductosEnSegundoPlano/.test(_cuerpoDe("guardarGasto")),
+    "corria sola en cada captura y escribia un campo que nadie lee");
+});
+t("guardar una factura dividida tampoco", () => {
+  assert.ok(!/extraerProductosEnSegundoPlano/.test(_cuerpoDe("splitGuardar")));
+});
+t("ningun camino de guardado toca el catalogo", () => {
+  // Mas amplio que las dos anteriores: cubre cualquier via nueva al subsistema.
+  ["guardarGasto", "splitGuardar"].forEach(f=>{
+    const b = _cuerpoDe(f).replace(/^\s*\/\/.*$/gm, "");
+    assert.ok(!/CATALOGO_COL|PROVEEDORES_COL|escribirPrecios|cargarCatalogo\(/.test(b),
+      f + " no puede depender del catalogo de productos");
+  });
+});
+
+console.log("\n== leer lo archivado: fase 2 ==");
+// El peligro propio de esta fase: como la fase 3 todavia no quita nada, cada movimiento
+// archivado SIGUE estando en el documento. Unirlos sin deduplicar duplicaria dinero — y un
+// balance que suma dos veces es peor que uno que no llega tan atras.
+
+t("los meses de un rango, de punta a punta", () => {
+  assert.deepEqual(S.mesesDelRango("2026-07-15", "2026-09-02"), ["2026-07","2026-08","2026-09"]);
+  assert.deepEqual(S.mesesDelRango("2026-07-01", "2026-07-31"), ["2026-07"]);
+  assert.deepEqual(S.mesesDelRango("2025-12-20", "2026-01-05"), ["2025-12","2026-01"]);
+});
+t("un rango al reves o vacio no inventa meses", () => {
+  assert.deepEqual(S.mesesDelRango("2026-09-01", "2026-07-01"), []);
+  assert.deepEqual(S.mesesDelRango("", "2026-07-01"), []);
+  assert.deepEqual(S.mesesDelRango("mal", "peor"), []);
+});
+t("un rango largo no se desborda", () => {
+  assert.equal(S.mesesDelRango("2020-01-01", "2026-12-31").length, 84);
+});
+
+t("unir deduplica: lo que ya esta en el documento NO se suma otra vez", () => {
+  // El caso real de la fase 2: el archivo de julio existe Y julio sigue en el documento.
+  const doc = [{ id:"g1", importe:100, _tipo:"gasto" }, { id:"g2", importe:200, _tipo:"gasto" }];
+  const arch = [{ id:"g1", importe:100, _tipo:"gasto" }, { id:"g2", importe:200, _tipo:"gasto" }];
+  const u = S.unirConArchivo(doc, arch);
+  assert.equal(u.length, 2, "sumar dos veces el mismo gasto es duplicar dinero");
+  close(u.reduce((s,x)=>s+x.importe,0), 300, 0.01);
+});
+t("y trae lo que YA no esta en el documento", () => {
+  // Como quedara tras la fase 3: el documento ya no tiene julio, el archivo si.
+  const doc = [{ id:"g3", importe:300, _tipo:"gasto" }];
+  const arch = [{ id:"g1", importe:100, _tipo:"gasto" }, { id:"g2", importe:200, _tipo:"gasto" }];
+  const u = S.unirConArchivo(doc, arch);
+  assert.deepEqual(u.map(x=>x.id).sort(), ["g1","g2","g3"]);
+});
+t("ante la duda gana el documento, que es la copia viva", () => {
+  // Si un gasto se corrigio despues de archivarlo, el bueno es el del documento.
+  const doc = [{ id:"g1", importe:150, _tipo:"gasto", proveedor:"CORREGIDO" }];
+  const arch = [{ id:"g1", importe:100, _tipo:"gasto", proveedor:"VIEJO" }];
+  const u = S.unirConArchivo(doc, arch);
+  assert.equal(u.length, 1);
+  close(u[0].importe, 150, 0.01);
+  assert.equal(u[0].proveedor, "CORREGIDO");
+});
+t("marca de donde vino cada uno", () => {
+  const u = S.unirConArchivo([{ id:"a", importe:1 }], [{ id:"b", importe:2 }]);
+  assert.equal(u.find(x=>x.id==="a")._archivado, undefined, "lo del documento no es archivado");
+  assert.equal(u.find(x=>x.id==="b")._archivado, true, "y hay que poder decirlo en pantalla");
+});
+t("unir no truena con listas vacias", () => {
+  assert.deepEqual(S.unirConArchivo(null, null), []);
+  assert.deepEqual(S.unirConArchivo([{ id:"a" }], null).map(x=>x.id), ["a"]);
+  assert.deepEqual(S.unirConArchivo(null, [{ id:"b" }]).map(x=>x.id), ["b"]);
+});
+t("un movimiento sin id no se pierde en la union", () => {
+  // Deduplicar por id no puede desaparecer lo que no tiene id — ni del documento NI del archivo.
+  assert.equal(S.unirConArchivo([{ importe:1 }, { importe:2 }], []).length, 2);
+  const u = S.unirConArchivo([{ id:"a", importe:1 }], [{ importe:9 }, { importe:8 }]);
+  assert.equal(u.length, 3, "un movimiento viejo sin id se quedaria fuera del balance para siempre");
+  close(u.reduce((s,x)=>s+x.importe,0), 18, 0.01);
+});
+
+t("un archivo bien formado se acepta", () => {
+  assert.equal(S.archivoValido({ version:1, mes:"2026-07", movimientos:[] }).ok, true);
+});
+t("uno de otra version NO se lee a ciegas", () => {
+  // Leer un formato que no se conoce e interpretarlo igual es como llego el error de la v4 de
+  // Manejo de Cortes: mejor decir que no se entiende.
+  const r = S.archivoValido({ version:99, mes:"2026-07", movimientos:[] });
+  assert.equal(r.ok, false);
+  assert.ok(/versi/i.test(r.motivo||""));
+});
+t("uno sin movimientos o ilegible tampoco", () => {
+  assert.equal(S.archivoValido(null).ok, false);
+  assert.equal(S.archivoValido({ version:1, mes:"2026-07" }).ok, false);
+  assert.equal(S.archivoValido("no soy json").ok, false);
+});
+
+t("la cobertura dice que meses del rango estan archivados y cuales faltan", () => {
+  const c = S.coberturaArchivo("2026-07-01", "2026-09-30", ["2026-07","2026-08"], { "2026-07":true });
+  assert.deepEqual(c.meses, ["2026-07","2026-08","2026-09"]);
+  assert.deepEqual(c.archivados, ["2026-07","2026-08"]);
+  assert.deepEqual(c.cargados, ["2026-07"]);
+  assert.deepEqual(c.porCargar, ["2026-08"], "hay que poder decir que falta traer de la nube");
+});
+t("sin archivos, la cobertura no alarma", () => {
+  const c = S.coberturaArchivo("2026-09-01", "2026-09-30", [], {});
+  assert.deepEqual(c.archivados, []);
+  assert.deepEqual(c.porCargar, []);
+});
+
+t("leer un archivo valida antes de usarlo", () => {
+  const i = script.indexOf("async function leerArchivoMes(");
+  assert.ok(i > -1, "falta la funcion que lee de Storage");
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/archivoValido\(/.test(b), "un archivo de formato desconocido no se interpreta a ciegas");
+  assert.ok(/alt=media/.test(b));
+});
+
+t("revisar compara contra el documento, y dice cuando ya no hay con que", () => {
+  // Tras la fase 3 el mes ya no esta en el documento: el archivo es la unica copia. Inventar una
+  // comparacion ahi seria reportar un OK que no significa nada.
+  const i = script.indexOf("async function revisarArchivoMes(");
+  assert.ok(i > -1);
+  let j = script.indexOf("{", i), d = 0, b = "";
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+  }
+  assert.ok(/soloArchivo/.test(b), "hay que distinguir 'cuadra' de 'no hay contra que comparar'");
+  assert.ok(/verificarArchivo\(/.test(b));
+  assert.ok(/leerArchivoMes\(mes, true\)/.test(b), "revisar tiene que releer, no usar la cache");
+});
+t("la fase 2 no altera el documento", () => {
+  // Leer no escribe. Si estas funciones tocaran `state`, consultar un mes archivado podria
+  // cambiar la contabilidad.
+  ["async function leerArchivoMes(", "async function listarArchivos(", "async function verArchivoMes("].forEach(firma=>{
+    const i = script.indexOf(firma);
+    assert.ok(i > -1, "falta "+firma);
+    let j = script.indexOf("{", i), d = 0, b = "";
+    for (let k = j; k < script.length; k++) {
+      if (script[k] === "{") d++;
+      else if (script[k] === "}") { d--; if (!d) { b = script.slice(i, k + 1); break; } }
+    }
+    const vivo = b.replace(/^\s*\/\/.*$/gm, "");
+    assert.ok(!/\bsave\(\)/.test(vivo) && !/state\s*=/.test(vivo) && !/\.splice\(/.test(vivo),
+      firma+" no puede modificar el estado");
+  });
+});
+t("el panel de la nube existe y se puede consultar", () => {
+  assert.ok(html.includes('id="archivoNubeBody"'));
+  assert.ok(html.includes('id="archivoDetalle"'));
+  assert.ok(/verArchivoMes\(/.test(script), "archivar sin poder consultar es perder de vista");
+});
+
 console.log("\n== archivar un mes: fase 1, escribir sin borrar ==");
 // Todo el estado vive en UN documento con tope de 1 MiB y ya va al 44%. La fase 1 escribe el mes
 // en Storage y lo VERIFICA contra el documento; no quita nada. Verificar antes de borrar —nunca
@@ -1329,6 +1503,32 @@ const _semanas = (desde, n, dias) => {
   return out;
 };
 
+t("el ritmo mide lo RECIENTE, no el promedio de toda la historia", () => {
+  // Es el error que cometio el medidor en produccion: promedio de vida 45/semana, ritmo real de
+  // las ultimas semanas 74, y por eso prometia 27 semanas de margen cuando quedaban 16.
+  // 20 semanas flojas (2 por semana) y luego 8 intensas (20 por semana).
+  const flojo = _semanas("2026-01-05", 40, 140);
+  const fuerte = _semanas("2026-05-25", 160, 56);
+  const st = { weeks:[{ id:"1", gastos:flojo.concat(fuerte), cortes:[], retiros:[] }] };
+  const r = S.ritmoSemanal(st);
+  assert.ok(r > 15, "esperaba ~20/semana del tramo reciente, salio "+r.toFixed(1));
+  // El promedio de toda la historia seria ~10: la mitad, y el doble de plazo prometido.
+  const promedio = S.ritmoSemanal(st, 999);
+  assert.ok(promedio < r, "promediar todo subestima cuando la captura va a mas");
+});
+t("una ventana de cero no devuelve Infinity", () => {
+  // Dividir entre cero daria un "plazo" infinito, que en un aviso de capacidad se lee como
+  // "no te preocupes nunca".
+  const st = { weeks:[{ id:"1", gastos:_semanas("2026-07-01", 70, 70), cortes:[], retiros:[] }] };
+  assert.equal(S.ritmoSemanal(st, 0), 0);
+  assert.ok(Number.isFinite(S.ritmoSemanal(st, 0)));
+});
+t("con menos historia que la ventana se usa toda la que hay", () => {
+  // 70 movimientos en 70 dias = 10 semanas, menos que la ventana de 8... no: mas. Se usan 8.
+  const st = { weeks:[{ id:"1", gastos:_semanas("2026-07-01", 35, 21), cortes:[], retiros:[] }] };
+  const r = S.ritmoSemanal(st);
+  assert.ok(r > 9 && r < 14, "35 movimientos en 3 semanas son ~12/semana, salio "+r.toFixed(1));
+});
 t("el ritmo sale de los datos reales, no de una constante", () => {
   // 70 movimientos repartidos en 70 dias = 10 semanas -> 7 por semana.
   const st = { weeks:[{ id:"1", gastos:_semanas("2026-07-01", 70, 70), cortes:[], retiros:[] }] };
