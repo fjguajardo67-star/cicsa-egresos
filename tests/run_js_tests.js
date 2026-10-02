@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["RITMO_VENTANA_SEMANAS", "ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
+const CONSTS = ["RITMO_VENTANA_SEMANAS", "ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "ARCHIVO_VENTANA_MESES", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
 const CONSTS_ARR = ["_TIPOS_MOV", "COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK", "MARCA_PERIODO"];
 
@@ -108,7 +108,7 @@ const FUNCS = [
   "motivoNoEsGasto", "deducirRfcPropio", "rfcPropioEfectivo", "fechaBalanceCfdi",
   "ritmoSemanal", "semanasRestantes",
   "_montoMovimiento", "movimientosDelMes", "resumenArchivo", "construirArchivoMes",
-  "verificarArchivo", "mesesArchivables",
+  "verificarArchivo", "mesesArchivables", "estadoLiberacion",
   "mesesDelRango", "unirConArchivo", "archivoValido", "coberturaArchivo", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
   "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance", "facturasFueraDelPeriodo",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
@@ -1486,6 +1486,85 @@ t("subir verifica ANTES de darlo por bueno", () => {
   }
   assert.ok(/verificarArchivo\(/.test(b), "subir sin releer no prueba que el archivo sirva");
   assert.ok(/currentRole!=="admin"/.test(b));
+});
+console.log("\n== la ventana de retencion, conectada ==");
+// Existia mesesArchivables, estaba probada, aplicaba bien el limite... y NADIE la llamaba: la
+// pantalla le ponia boton a todos los meses menos el actual. La ventana de 4 meses era una
+// intencion escrita, no una regla. Mientras la fase 1 solo escribe eso es inofensivo; el dia que
+// el boton tambien quite, deja de serlo.
+// estadoLiberacion es la puerta por la que la fase 3 tendra que pasar, y estas pruebas la fijan
+// antes de que exista.
+
+t("un mes reciente no se libera ni archivado ni verificado", () => {
+  // La ventana va primero a proposito: es la unica condicion que no depende de que algo haya
+  // salido bien. Si cediera ante "ya esta archivado y verificado", no seria una ventana.
+  const r = S.estadoLiberacion("2026-09", ["2026-04","2026-05"], ["2026-09"], true);
+  assert.equal(r.puede, false);
+  assert.ok(/ltimos 4 meses/.test(r.motivo), "y hay que decir POR QUE: un no sin motivo se salta a mano");
+});
+t("un mes viejo pero sin archivo tampoco", () => {
+  const r = S.estadoLiberacion("2026-04", ["2026-04","2026-05"], [], true);
+  assert.equal(r.puede, false);
+  assert.ok(/nube/.test(r.motivo));
+});
+t("archivado y fuera de la ventana NO basta: falta revisarlo", () => {
+  // Entre que se escribio el archivo y hoy alguien pudo corregir un gasto de ese mes.
+  const r = S.estadoLiberacion("2026-04", ["2026-04"], ["2026-04"], undefined);
+  assert.equal(r.puede, false);
+  assert.ok(/revisar/i.test(r.motivo));
+});
+t("no saber si cuadra nunca vale por un si", () => {
+  // El valor por defecto de un dato que no se consulto no puede ser "adelante".
+  [undefined, null, false, "ok", 1, {}].forEach(v=>{
+    assert.equal(S.estadoLiberacion("2026-04", ["2026-04"], ["2026-04"], v).puede, false,
+      `verificado=${JSON.stringify(v)} no es un si`);
+  });
+});
+t("con las tres condiciones cumplidas, si", () => {
+  const r = S.estadoLiberacion("2026-04", ["2026-04"], ["2026-04"], true);
+  assert.equal(r.puede, true);
+});
+t("un mes mal escrito no se cuela", () => {
+  [undefined, "", "2026", "abril", "2026-4", "2026-04-01"].forEach(m=>{
+    assert.equal(S.estadoLiberacion(m, [m], [m], true).puede, false, `mes=${JSON.stringify(m)}`);
+  });
+});
+t("sin listas, no se libera nada", () => {
+  assert.equal(S.estadoLiberacion("2026-04", null, null, true).puede, false);
+});
+
+t("la pantalla PREGUNTA por la ventana, no se la inventa", () => {
+  const b = _cuerpoDe("renderArchivoMeses");
+  assert.ok(/mesesArchivables\(\s*state\s*,\s*todayStr\(\)\s*,\s*ARCHIVO_VENTANA_MESES\s*\)/.test(b),
+    "esto es justo lo que faltaba: la funcion existia y nadie la llamaba");
+  assert.ok(/estadoLiberacion\(/.test(b), "y la respuesta tiene que verse en la tabla");
+  assert.ok(!/\b4\s*\)/.test(b.replace(/ARCHIVO_VENTANA_MESES/g,"")),
+    "la ventana se lee de la constante, no se teclea otra vez");
+});
+t("escribir sigue permitido en los meses protegidos", () => {
+  // Bloquear el boton de archivar por la ventana habria impedido re-archivar un mes al que se le
+  // corrige un gasto, y subir un archivo no quita nada. La ventana gobierna el quitar.
+  const b = _cuerpoDe("renderArchivoMeses");
+  assert.ok(/archivarMes\('\$\{escAttrJs\(m\)\}'\)/.test(b), "el boton de escribir sigue ahi");
+  assert.ok(/m===mesActual/.test(b), "y lo unico que lo quita sigue siendo el mes en curso");
+});
+t("la fase 1 no quita nada aunque la ventana ya este conectada", () => {
+  const b = _cuerpoDe("archivarMes");
+  assert.ok(!/\bsave\(\)/.test(b) && !/\.splice\(/.test(b) && !/state\s*=/.test(b),
+    "conectar la ventana no es la fase 3: aqui todavia no se quita un solo movimiento");
+});
+
+t("archivar refresca la lista de la nube en lugar de dejarla mintiendo", () => {
+  // Archivar 2026-09 salio ✅ y justo abajo seguia diciendo "Todavia no hay ningun mes
+  // archivado": esa lista se consulta UNA vez por sesion y se queda cacheada. Leer eso
+  // despues del palomazo es lo que hace dudar de si de verdad se guardo.
+  const b = _cuerpoDe("archivarMes");
+  assert.ok(/renderArchivosEnNube\(\s*true\s*\)/.test(b),
+    "sin forzar la relectura, la lista de la nube se queda con lo que habia al abrir el modal");
+  // Y va DESPUES de verificar: anunciar en la lista un archivo que no cuadro seria peor que no
+  // anunciarlo. En el camino de error la funcion ya salio con return antes de llegar aqui.
+  assert.ok(b.indexOf("verificarArchivo(") < b.indexOf("renderArchivosEnNube("),
+    "primero se comprueba, luego se presume");
 });
 
 console.log("\n== el medidor de espacio, en tiempo y a la vista ==");
@@ -7187,6 +7266,61 @@ t("los folios ya importados se detectan para no repetir", () => {
   assert.ok(S.foliosEgresoImportados().has("EGR-2026-00001"));
   assert.ok(S.foliosEgresoImportados().has("EGR-2026-00003"));
   assert.ok(!S.foliosCorteImportados().has("RCE-2026-99999"));
+});
+
+console.log("\n== cada ruta de Storage donde la app escribe tiene regla ==");
+// Archivar 2026-09 devolvio 403 al subir: storage.rules declaraba facturas/ y cortes/, y la ruta
+// archivo/ caia en el deny final. Nada en el repo lo decia — se descubrio apretando el boton en
+// produccion, que es el peor lugar para enterarse. Estas pruebas parten de las subidas REALES del
+// codigo, no de una lista escrita a mano: encuentran cada fetchStorage que sube algo, resuelven
+// que prefijo usa y exigen que storage.rules traiga su bloque match.
+// Lo que NO prueban, y hay que decirlo: que las reglas del repo sean las publicadas en la consola.
+// Eso no se puede saber desde aqui.
+const _reglasStorage = fs.readFileSync(path.join(__dirname, "..", "storage.rules"), "utf8");
+
+function _prefijosDeStorageQueSeEscriben(){
+  const subidas = [...script.matchAll(/uploadType=media&name=\$\{encodeURIComponent\((\w+)\)\}/g)];
+  return subidas.map(m => {
+    const v = m[1];
+    // La ruta se arma justo antes de subirla: su declaracion es la ultima que quedo atras.
+    const decl = [...script.slice(0, m.index)
+      .matchAll(new RegExp("(?:const|let)\\s+" + v + "\\s*=\\s*`([^`]+)`", "g"))].pop();
+    assert.ok(decl, `No encontre como se arma la ruta de Storage "${v}"`);
+    let pref = decl[1].split("/")[0];
+    const porConstante = pref.match(/^\$\{(\w+)\}$/);
+    if (porConstante) {
+      const val = script.match(new RegExp("const\\s+" + porConstante[1] + "\\s*=\\s*[\"']([^\"']+)[\"']"));
+      assert.ok(val, `No encontre el valor de ${porConstante[1]}`);
+      pref = val[1];
+    }
+    return pref;
+  });
+}
+
+t("toda ruta de Storage donde la app escribe esta declarada en storage.rules", () => {
+  const prefijos = _prefijosDeStorageQueSeEscriben();
+  assert.ok(prefijos.length >= 3,
+    `Solo encontre ${prefijos.length} subidas a Storage: el extractor se quedo ciego y la prueba ya no cubre nada`);
+  [...new Set(prefijos)].forEach(p => {
+    assert.ok(new RegExp("match\\s+/" + p + "/\\{").test(_reglasStorage),
+      `storage.rules no declara /${p}/: subir ahi devuelve 403 y solo se descubre usando la app`);
+  });
+});
+
+t("el archivo mensual no se puede borrar desde la app", () => {
+  const i = _reglasStorage.indexOf("match /archivo/");
+  assert.ok(i >= 0, "no encontre el bloque de archivo/ en storage.rules");
+  const bloque = _reglasStorage.slice(i, _reglasStorage.indexOf("\n    }", i));
+  assert.ok(/allow\s+delete:\s*if\s+false/.test(bloque),
+    "cuando la fase 3 quite el mes del documento, este archivo sera la UNICA copia de esa contabilidad");
+});
+
+t("el archivo mensual solo lo escribe un admin, y solo como JSON", () => {
+  const i = _reglasStorage.indexOf("match /archivo/");
+  const bloque = _reglasStorage.slice(i, _reglasStorage.indexOf("\n    }", i));
+  assert.ok(/allow\s+create,\s*update:\s*if\s+esAdmin\(\)/.test(bloque),
+    "el gate de rol en el cliente no es una regla: archivarMes revisa currentRole, pero eso se cambia desde la consola del navegador");
+  assert.ok(/contentType\s*==\s*'application\/json'/.test(bloque));
 });
 
   // Las pruebas encoladas corren AQUI, en fila, antes del resumen y antes de salir. Ponerlas

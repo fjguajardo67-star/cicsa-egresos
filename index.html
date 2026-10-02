@@ -2121,7 +2121,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-02-egresos-v14";
+const APP_BUILD = "2026-10-02-egresos-v16";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -3188,6 +3188,29 @@ async function ejecutarSync(){
 // de datos. Mientras la fase 1 corre sola, el peor caso es un archivo de más en Storage.
 const ARCHIVO_VERSION = 1;
 const ARCHIVO_PREFIJO = "archivo";
+// Los meses recientes NO se quitan del documento aunque ya estén archivados: son los que
+// todavía se consultan, se corrigen y se cierran. Este número es la ventana de retención y
+// vive aquí una sola vez; si alguien lo cambia, cambia en los dos lados a la vez.
+const ARCHIVO_VENTANA_MESES = 4;
+
+// La puerta de la fase 3: ¿se puede quitar este mes del documento? Responde con TODAS las
+// condiciones, en orden de qué tan grave es saltársela, y dice CUÁL falta — un "no" sin motivo
+// es lo que hace que alguien lo salte a mano.
+// La ventana va primero porque es la única que no depende de que algo haya salido bien: un mes
+// reciente no se libera ni aunque esté archivado y verificado.
+// `verificado` es el resultado de volver a comparar el archivo contra el documento HOY. Si no
+// se sabe (la pantalla no lo revisa sola: cuesta una lectura de red por mes), se responde que
+// falta revisarlo. No saber nunca puede valer por un sí.
+function estadoLiberacion(mes, archivables, enStorage, verificado){
+  if(!/^\d{4}-\d{2}$/.test(String(mes||""))) return { puede:false, motivo:"Mes inválido." };
+  if(!(archivables||[]).includes(mes))
+    return { puede:false, motivo:`Dentro de los últimos ${ARCHIVO_VENTANA_MESES} meses: no se quita.` };
+  if(!(enStorage||[]).includes(mes))
+    return { puede:false, motivo:"Todavía no está archivado en la nube." };
+  if(verificado !== true)
+    return { puede:false, motivo:"Falta revisar el archivo contra el documento." };
+  return { puede:true, motivo:"Archivado, verificado y fuera de la ventana." };
+}
 
 // Cada tipo de movimiento guarda su importe en un campo distinto: un gasto en `importe`, y
 // cortes, retiros y aportaciones en `monto`. Leer el campo equivocado da cero, y entonces el
@@ -3448,7 +3471,13 @@ async function archivarMes(mes, opts){
   const detalle = Object.keys(r.porTipo).map(k=>`${r.porTipo[k].n} ${k}(s) ${fmt(r.porTipo[k].total)}`).join(" · ");
   di(`✅ ${mes} archivado y verificado — ${r.n} movimiento(s): ${detalle}. `+
      `Nada se quitó del documento: esta fase solo escribe.`, "ok");
-  try{ renderArchivoMeses(); }catch(_){}
+  // La lista de la nube se consulta UNA vez por sesión y se queda cacheada. Sin forzarla aquí,
+  // acabar de archivar un mes y leer "Todavía no hay ningún mes archivado" justo abajo del ✅
+  // es lo que hace dudar de que se haya guardado.
+  // Va ANTES de repintar la tabla: la columna "¿Ya se puede quitar?" lee esa misma lista, y
+  // con el caché viejo diría que el mes recién archivado no está en la nube.
+  try{ await renderArchivosEnNube(true); }catch(_){}
+  try{ await renderArchivoMeses(); }catch(_){}
   return { ok:true, resumen:r };
 }
 
@@ -3471,16 +3500,32 @@ async function renderArchivoMeses(){
   const lista = Object.keys(meses).sort();
   if(!lista.length){ body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Todavía no hay movimientos.</div>`; return; }
   const mesActual = todayStr().slice(0,7);
-  body.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>Mes</th><th style="text-align:right">Movimientos</th><th style="text-align:right">Importe</th><th>Archivo</th></tr></thead><tbody>
-    ${lista.map(m=>`<tr${m===mesActual?' style="opacity:.6"':""}>
+  // Escribir se deja SIEMPRE, también en los meses protegidos: subir un archivo no quita nada, y
+  // un mes al que le corriges un gasto hay que poder volver a archivarlo. Lo que la ventana
+  // gobierna es la otra columna.
+  const archivables = mesesArchivables(state, todayStr(), ARCHIVO_VENTANA_MESES);
+  const enStorage = await listarArchivos();
+  body.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>Mes</th><th style="text-align:right">Movimientos</th><th style="text-align:right">Importe</th><th>Archivo</th><th>¿Ya se puede quitar?</th></tr></thead><tbody>
+    ${lista.map(m=>{
+      const est = m===mesActual ? { puede:false, motivo:"Es el mes en curso." }
+                                : estadoLiberacion(m, archivables, enStorage, undefined);
+      return `<tr${m===mesActual?' style="opacity:.6"':""}>
       <td><strong>${esc(m)}</strong>${m===mesActual?' <span style="font-size:11px;color:var(--txt2)">(en curso)</span>':""}</td>
       <td class="amount-cell">${meses[m].n}</td>
       <td class="amount-cell">${fmt(Math.round(meses[m].total*100)/100)}</td>
       <td>${m===mesActual
         ? `<span style="font-size:11px;color:var(--txt2)">no se archiva el mes en curso</span>`
         : `<button class="btn btn-light" style="padding:3px 10px;font-size:11px" onclick="archivarMes('${escAttrJs(m)}')">📦 Escribir y verificar</button>`}</td>
-    </tr>`).join("")}
-  </tbody></table></div>`;
+      <td style="font-size:11px;color:var(--txt2)">${est.puede?"✅ ":"🔒 "}${esc(est.motivo)}</td>
+    </tr>`;}).join("")}
+  </tbody></table></div>
+  <div style="font-size:11.5px;color:var(--txt2);margin-top:8px;line-height:1.5">
+    La última columna es la de la <strong>fase 3</strong>, que todavía no existe: nada de lo que
+    hay aquí quita un solo movimiento. Un mes solo podrá liberarse cuando cumpla las tres:
+    estar fuera de los últimos ${ARCHIVO_VENTANA_MESES} meses, tener su archivo en la nube, y que
+    <strong>Revisar</strong> vuelva a cuadrarlo contra el documento. Esta pantalla no revisa sola
+    —costaría una lectura de red por mes—, por eso ningún mes sale en verde desde aquí.
+  </div>`;
 }
 
 async function renderArchivosEnNube(forzar){
