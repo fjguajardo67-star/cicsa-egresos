@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["RITMO_VENTANA_SEMANAS", "ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "ARCHIVO_VENTANA_MESES", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
+const CONSTS = ["RITMO_VENTANA_SEMANAS", "ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "ARCHIVO_VENTANA_MESES", "STORAGE_BUCKET", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
 const CONSTS_ARR = ["_TIPOS_MOV", "COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK", "MARCA_PERIODO"];
 
@@ -109,6 +109,7 @@ const FUNCS = [
   "ritmoSemanal", "semanasRestantes",
   "_montoMovimiento", "movimientosDelMes", "resumenArchivo", "construirArchivoMes",
   "verificarArchivo", "mesesArchivables", "estadoLiberacion",
+  "listarArchivos", "_archivosPreguntandoMesAMes", "_urlArchivo",
   "mesesDelRango", "unirConArchivo", "archivoValido", "coberturaArchivo", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
   "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance", "facturasFueraDelPeriodo",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
@@ -188,6 +189,9 @@ const sandbox = {
   fetch: async () => ({ ok: true, status: 200 }),
 };
 vm.createContext(sandbox);
+// listarArchivos lee y escribe estas tres variables de módulo. En index.html son `let`; aquí se
+// declaran como `var` para poder inspeccionarlas desde las pruebas sin runInContext por cada una.
+vm.runInContext("var _archivosEnStorage = null, _archivosError = '', _archivosParciales = '';", sandbox);
 for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
 // Constantes objeto (const X = { ... };) — mismo principio: se extraen, no se copian.
 for (const c of (typeof CONSTS_ARR !== "undefined" ? CONSTS_ARR : [])) {
@@ -1548,11 +1552,6 @@ t("la pantalla no convierte un fallo del listado en 'no esta archivado'", () => 
   assert.ok(/_archivosError\s*\?\s*null/.test(b),
     "con [] la columna diria que un mes archivado no lo esta");
 });
-t("listarArchivos se acuerda de POR QUE fallo", () => {
-  const b = _cuerpoDe("listarArchivos");
-  assert.ok(/_archivosError\s*=\s*""/.test(b), "y de limpiarlo cuando sale bien");
-  assert.ok(/_archivosError\s*=\s*String\(/.test(b), "tragarse el error deja a la pantalla inventando");
-});
 t("un aviso .status escrito como innerHTML nace visible", () => {
   // .status trae display:none en el CSS; setStatus lo muestra poniendo el.style.display="block"
   // desde JS. Un <div class="status ..."> inyectado como innerHTML no pasa por ahi: se genera y
@@ -1568,6 +1567,87 @@ t("un aviso .status escrito como innerHTML nace visible", () => {
       `este aviso se escribe como innerHTML y no se veria: ${d[0].slice(0,80)}`);
   });
 });
+console.log("\n== el listado de Storage se denego: preguntar mes por mes ==");
+// En produccion /o?prefix= devolvio 403 mientras bajar archivo/2026-09.json funcionaba sin
+// problema: listar es una operacion aparte, con su propio permiso. Quedarse ciego ahi hacia que la
+// pantalla dijera "Todavia no hay ningun mes archivado" justo debajo de un archivado con ✅.
+// Estas pruebas corren listarArchivos de verdad, con fetchStorage espiado.
+const _leerVar = (n) => vm.runInContext(n, sandbox);
+const _ponerVar = (n, v) => vm.runInContext(`${n} = ${JSON.stringify(v)};`, sandbox);
+const _conFetch = async (impl, fn) => {
+  const real = S.fetch;
+  S.fetch = impl;
+  _ponerVar("_archivosEnStorage", null); _ponerVar("_archivosError", ""); _ponerVar("_archivosParciales", "");
+  try { return await fn(); } finally { S.fetch = real; }
+};
+
+tAsyncQ("el listado pide UNA carpeta, no el bucket entero", async () => {
+  // Sin delimiter el permiso que se evalua es otro, mas amplio, y la regla de archivo/ no lo cubre.
+  let url = "";
+  await _conFetch(async (u) => { url = u; return { ok:true, status:200, json: async () => ({ items: [] }) }; },
+    async () => { await S.listarArchivos(true); });
+  assert.ok(/[?&]delimiter=%2F/.test(url), `la llamada fue a ${url}`);
+  assert.ok(/[?&]prefix=archivo%2F/.test(url));
+});
+
+tAsyncQ("si el listado se deniega, se pregunta mes por mes", async () => {
+  S.state = { budget:{}, weeks:[{ id:"w", gastos:[
+    { id:"a", fecha:"2026-07-10", importe:1 }, { id:"b", fecha:"2026-08-10", importe:1 } ] }] };
+  const pedidas = [];
+  const meses = await _conFetch(async (u) => {
+    if(/\/o\?/.test(u)) return { ok:false, status:403 };          // el listado, denegado
+    pedidas.push(u);
+    return { ok: /2026-08/.test(u), status: /2026-08/.test(u) ? 200 : 404 };
+  }, async () => S.listarArchivos(true));
+  assert.deepEqual(meses, ["2026-08"], "agosto existe, julio no");
+  assert.equal(pedidas.length, 2, "una pregunta por mes cerrado, ni mas ni menos");
+  assert.ok(pedidas.every(u => !/alt=media/.test(u)),
+    "sin alt=media se pide la ficha del objeto, no el archivo entero: preguntar tiene que ser barato");
+});
+
+tAsyncQ("preguntar mes por mes NO se reporta como fallo, pero si se avisa", async () => {
+  // Es la diferencia entre "no pude" y "pude por otro camino". La pantalla tiene que poder decir
+  // cual de las dos, porque se arreglan distinto.
+  S.state = { budget:{}, weeks:[{ id:"w", gastos:[{ id:"a", fecha:"2026-08-10", importe:1 }] }] };
+  await _conFetch(async (u) => (/\/o\?/.test(u) ? { ok:false, status:403 } : { ok:true, status:200 }),
+    async () => S.listarArchivos(true));
+  assert.equal(_leerVar("_archivosError"), "", "hubo respuesta: no es un fallo que ocultar la lista");
+  assert.ok(/403/.test(_leerVar("_archivosParciales")), "pero si hay que decir que el listado esta denegado");
+});
+
+tAsyncQ("si el listado SI funciona, no se pregunta mes por mes", async () => {
+  S.state = { budget:{}, weeks:[{ id:"w", gastos:[{ id:"a", fecha:"2026-08-10", importe:1 }] }] };
+  let extras = 0;
+  const meses = await _conFetch(async (u) => {
+    if(/\/o\?/.test(u)) return { ok:true, status:200, json: async () => ({ items:[{ name:"archivo/2026-05.json" }] }) };
+    extras++; return { ok:true, status:200 };
+  }, async () => S.listarArchivos(true));
+  assert.deepEqual(meses, ["2026-05"]);
+  assert.equal(extras, 0, "preguntar de mas cuesta una peticion por mes a cada quien que abre el modal");
+  assert.equal(_leerVar("_archivosParciales"), "", "no hay nada que advertir");
+});
+
+tAsyncQ("todos los meses en 404 es una RESPUESTA: no hay nada archivado todavia", async () => {
+  // Es el estado normal antes de archivar el primer mes, con el listado denegado. Un 404 contesta
+  // la pregunta ("ese mes no esta"); confundirlo con "no pude preguntar" sacaria un error rojo
+  // donde lo correcto es "todavia no hay ningun mes archivado".
+  S.state = { budget:{}, weeks:[{ id:"w", gastos:[
+    { id:"a", fecha:"2026-07-10", importe:1 }, { id:"b", fecha:"2026-08-10", importe:1 } ] }] };
+  const meses = await _conFetch(async (u) => (/\/o\?/.test(u) ? { ok:false, status:403 } : { ok:false, status:404 }),
+    async () => S.listarArchivos(true));
+  assert.deepEqual(meses, []);
+  assert.equal(_leerVar("_archivosError"), "", "se pregunto y se obtuvo respuesta: no es un fallo");
+  assert.ok(/403/.test(_leerVar("_archivosParciales")), "el listado sigue denegado y hay que decirlo");
+});
+
+tAsyncQ("si los dos caminos fallan, se dice y no se inventa una lista vacia", async () => {
+  S.state = { budget:{}, weeks:[{ id:"w", gastos:[{ id:"a", fecha:"2026-08-10", importe:1 }] }] };
+  const meses = await _conFetch(async () => { throw new Error("sin red"); },
+    async () => S.listarArchivos(true));
+  assert.deepEqual(meses, []);
+  assert.ok(/sin red/.test(_leerVar("_archivosError")), "la pantalla tiene que poder distinguir esto de 'no hay nada'");
+});
+
 t("la lista de la nube distingue vacia de fallida", () => {
   const b = _cuerpoDe("renderArchivosEnNube");
   assert.ok(/_archivosError/.test(b), "si no, 'no hay ningun mes archivado' sale tambien cuando si los hay");
