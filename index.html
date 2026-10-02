@@ -2121,7 +2121,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-02-egresos-v17";
+const APP_BUILD = "2026-10-02-egresos-v18";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -3549,7 +3549,7 @@ async function renderArchivosEnNube(forzar){
   const meses = await listarArchivos(forzar);
   if(!meses.length){
     body.innerHTML = _archivosError
-      ? `<div class="status err" style="font-size:12px">❌ No se pudo consultar la nube: ${esc(_archivosError)}.
+      ? `<div class="status err" style="display:block;font-size:12px">❌ No se pudo consultar la nube: ${esc(_archivosError)}.
          <strong>No quiere decir que no haya meses archivados</strong>, sino que no se pudo preguntar.</div>`
       : `<div style="font-size:12px;color:var(--txt2)">Todavía no hay ningún mes archivado.</div>`;
     return;
