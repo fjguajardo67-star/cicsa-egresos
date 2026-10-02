@@ -2121,7 +2121,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-02-egresos-v16";
+const APP_BUILD = "2026-10-02-egresos-v17";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -3205,7 +3205,11 @@ function estadoLiberacion(mes, archivables, enStorage, verificado){
   if(!/^\d{4}-\d{2}$/.test(String(mes||""))) return { puede:false, motivo:"Mes inválido." };
   if(!(archivables||[]).includes(mes))
     return { puede:false, motivo:`Dentro de los últimos ${ARCHIVO_VENTANA_MESES} meses: no se quita.` };
-  if(!(enStorage||[]).includes(mes))
+  // null/undefined NO es lista vacía: es "no se pudo preguntar". Confundirlos diría que un mes
+  // archivado no lo está, que es la misma mentira que esta pantalla ya contó una vez.
+  if(enStorage == null)
+    return { puede:false, motivo:"No se pudo consultar la nube." };
+  if(!enStorage.includes(mes))
     return { puede:false, motivo:"Todavía no está archivado en la nube." };
   if(verificado !== true)
     return { puede:false, motivo:"Falta revisar el archivo contra el documento." };
@@ -3378,6 +3382,7 @@ function _urlArchivo(mes){
 // Lo que ya se trajo de la nube en esta sesión. No se guarda en el estado: es caché de lectura.
 const _archivoCache = {};
 let _archivosEnStorage = null;   // lista de meses con archivo, o null si no se ha consultado
+let _archivosError = "";         // por qué falló el último listado. Vacío = no falló.
 
 // Lee un mes archivado de Storage. Valida el formato ANTES de usarlo.
 async function leerArchivoMes(mes, forzar){
@@ -3409,7 +3414,14 @@ async function listarArchivos(forzar){
     _archivosEnStorage = (d.items||[])
       .map(x=>String(x.name||"").replace(ARCHIVO_PREFIJO+"/","").replace(/\.json$/,""))
       .filter(x=>/^\d{4}-\d{2}$/.test(x)).sort();
-  }catch(e){ console.warn("listarArchivos:", e); _archivosEnStorage = []; }
+    _archivosError = "";
+  }catch(e){
+    // Devolver [] a secas hacía que la pantalla dijera "Todavía no hay ningún mes archivado"
+    // cuando lo cierto era "no pude preguntar". Esa frase, justo debajo de un archivado con ✅,
+    // es exactamente lo que hace desconfiar del respaldo.
+    console.warn("listarArchivos:", e);
+    _archivosEnStorage = []; _archivosError = String((e && e.message) || e);
+  }
   return _archivosEnStorage;
 }
 
@@ -3504,7 +3516,9 @@ async function renderArchivoMeses(){
   // un mes al que le corriges un gasto hay que poder volver a archivarlo. Lo que la ventana
   // gobierna es la otra columna.
   const archivables = mesesArchivables(state, todayStr(), ARCHIVO_VENTANA_MESES);
-  const enStorage = await listarArchivos();
+  // Si el listado falló, se pasa null: "no sé" en vez de "no hay". La columna lo dice tal cual.
+  await listarArchivos();
+  const enStorage = _archivosError ? null : _archivosEnStorage;
   body.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>Mes</th><th style="text-align:right">Movimientos</th><th style="text-align:right">Importe</th><th>Archivo</th><th>¿Ya se puede quitar?</th></tr></thead><tbody>
     ${lista.map(m=>{
       const est = m===mesActual ? { puede:false, motivo:"Es el mes en curso." }
@@ -3533,7 +3547,13 @@ async function renderArchivosEnNube(forzar){
   if(!body) return;
   body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Buscando…</div>`;
   const meses = await listarArchivos(forzar);
-  if(!meses.length){ body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Todavía no hay ningún mes archivado.</div>`; return; }
+  if(!meses.length){
+    body.innerHTML = _archivosError
+      ? `<div class="status err" style="font-size:12px">❌ No se pudo consultar la nube: ${esc(_archivosError)}.
+         <strong>No quiere decir que no haya meses archivados</strong>, sino que no se pudo preguntar.</div>`
+      : `<div style="font-size:12px;color:var(--txt2)">Todavía no hay ningún mes archivado.</div>`;
+    return;
+  }
   body.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>Mes</th><th>En el documento</th><th>Acciones</th></tr></thead><tbody>
     ${meses.map(m=>{
       const n = movimientosDelMes(state, m).length;
