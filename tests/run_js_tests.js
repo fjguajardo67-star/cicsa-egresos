@@ -1491,6 +1491,39 @@ t("subir verifica ANTES de darlo por bueno", () => {
   assert.ok(/verificarArchivo\(/.test(b), "subir sin releer no prueba que el archivo sirva");
   assert.ok(/currentRole!=="admin"/.test(b));
 });
+console.log("\n== ningun boton apunta al vacio ==");
+// En una app de un solo archivo, sin bundler ni linter, un onclick con el nombre equivocado es un
+// boton que no hace nada y no avisa: el ReferenceError se queda en la consola, que nadie mira.
+// Asi vivio "Revisar ingredientes para FORX" — un boton que nunca funciono, en ningun commit.
+
+t("todo manejador on* apunta a una funcion que existe", () => {
+  // Las lineas de comentario se quitan ENTERAS: cortar desde "//" se come las URLs, y aqui ademas
+  // hay comentarios que documentan un onclick de ejemplo.
+  const limpio = html.slice(0, html.indexOf("<script>")) + script.replace(/^\s*\/\/.*$/gm, "");
+  const decl = new Set();
+  for (const m of script.matchAll(/(?:^|\n)\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g)) decl.add(m[1]);
+  for (const m of script.matchAll(/(?:^|\n)\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\()/g)) decl.add(m[1]);
+  for (const m of script.matchAll(/\bwindow\.([A-Za-z_$][\w$]*)\s*=/g)) decl.add(m[1]);   // window.X = (…)=>{}
+  const GLOBALES = new Set(["alert","confirm","prompt","parseInt","parseFloat","Number","String",
+    "Boolean","JSON","Math","Date","console","event","window","document","setTimeout","setInterval",
+    "clearTimeout","encodeURIComponent","decodeURIComponent","isNaN","Array","Object","fetch","URL",
+    "Blob","FileReader","requestAnimationFrame","firebase",
+    "if","for","while","switch","return","typeof","catch","new","delete","void","function","this","else","do","try"]);
+  const sinResolver = new Map();
+  let llamadas = 0;
+  for (const m of limpio.matchAll(/\bon(?:click|change|input|submit|keyup|keydown|blur|focus|load|error|mouseover|mouseout)\s*=\s*"([^"]*)"/g)) {
+    // (?<![.\w$]) deja fuera las llamadas a metodos (x.replace(...), window._openThumb(...)).
+    for (const c of m[1].matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
+      llamadas++;
+      if (GLOBALES.has(c[1]) || decl.has(c[1])) continue;
+      sinResolver.set(c[1], (sinResolver.get(c[1]) || 0) + 1);
+    }
+  }
+  assert.ok(llamadas > 300, `solo encontre ${llamadas} llamadas en manejadores: el extractor se quedo ciego`);
+  assert.deepEqual([...sinResolver.keys()], [],
+    "estos on* llaman a algo que no existe: el boton truena al apretarlo y solo se ve en la consola");
+});
+
 console.log("\n== la ventana de retencion, conectada ==");
 // Existia mesesArchivables, estaba probada, aplicaba bien el limite... y NADIE la llamaba: la
 // pantalla le ponia boton a todos los meses menos el actual. La ventana de 4 meses era una
