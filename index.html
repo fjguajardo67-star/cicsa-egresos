@@ -715,13 +715,15 @@ body.snav-min .side-theme span { display:none; }
       <div style="font-weight:600;font-size:12.5px;margin-bottom:4px">🗑 Liberar un mes del documento
         <span style="font-weight:400;font-size:11px;color:var(--txt2)">— fase 3, sin botón de ejecutar todavía</span></div>
       <div style="font-size:12px;color:var(--txt2);margin-bottom:8px;line-height:1.5">
-        Esto es lo único que <strong>quita</strong> movimientos. Aquí abajo se ve exactamente qué
-        pasaría con cada mes: cuántos movimientos saldrían, cuánto suman y si el archivo
-        <strong>vuelve a cuadrar en este momento</strong> — no se reusa la verificación anterior.
-        <strong>Todavía no hay forma de ejecutarlo.</strong>
+        Esto es lo único que <strong>quita</strong> movimientos del documento. Aquí abajo se ve qué
+        pasaría con cada mes: cuántos saldrían, cuánto suman y si el archivo <strong>vuelve a cuadrar
+        en este momento</strong> — no se reusa la verificación anterior. El mes liberado se sigue
+        consultando desde la nube. Un mes por vez, escribiendo el mes para confirmar, y con un
+        respaldo completo comprobado justo antes.
       </div>
       <button class="btn btn-light" style="padding:4px 12px;font-size:12px" onclick="renderLiberar()">👁 Ver qué pasaría</button>
       <div id="liberarBody" style="margin-top:10px"></div>
+      <div class="status" id="liberarStatus" style="margin-top:8px"></div>
     </div>
 
     <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
@@ -2134,7 +2136,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-02-egresos-v21";
+const APP_BUILD = "2026-10-02-egresos-v22";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -3557,15 +3559,38 @@ const LIBERADOS_VERSION = 1;
 
 // Lo que queda escrito en el documento cuando un mes se va. Lo suficiente para que, meses después,
 // alguien pueda explicar el hueco sin tener que abrir Storage.
-function registroLiberacion(mes, resumen, quien, ahoraISO){
+function registroLiberacion(mes, resumen, quien, ahoraISO, respaldoId){
   return {
     v: LIBERADOS_VERSION,
     mes: String(mes||""),
     n: (resumen && resumen.n) || 0,
     porTipo: (resumen && resumen.porTipo) || {},
     ts: String(ahoraISO||""),
-    por: String(quien||"")
+    por: String(quien||""),
+    // Dónde quedó la copia completa de ANTES. Sin esto, el registro explica el hueco pero no dice
+    // de dónde sacar lo que había.
+    respaldo: String(respaldoId||"")
   };
+}
+
+// Un respaldo completo ANTES de quitar nada, y comprobado conteniendo justo lo que va a salir.
+// "Se guardó un respaldo" no es un hecho hasta que alguien lo vuelve a leer: guardarRespaldo
+// devuelve lo mismo ante un 409 (ese id ya existía) que ante un guardado nuevo, así que creerle
+// sin releer dejaría pasar el caso en que no se escribió nada.
+async function respaldoAntesDeLiberar(mes){
+  const esperados = movimientosDelMes(state, mes).length;
+  const id = `${RESPALDO_PREFIJO}${todayStr()}-antes-de-liberar-${mes}`;
+  try{ await guardarRespaldo(id, state); }
+  catch(e){ return { ok:false, motivo:`No se pudo guardar el respaldo: ${(e && e.message) || e}`, id }; }
+  let leido = null;
+  try{ leido = await leerRespaldo(id); }
+  catch(e){ return { ok:false, motivo:`El respaldo se guardó pero no se pudo volver a leer: ${(e && e.message) || e}`, id }; }
+  if(!leido || !Array.isArray(leido.weeks))
+    return { ok:false, motivo:"El respaldo no se puede leer como un estado.", id };
+  const hay = movimientosDelMes(leido, mes).length;
+  if(hay !== esperados)
+    return { ok:false, motivo:`El respaldo no trae los ${esperados} movimiento(s) de ${mes} (trae ${hay}). No se quitó nada.`, id };
+  return { ok:true, motivo:"", id, n:hay };
 }
 
 // Quita del estado los movimientos del mes y dice cuántos salieron. NO guarda: quien llame tiene
@@ -3616,13 +3641,53 @@ async function liberarMes(mes){
   const p = await previaLiberacion(mes);
   if(!p.estado.puede) return { ok:false, motivo:p.estado.motivo, previa:p };
   if(!p.resumen.n) return { ok:false, motivo:"Ese mes ya no tiene movimientos en el documento.", previa:p };
-  const reg = registroLiberacion(mes, p.resumen, (currentNombre||currentUser?.email||""), new Date().toISOString());
+  // El respaldo va ANTES de tocar nada y tiene que comprobarse. Si falla, no se quita: un borrado
+  // cuyo respaldo nadie verificó es un borrado a secas.
+  const resp = await respaldoAntesDeLiberar(mes);
+  if(!resp.ok) return { ok:false, motivo:resp.motivo, previa:p };
+  const reg = registroLiberacion(mes, p.resumen, (currentNombre||currentUser?.email||""), new Date().toISOString(), resp.id);
   const r = quitarMesDelDocumento(state, mes);
   if(!r.ok) return { ok:false, motivo:r.motivo, previa:p };
   if(!Array.isArray(state.mesesLiberados)) state.mesesLiberados = [];
   state.mesesLiberados.push(reg);
   save();
   return { ok:true, motivo:"", quitados:r.quitados, registro:reg };
+}
+
+// El único camino hasta el borrado. Un confirm() de Aceptar/Cancelar se aprieta sin leer —en esta
+// app lo haces veinte veces al día—, y aquí el error no se deshace con Ctrl+Z. Teclear el mes
+// obliga a mirar CUÁL mes, que es justo la equivocación que importa evitar.
+async function confirmarLiberar(mes){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede liberar un mes."); return; }
+  // Se vuelve a preguntar aquí: entre que se pintó la tabla y este clic pudieron pasar minutos.
+  const p = await previaLiberacion(mes);
+  if(!p.estado.puede){ alert(`No se puede liberar ${mes}:\n\n${p.estado.motivo}`); await renderLiberar(); return; }
+  const r = p.resumen;
+  const detalle = Object.keys(r.porTipo).map(k=>`· ${r.porTipo[k].n} ${k}(s) ${fmt(r.porTipo[k].total)}`).join("\n");
+  const tecleado = prompt(
+    `LIBERAR ${mes} DEL DOCUMENTO\n\n`+
+    `Van a salir ${r.n} movimiento(s):\n${detalle}\n\n`+
+    `Se quedan en la nube, en archivo/${mes}.json, y se siguen consultando desde "Meses ya `+
+    `archivados en la nube". Antes de quitar nada se guarda un respaldo completo y se vuelve a `+
+    `leer para comprobar que trae este mes.\n\n`+
+    `Esto NO se deshace solo.\n\nPara confirmar, escribe el mes:  ${mes}`);
+  if(tecleado === null) return;                                  // canceló
+  if(String(tecleado).trim() !== mes){
+    setStatus("liberarStatus", `🚫 Lo que escribiste no coincide con ${mes}. No se quitó nada.`, "err");
+    return;
+  }
+  setStatus("liberarStatus", `Respaldando y liberando ${mes}…`, "loading");
+  const res = await liberarMes(mes);
+  if(!res.ok){
+    setStatus("liberarStatus", `❌ No se liberó ${mes}: ${res.motivo}`, "err");
+    await renderLiberar(); return;
+  }
+  setStatus("liberarStatus",
+    `✅ ${mes} liberado — ${res.quitados} movimiento(s) salieron del documento. `+
+    `Respaldo completo de antes: ${res.registro.respaldo}. El mes se sigue consultando en `+
+    `"Meses ya archivados en la nube".`, "ok");
+  await renderLiberar();
+  try{ pintarMedidorEstado(); }catch(_){}
 }
 
 // Lo que ya se liberó, dicho en una línea. El registro vive en el documento a propósito: si
@@ -3663,15 +3728,20 @@ async function renderLiberar(){
         ? `<span style="color:var(--vd)">✅ ${esc(p.estado.motivo)}</span>`
         : `<span style="color:var(--txt2)">🔒 ${esc(p.estado.motivo)}</span>`}`+
         `${prob.length?`<div style="color:var(--red);margin-top:3px">· ${prob.map(x=>esc(String(x))).join("<br>· ")}</div>`:""}</td>
+      <td style="white-space:nowrap">${p.estado.puede
+        ? `<button class="btn btn-red" style="padding:3px 10px;font-size:11px" onclick="confirmarLiberar('${escAttrJs(m)}')">🗑 Liberar ${esc(m)}</button>`
+        : `<span style="font-size:11px;color:var(--txt2)">—</span>`}</td>
     </tr>`);
   }
   body.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>Mes</th>`+
-    `<th style="text-align:right">Saldrían</th><th>Desglose</th><th>¿Se puede?</th></tr></thead>`+
+    `<th style="text-align:right">Saldrían</th><th>Desglose</th><th>¿Se puede?</th><th></th></tr></thead>`+
     `<tbody>${filas.join("")}</tbody></table></div>
     <div style="font-size:11.5px;color:var(--txt2);margin-top:8px;line-height:1.5">
-      <strong>Nada de esto se ejecutó</strong> — no existe el botón que lo haría. Lo que sí se hizo
-      fue bajar cada archivo de la nube y compararlo contra el documento ahora mismo, que es por lo
-      que tardó. Un ✅ aquí no reusa la verificación de ayer.<br>${_registrosLiberados()}
+      Esta tabla no ejecutó nada: para verla se bajó cada archivo de la nube y se comparó contra el
+      documento ahora mismo, que es por lo que tardó. Un ✅ aquí no reusa la verificación de ayer.<br>
+      <strong>Liberar pide escribir el mes</strong>, guarda antes un respaldo completo y lo vuelve a
+      leer para comprobar que trae ese mes. Si el respaldo falla, no se quita nada.<br>
+      ${_registrosLiberados()}
     </div>`;
 }
 
