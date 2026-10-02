@@ -1553,6 +1553,21 @@ t("listarArchivos se acuerda de POR QUE fallo", () => {
   assert.ok(/_archivosError\s*=\s*""/.test(b), "y de limpiarlo cuando sale bien");
   assert.ok(/_archivosError\s*=\s*String\(/.test(b), "tragarse el error deja a la pantalla inventando");
 });
+t("un aviso .status escrito como innerHTML nace visible", () => {
+  // .status trae display:none en el CSS; setStatus lo muestra poniendo el.style.display="block"
+  // desde JS. Un <div class="status ..."> inyectado como innerHTML no pasa por ahi: se genera y
+  // no se ve. Asi nacio invisible el aviso de "no se pudo consultar la nube", y la pantalla quedo
+  // en blanco — que es peor que el mensaje equivocado que veniamos de arreglar.
+  const css = html.slice(0, html.indexOf("<script>"));
+  assert.ok(/\.status\s*\{[^}]*display:\s*none/.test(css),
+    "si .status dejara de estar oculto por defecto, esta prueba ya no haria falta");
+  const divs = [...script.matchAll(/<div class="status [^"]*"([^>]*)>/g)];
+  assert.ok(divs.length > 0, "el extractor se quedo ciego");
+  divs.forEach(d=>{
+    assert.ok(/display\s*:\s*block/.test(d[1]),
+      `este aviso se escribe como innerHTML y no se veria: ${d[0].slice(0,80)}`);
+  });
+});
 t("la lista de la nube distingue vacia de fallida", () => {
   const b = _cuerpoDe("renderArchivosEnNube");
   assert.ok(/_archivosError/.test(b), "si no, 'no hay ningun mes archivado' sale tambien cuando si los hay");
