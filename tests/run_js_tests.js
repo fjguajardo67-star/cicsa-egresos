@@ -88,7 +88,7 @@ function extractConst(name) {
 // comparando el valor contra sí misma. Pasó con CORTES_VERSIONES_OK — index.html decía [1,2],
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
-const CONSTS = ["RITMO_VENTANA_SEMANAS", "ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "ARCHIVO_VENTANA_MESES", "STORAGE_BUCKET", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
+const CONSTS = ["RITMO_VENTANA_SEMANAS", "ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "ARCHIVO_VENTANA_MESES", "STORAGE_BUCKET", "LIBERADOS_VERSION", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
 const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
 const CONSTS_ARR = ["_TIPOS_MOV", "COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK", "MARCA_PERIODO"];
 
@@ -110,6 +110,8 @@ const FUNCS = [
   "_montoMovimiento", "movimientosDelMes", "resumenArchivo", "construirArchivoMes",
   "verificarArchivo", "mesesArchivables", "estadoLiberacion",
   "listarArchivos", "_archivosPreguntandoMesAMes", "_urlArchivo",
+  "leerArchivoMes", "revisarArchivoMes",
+  "registroLiberacion", "quitarMesDelDocumento", "previaLiberacion", "liberarMes",
   "mesesDelRango", "unirConArchivo", "archivoValido", "coberturaArchivo", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
   "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance", "facturasFueraDelPeriodo",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
@@ -192,6 +194,8 @@ vm.createContext(sandbox);
 // listarArchivos lee y escribe estas tres variables de módulo. En index.html son `let`; aquí se
 // declaran como `var` para poder inspeccionarlas desde las pruebas sin runInContext por cada una.
 vm.runInContext("var _archivosEnStorage = null, _archivosError = '', _archivosParciales = '';", sandbox);
+// leerArchivoMes cachea por mes; en index.html es un `const` de modulo.
+vm.runInContext("var _archivoCache = {};", sandbox);
 for (const c of CONSTS) vm.runInContext(extractConst(c), sandbox);
 // Constantes objeto (const X = { ... };) — mismo principio: se extraen, no se copian.
 for (const c of (typeof CONSTS_ARR !== "undefined" ? CONSTS_ARR : [])) {
@@ -210,6 +214,7 @@ vm.runInContext('const CAT_SIN = "__SIN__";', sandbox);       // centinela de "s
 vm.runInContext('const RESPALDO_PREFIJO = "respaldo-"; const RESPALDOS_A_CONSERVAR = 30;', sandbox);
 vm.runInContext('const RESPALDOS_COL = "respaldos"; const RESPALDO_INDICE = "_indice";', sandbox);
 vm.runInContext('var currentRole = "admin";', sandbox);   // var: reasignable desde las pruebas
+vm.runInContext('var currentNombre = "Prueba", currentUser = { email: "p@x" };', sandbox);
 for (const f of FUNCS) vm.runInContext(extractFunction(f), sandbox);
 const S = sandbox;
 
@@ -1491,6 +1496,171 @@ t("subir verifica ANTES de darlo por bueno", () => {
   assert.ok(/verificarArchivo\(/.test(b), "subir sin releer no prueba que el archivo sirva");
   assert.ok(/currentRole!=="admin"/.test(b));
 });
+console.log("\n== fase 3: liberar un mes del documento ==");
+// La unica fase que quita. Estas pruebas fijan las dos reglas que la hacen defendible: que el
+// registro y el borrado lleguen juntos, y que el archivo se verifique en el instante de liberar.
+
+const _doc = () => ({ budget:{}, weeks:[
+  { id:"w1", gastos:[{ id:"g1", fecha:"2026-04-05", importe:100 }, { id:"g2", fecha:"2026-05-05", importe:200 }],
+             cortes:[{ id:"c1", fecha:"2026-04-20", monto:50 }], retiros:[], aportaciones:[] },
+  { id:"w2", gastos:[{ id:"g3", fecha:"2026-04-28", importe:300 }, { id:"sf", importe:999 }],
+             cortes:[], retiros:[{ id:"r1", fecha:"2026-04-29", monto:10 }], aportaciones:[] } ]});
+
+t("liberar un mes quita sus movimientos de TODAS las semanas y de los cuatro tipos", () => {
+  const st = _doc();
+  const r = S.quitarMesDelDocumento(st, "2026-04");
+  assert.equal(r.ok, true);
+  assert.equal(r.quitados, 4, "g1, c1, g3 y r1");
+  assert.deepEqual(st.weeks[0].gastos.map(g=>g.id), ["g2"], "mayo se queda");
+  assert.deepEqual(st.weeks[0].cortes, []);
+  assert.deepEqual(st.weeks[1].retiros, []);
+});
+t("un movimiento sin fecha NO se lo lleva nadie", () => {
+  // No hay forma de saber de que mes es. Llevarselo seria desaparecerlo, y es la misma regla que
+  // usa movimientosDelMes para no contarlo: si no entra al archivo, no puede salir del documento.
+  const st = _doc();
+  S.quitarMesDelDocumento(st, "2026-04");
+  assert.ok(st.weeks[1].gastos.some(g=>g.id==="sf"), "el que no tiene fecha se queda donde esta");
+});
+t("un mes mal escrito no quita nada", () => {
+  ["", "2026", "abril", "2026-4", "2026-04-01", null].forEach(m=>{
+    const st = _doc();
+    const r = S.quitarMesDelDocumento(st, m);
+    assert.equal(r.ok, false, `mes=${JSON.stringify(m)}`);
+    assert.equal(st.weeks[0].gastos.length, 2, "ni uno");
+  });
+});
+t("el registro guarda lo suficiente para explicar el hueco despues", () => {
+  const reg = S.registroLiberacion("2026-04", { n:4, porTipo:{ gasto:{n:2,total:400} } }, "Ana", "2026-10-02T12:00:00Z");
+  assert.equal(reg.mes, "2026-04");
+  assert.equal(reg.n, 4);
+  assert.equal(reg.porTipo.gasto.total, 400);
+  assert.equal(reg.por, "Ana");
+  assert.ok(reg.ts && reg.v, "sin version ni fecha, dentro de un ano nadie sabe que es esto");
+});
+
+t("entre quitar y guardar NO puede haber un await", () => {
+  // Es lo que hace que el borrado y su registro lleguen al documento en la MISMA escritura. Con un
+  // await en medio, otra cosa puede guardar primero y dejar un mes borrado sin constancia.
+  const b = _cuerpoDe("liberarMes");
+  const i = b.indexOf("quitarMesDelDocumento(");
+  const j = b.indexOf("save()");
+  assert.ok(i > -1 && j > i, "el orden es quitar y luego guardar");
+  // Desde el PRINCIPIO de su linea: un `await` puesto delante de la llamada queda fuera si se
+  // mira solo desde el nombre de la funcion, y es justo donde alguien lo pondria.
+  const desde = b.lastIndexOf("\n", i) + 1;
+  assert.ok(!/\bawait\b/.test(b.slice(desde, j)), "hay un await entre el borrado y el guardado");
+  assert.ok(b.slice(i, j).includes("mesesLiberados"), "el registro se escribe antes de ese save()");
+});
+t("liberar vuelve a verificar: no reusa el palomazo de ayer", () => {
+  const b = _cuerpoDe("liberarMes");
+  assert.ok(/await previaLiberacion\(/.test(b),
+    "previaLiberacion es la que vuelve a bajar el archivo y compararlo ahora mismo");
+  assert.ok(b.indexOf("previaLiberacion(") < b.indexOf("quitarMesDelDocumento("),
+    "primero se comprueba, luego se quita");
+  assert.ok(/estado\.puede/.test(b), "y no se quita si la puerta dice que no");
+});
+t("previaLiberacion revisa de verdad, no se cree lo que ya tenia", () => {
+  const b = _cuerpoDe("previaLiberacion");
+  assert.ok(/revisarArchivoMes\(/.test(b), "revisarArchivoMes baja el archivo otra vez");
+  assert.ok(/estadoLiberacion\(/.test(b), "y la respuesta pasa por la misma puerta");
+});
+t("todavia NO hay forma de llegar al borrado desde la pantalla", () => {
+  // Esta entrega es para revisar la pantalla de confirmacion. El dia que esto falle tiene que ser
+  // porque alguien agrego el boton a proposito, no porque se le fue.
+  const manejadores = [...html.matchAll(/\bon\w+\s*=\s*"([^"]*)"/g)].map(m=>m[1]).join(" ");
+  assert.ok(!/liberarMes\s*\(/.test(manejadores), "apareció un camino hasta el borrado");
+});
+t("la pantalla de confirmacion dice que no ejecuto nada", () => {
+  const b = _cuerpoDe("renderLiberar");
+  assert.ok(/Nada de esto se ejecut/.test(b), "una pantalla que lista borrados tiene que decir que no borro");
+  assert.ok(/previaLiberacion\(/.test(b));
+  assert.ok(!/liberarMes\(/.test(b), "la vista no ejecuta");
+});
+
+// Y ahora el camino completo, con la red simulada: es la funcion que borra contabilidad.
+const _docLib = () => ({ budget:{}, weeks:[
+  { id:"w1", gastos:[{ id:"g1", fecha:"2026-04-05", importe:100 }, { id:"g2", fecha:"2026-09-05", importe:200 }],
+             cortes:[{ id:"c1", fecha:"2026-04-20", monto:50 }], retiros:[], aportaciones:[] } ]});
+
+// Un fetch que contesta como Storage: el listado trae el mes, y el archivo es el que construye la
+// propia app a partir del documento — asi la verificacion es real, no un sello de goma.
+const _storageCon = (archivoJson) => async (u) => {
+  if(/\/o\?/.test(u) && !/alt=media/.test(u))
+    return { ok:true, status:200, json: async () => ({ items:[{ name:"archivo/2026-04.json" }] }) };
+  return { ok:true, status:200, json: async () => archivoJson };
+};
+
+tAsyncQ("liberar un mes quita sus movimientos Y deja constancia, en la misma guardada", async () => {
+  const st = _docLib();
+  S.state = st;
+  const archivo = S.construirArchivoMes(st, "2026-04", "Prueba");
+  let guardadas = 0; const realSave = S.save; S.save = () => { guardadas++; };
+  const realFetch = S.fetch; S.fetch = _storageCon(archivo);
+  vm.runInContext("_archivosEnStorage = null; _archivosError = ''; _archivosParciales = '';", sandbox);
+  try {
+    const r = await S.liberarMes("2026-04");
+    assert.equal(r.ok, true, r.motivo);
+    assert.equal(r.quitados, 2, "g1 y c1");
+    assert.deepEqual(st.weeks[0].gastos.map(g=>g.id), ["g2"], "septiembre no se toca");
+    assert.deepEqual(st.weeks[0].cortes, []);
+    assert.equal(st.mesesLiberados.length, 1, "sin registro, el hueco no se puede explicar");
+    assert.equal(st.mesesLiberados[0].mes, "2026-04");
+    assert.equal(st.mesesLiberados[0].n, 2);
+    assert.equal(guardadas, 1, "una sola escritura: el borrado y su registro viajan juntos");
+  } finally { S.save = realSave; S.fetch = realFetch; }
+});
+
+tAsyncQ("si el archivo YA NO cuadra, no se quita nada", async () => {
+  // El caso real: se archivo el mes, y despues alguien corrigio un gasto de ese mes. El ✅ de
+  // entonces ya no vale, y es justo cuando borrar seria perder el dato corregido.
+  const st = _docLib();
+  S.state = st;
+  const archivo = S.construirArchivoMes(st, "2026-04", "Prueba");
+  st.weeks[0].gastos.push({ id:"g9", fecha:"2026-04-30", importe:777 });   // corregido DESPUES
+  let guardadas = 0; const realSave = S.save; S.save = () => { guardadas++; };
+  const realFetch = S.fetch; S.fetch = _storageCon(archivo);
+  vm.runInContext("_archivosEnStorage = null; _archivosError = ''; _archivosParciales = '';", sandbox);
+  try {
+    const r = await S.liberarMes("2026-04");
+    assert.equal(r.ok, false);
+    assert.ok(/revisar/i.test(r.motivo), `motivo: ${r.motivo}`);
+    assert.equal(st.weeks[0].gastos.length, 3, "ni un movimiento salio");
+    assert.ok(!st.mesesLiberados, "ni se invento un registro");
+    assert.equal(guardadas, 0, "y no se guardo nada");
+  } finally { S.save = realSave; S.fetch = realFetch; }
+});
+
+tAsyncQ("un mes dentro de la ventana no se libera aunque todo lo demas este bien", async () => {
+  const st = { budget:{}, weeks:[{ id:"w1", gastos:[{ id:"g1", fecha:"2026-09-05", importe:100 }],
+    cortes:[], retiros:[], aportaciones:[] }] };
+  S.state = st;
+  const realFetch = S.fetch;
+  S.fetch = async (u) => (/\/o\?/.test(u) && !/alt=media/.test(u)
+    ? { ok:true, status:200, json: async () => ({ items:[{ name:"archivo/2026-09.json" }] }) }
+    : { ok:true, status:200, json: async () => S.construirArchivoMes(st, "2026-09", "Prueba") });
+  vm.runInContext("_archivosEnStorage = null; _archivosError = ''; _archivosParciales = '';", sandbox);
+  try {
+    const r = await S.liberarMes("2026-09");
+    assert.equal(r.ok, false);
+    assert.ok(/ltimos 4 meses/.test(r.motivo), `motivo: ${r.motivo}`);
+    assert.equal(st.weeks[0].gastos.length, 1);
+  } finally { S.fetch = realFetch; }
+});
+
+tAsyncQ("un operativo no puede liberar nada", async () => {
+  const st = _docLib(); S.state = st;
+  vm.runInContext('currentRole = "operativo";', sandbox);
+  try {
+    const r = await S.liberarMes("2026-04");
+    assert.equal(r.ok, false);
+    // Un ok:false a secas lo da tambien cualquier otra puerta: hay que exigir que sea ESTA.
+    assert.ok(/administrador/i.test(r.motivo), `motivo: ${r.motivo}`);
+    assert.ok(!r.previa, "el gate de rol corta antes de siquiera mirar la nube");
+    assert.equal(st.weeks[0].gastos.length, 2, "ni un movimiento salio");
+  } finally { vm.runInContext('currentRole = "admin";', sandbox); }
+});
+
 console.log("\n== ningun boton apunta al vacio ==");
 // En una app de un solo archivo, sin bundler ni linter, un onclick con el nombre equivocado es un
 // boton que no hace nada y no avisa: el ReferenceError se queda en la consola, que nadie mira.
