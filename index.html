@@ -2121,7 +2121,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-02-egresos-v18";
+const APP_BUILD = "2026-10-02-egresos-v19";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -3383,6 +3383,8 @@ function _urlArchivo(mes){
 const _archivoCache = {};
 let _archivosEnStorage = null;   // lista de meses con archivo, o null si no se ha consultado
 let _archivosError = "";         // por qué falló el último listado. Vacío = no falló.
+let _archivosParciales = "";     // si no está vacío: el listado se denegó y la lista se armó
+                                 // preguntando mes por mes. Guarda el motivo del rechazo.
 
 // Lee un mes archivado de Storage. Valida el formato ANTES de usarlo.
 async function leerArchivoMes(mes, forzar){
@@ -3404,23 +3406,60 @@ async function leerArchivoMes(mes, forzar){
 }
 
 // Qué meses tienen archivo en Storage. Se consulta una vez por sesión salvo que se fuerce.
+// Preguntar mes por mes, en vez de pedir el listado. Usa el MISMO permiso de lectura que ya está
+// probado en producción: bajar archivo/2026-09.json funciona. Sin `alt=media` la respuesta es solo
+// la ficha del objeto, no el archivo entero, así que preguntar por siete meses es barato.
+// Lo que este camino NO puede ver: un mes archivado que ya no tenga movimientos en el documento.
+// Hoy eso no existe porque nada se quita; cuando llegue la fase 3 habrá que llevar el registro de
+// lo archivado en el propio documento y dejar de depender de lo que Storage quiera contestar.
+async function _archivosPreguntandoMesAMes(){
+  // Ventana 0 = todos los meses cerrados con movimientos. El mes en curso nunca se archiva.
+  const meses = mesesArchivables(state, todayStr(), 0);
+  const hay = []; let sinRespuesta = 0;
+  for(const m of meses){
+    try{
+      const r = await fetchStorage(_urlArchivo(m));
+      if(r && r.ok) hay.push(m);
+      else if(!r || r.status !== 404) sinRespuesta++;   // 404 SÍ es respuesta: ese mes no está
+    }catch(_){ sinRespuesta++; }
+  }
+  // Si ninguno contestó, esto no es "no hay archivos": es que por aquí tampoco se pudo preguntar.
+  // Devolver [] sería la misma mentira de antes con otro disfraz. null = no sé.
+  if(meses.length && sinRespuesta === meses.length) return null;
+  return hay.sort();
+}
+
 async function listarArchivos(forzar){
   if(_archivosEnStorage && !forzar) return _archivosEnStorage;
+  let fallo = "";
   try{
+    // `delimiter=/` es lo que manda el SDK de Firebase: pide UNA carpeta, no el bucket entero de
+    // forma recursiva. Sin él, el permiso que se evalúa es otro —más amplio— y la regla de
+    // archivo/ no lo cubre.
     const r = await fetchStorage(
-      `https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o?prefix=${encodeURIComponent(ARCHIVO_PREFIJO+"/")}`);
+      `https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o`+
+      `?delimiter=${encodeURIComponent("/")}&prefix=${encodeURIComponent(ARCHIVO_PREFIJO+"/")}`);
     if(!r.ok) throw new Error(`Storage respondió ${r.status}`);
     const d = await r.json();
     _archivosEnStorage = (d.items||[])
       .map(x=>String(x.name||"").replace(ARCHIVO_PREFIJO+"/","").replace(/\.json$/,""))
       .filter(x=>/^\d{4}-\d{2}$/.test(x)).sort();
-    _archivosError = "";
+    _archivosError = ""; _archivosParciales = "";
+    return _archivosEnStorage;
   }catch(e){
-    // Devolver [] a secas hacía que la pantalla dijera "Todavía no hay ningún mes archivado"
-    // cuando lo cierto era "no pude preguntar". Esa frase, justo debajo de un archivado con ✅,
-    // es exactamente lo que hace desconfiar del respaldo.
     console.warn("listarArchivos:", e);
-    _archivosEnStorage = []; _archivosError = String((e && e.message) || e);
+    fallo = String((e && e.message) || e);
+  }
+  // El listado se denegó. Quedarse ciego aquí hacía que la pantalla dijera "Todavía no hay ningún
+  // mes archivado" justo debajo de un archivado con ✅ — y desconfiar del respaldo es lo que
+  // impide que alguien se anime a correr la fase 3. Preguntar mes por mes sí se puede.
+  try{
+    const porMes = await _archivosPreguntandoMesAMes();
+    if(porMes == null) throw new Error("tampoco se pudo preguntar mes por mes");
+    _archivosEnStorage = porMes; _archivosError = ""; _archivosParciales = fallo;
+  }catch(e2){
+    console.warn("listarArchivos (mes a mes):", e2);
+    _archivosEnStorage = []; _archivosError = fallo; _archivosParciales = "";
   }
   return _archivosEnStorage;
 }
@@ -3547,11 +3586,19 @@ async function renderArchivosEnNube(forzar){
   if(!body) return;
   body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Buscando…</div>`;
   const meses = await listarArchivos(forzar);
+  // Si el listado se denegó y la lista se armó mes por mes, hay que decirlo: alcanza para todo lo
+  // que hay hoy, pero no es lo mismo que haber podido preguntar de verdad.
+  const nota = _archivosParciales
+    ? `<div style="font-size:11px;color:var(--txt2);margin-top:8px;line-height:1.5">⚠ El listado de
+       Storage está denegado (${esc(_archivosParciales)}), así que esto se armó preguntando mes por
+       mes. Alcanza para todo lo que hay hoy; no vería un mes archivado que ya no tenga movimientos
+       en el documento.</div>`
+    : "";
   if(!meses.length){
-    body.innerHTML = _archivosError
+    body.innerHTML = (_archivosError
       ? `<div class="status err" style="display:block;font-size:12px">❌ No se pudo consultar la nube: ${esc(_archivosError)}.
          <strong>No quiere decir que no haya meses archivados</strong>, sino que no se pudo preguntar.</div>`
-      : `<div style="font-size:12px;color:var(--txt2)">Todavía no hay ningún mes archivado.</div>`;
+      : `<div style="font-size:12px;color:var(--txt2)">Todavía no hay ningún mes archivado.</div>`) + nota;
     return;
   }
   body.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>Mes</th><th>En el documento</th><th>Acciones</th></tr></thead><tbody>
@@ -3564,7 +3611,7 @@ async function renderArchivosEnNube(forzar){
           <button class="btn btn-light" style="padding:3px 9px;font-size:11px;margin-left:4px" onclick="revisarYMostrarArchivo('${escAttrJs(m)}')">✅ Revisar</button>
         </td></tr>`;
     }).join("")}
-  </tbody></table></div>`;
+  </tbody></table></div>` + nota;
 }
 
 // Consultar un mes archivado: es la promesa de esta fase — que archivar no sea perder de vista.
