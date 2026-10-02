@@ -711,6 +711,19 @@ body.snav-min .side-theme span { display:none; }
       <div id="archivoDetalle" style="margin-top:10px"></div>
     </div>
 
+    <div style="margin-top:14px;border-top:1px dashed var(--border);padding-top:12px">
+      <div style="font-weight:600;font-size:12.5px;margin-bottom:4px">🗑 Liberar un mes del documento
+        <span style="font-weight:400;font-size:11px;color:var(--txt2)">— fase 3, sin botón de ejecutar todavía</span></div>
+      <div style="font-size:12px;color:var(--txt2);margin-bottom:8px;line-height:1.5">
+        Esto es lo único que <strong>quita</strong> movimientos. Aquí abajo se ve exactamente qué
+        pasaría con cada mes: cuántos movimientos saldrían, cuánto suman y si el archivo
+        <strong>vuelve a cuadrar en este momento</strong> — no se reusa la verificación anterior.
+        <strong>Todavía no hay forma de ejecutarlo.</strong>
+      </div>
+      <button class="btn btn-light" style="padding:4px 12px;font-size:12px" onclick="renderLiberar()">👁 Ver qué pasaría</button>
+      <div id="liberarBody" style="margin-top:10px"></div>
+    </div>
+
     <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
     <h4 style="margin:0 0 6px;color:var(--vd)">🛟 Respaldos</h4>
     <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Cada día se guarda solo una copia de toda la información, en cuanto alguien entra a la app. Se conservan los últimos 30 días. Descarga un archivo de vez en cuando y guárdalo fuera de la computadora: es la única copia que sobrevive si se pierde el proyecto de Firebase entero.</div>
@@ -2121,7 +2134,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-02-egresos-v20";
+const APP_BUILD = "2026-10-02-egresos-v21";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -3530,6 +3543,136 @@ async function archivarMes(mes, opts){
   try{ await renderArchivosEnNube(true); }catch(_){}
   try{ await renderArchivoMeses(); }catch(_){}
   return { ok:true, resumen:r };
+}
+
+// ── FASE 3: liberar un mes del documento ─────────────────────────────────────
+// La única fase que quita. Todo lo anterior —escribir, releer, verificar en frío, la ventana de
+// retención, estadoLiberacion— existe para que ésta pueda correrse sin fe.
+// Dos reglas que no se negocian:
+//   1. El registro de lo liberado y el borrado se escriben JUNTOS, antes de un solo save(). Un mes
+//      borrado sin constancia es un hueco que nadie puede explicar seis meses después.
+//   2. El archivo se vuelve a verificar EN EL INSTANTE de liberar. Confiar en el ✅ de hace tres
+//      días da por buena una copia que pudo quedarse vieja cuando alguien corrigió un gasto.
+const LIBERADOS_VERSION = 1;
+
+// Lo que queda escrito en el documento cuando un mes se va. Lo suficiente para que, meses después,
+// alguien pueda explicar el hueco sin tener que abrir Storage.
+function registroLiberacion(mes, resumen, quien, ahoraISO){
+  return {
+    v: LIBERADOS_VERSION,
+    mes: String(mes||""),
+    n: (resumen && resumen.n) || 0,
+    porTipo: (resumen && resumen.porTipo) || {},
+    ts: String(ahoraISO||""),
+    por: String(quien||"")
+  };
+}
+
+// Quita del estado los movimientos del mes y dice cuántos salieron. NO guarda: quien llame tiene
+// que escribir el registro en la misma operación, y guardar una sola vez.
+// Un movimiento sin fecha NO se lleva: no hay forma de saber de qué mes es, y llevárselo sería
+// desaparecerlo. Es la misma regla que usa movimientosDelMes para no contarlo.
+function quitarMesDelDocumento(st, mes){
+  const m = String(mes||"");
+  if(!/^\d{4}-\d{2}$/.test(m)) return { ok:false, motivo:"Mes inválido.", quitados:0 };
+  let quitados = 0;
+  (((st||{}).weeks)||[]).forEach(w=>{
+    if(!w) return;
+    _TIPOS_MOV.forEach(([campo])=>{
+      if(!Array.isArray(w[campo])) return;
+      const antes = w[campo].length;
+      w[campo] = w[campo].filter(x => !(x && x.fecha && String(x.fecha).slice(0,7) === m));
+      quitados += antes - w[campo].length;
+    });
+  });
+  return { ok:true, motivo:"", quitados };
+}
+
+// Todo lo que la pantalla de confirmación tiene que poder decir ANTES de que alguien apriete nada.
+// Vuelve a revisar el archivo contra el documento en este momento: no reusa el ✅ anterior, porque
+// entre aquel y hoy alguien pudo corregir un gasto de ese mes.
+async function previaLiberacion(mes){
+  const enDoc = movimientosDelMes(state, mes);
+  const resumen = resumenArchivo(enDoc);
+  const archivables = mesesArchivables(state, todayStr(), ARCHIVO_VENTANA_MESES);
+  await listarArchivos();
+  const enStorage = _archivosError ? null : _archivosEnStorage;
+  let revision = null;
+  if(Array.isArray(enStorage) && enStorage.includes(mes)){
+    try{ revision = await revisarArchivoMes(mes); }
+    catch(e){ revision = { ok:false, problemas:[String((e && e.message) || e)] }; }
+  }
+  // `undefined` cuando no se pudo revisar: estadoLiberacion sabe que no saber no vale por un sí.
+  const estado = estadoLiberacion(mes, archivables, enStorage, revision ? revision.ok === true : undefined);
+  return { mes, resumen, estado, revision, enDoc: enDoc.length };
+}
+
+// EL BORRADO. Hoy ningún botón llega aquí: esta entrega es para revisar la pantalla de confirmación
+// antes de que exista el camino. Cuando exista, éste es el único.
+// Entre quitar y guardar NO puede haber un await: es lo que hace que el borrado y su registro
+// lleguen al documento en la misma escritura y no pueda quedar uno sin el otro.
+async function liberarMes(mes){
+  if(currentRole!=="admin") return { ok:false, motivo:"Solo un administrador puede liberar un mes." };
+  const p = await previaLiberacion(mes);
+  if(!p.estado.puede) return { ok:false, motivo:p.estado.motivo, previa:p };
+  if(!p.resumen.n) return { ok:false, motivo:"Ese mes ya no tiene movimientos en el documento.", previa:p };
+  const reg = registroLiberacion(mes, p.resumen, (currentNombre||currentUser?.email||""), new Date().toISOString());
+  const r = quitarMesDelDocumento(state, mes);
+  if(!r.ok) return { ok:false, motivo:r.motivo, previa:p };
+  if(!Array.isArray(state.mesesLiberados)) state.mesesLiberados = [];
+  state.mesesLiberados.push(reg);
+  save();
+  return { ok:true, motivo:"", quitados:r.quitados, registro:reg };
+}
+
+// Lo que ya se liberó, dicho en una línea. El registro vive en el documento a propósito: si
+// dependiera del listado de Storage, un permiso mal puesto borraría la memoria de lo borrado.
+function _registrosLiberados(){
+  const regs = (typeof state === "object" && state && state.mesesLiberados) || [];
+  if(!regs.length) return "Todavía no se ha liberado ningún mes.";
+  return "Ya liberados: " + regs.map(r=>`${esc(String(r.mes))} (${r.n} mov., ${esc(String(r.ts).slice(0,10))}`+
+    `${r.por?` · ${esc(String(r.por))}`:""})`).join(" · ");
+}
+
+// La pantalla de confirmación de la fase 3. Solo lectura. Dice, mes por mes, qué saldría del
+// documento y por qué sí o por qué no — y para decirlo baja cada archivo de la nube y lo compara
+// contra el documento EN ESTE MOMENTO. Por eso está detrás de un botón y no se pinta sola: cuesta
+// una lectura de red por mes, y pintarla sola la haría correr aunque nadie la esté mirando.
+async function renderLiberar(){
+  const body = document.getElementById("liberarBody");
+  if(!body) return;
+  if(currentRole!=="admin"){ body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">🔒 Solo un administrador.</div>`; return; }
+  body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Bajando cada archivo y comparándolo contra el documento…</div>`;
+  const meses = mesesArchivables(state, todayStr(), ARCHIVO_VENTANA_MESES);
+  if(!meses.length){
+    body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Ningún mes está fuera de la ventana de `+
+      `${ARCHIVO_VENTANA_MESES} meses todavía, así que no hay nada que liberar.<br>${_registrosLiberados()}</div>`;
+    return;
+  }
+  const filas = [];
+  for(const m of meses){
+    const p = await previaLiberacion(m);
+    const r = p.resumen;
+    const detalle = Object.keys(r.porTipo).map(k=>`${r.porTipo[k].n} ${k}(s) ${fmt(r.porTipo[k].total)}`).join(" · ") || "—";
+    const prob = (p.revision && p.revision.ok !== true && Array.isArray(p.revision.problemas)) ? p.revision.problemas : [];
+    filas.push(`<tr>
+      <td><strong>${esc(m)}</strong></td>
+      <td class="amount-cell">${r.n}</td>
+      <td style="font-size:11px;color:var(--txt2)">${esc(detalle)}</td>
+      <td style="font-size:11px">${p.estado.puede
+        ? `<span style="color:var(--vd)">✅ ${esc(p.estado.motivo)}</span>`
+        : `<span style="color:var(--txt2)">🔒 ${esc(p.estado.motivo)}</span>`}`+
+        `${prob.length?`<div style="color:var(--red);margin-top:3px">· ${prob.map(x=>esc(String(x))).join("<br>· ")}</div>`:""}</td>
+    </tr>`);
+  }
+  body.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>Mes</th>`+
+    `<th style="text-align:right">Saldrían</th><th>Desglose</th><th>¿Se puede?</th></tr></thead>`+
+    `<tbody>${filas.join("")}</tbody></table></div>
+    <div style="font-size:11.5px;color:var(--txt2);margin-top:8px;line-height:1.5">
+      <strong>Nada de esto se ejecutó</strong> — no existe el botón que lo haría. Lo que sí se hizo
+      fue bajar cada archivo de la nube y compararlo contra el documento ahora mismo, que es por lo
+      que tardó. Un ✅ aquí no reusa la verificación de ayer.<br>${_registrosLiberados()}
+    </div>`;
 }
 
 // Qué meses hay en el documento y cuáles ya tienen archivo. Solo lectura.
