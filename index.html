@@ -2121,7 +2121,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-09-30-egresos-v13";
+const APP_BUILD = "2026-10-02-egresos-v14";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -4757,7 +4757,6 @@ function guardarGasto(){
     cfdiUuid:_cfdiUuidDeEsteFormulario()
   };
   if(!gasto.proveedor||!(gasto.importe>0)){ setStatus("statusGuardar","⚠ Proveedor e importe (mayor que cero) son obligatorios.","err"); return; }
-  let _saltarExtraccion=false;   // no gastar una 2ª lectura de IA si es duplicado ya en catálogo
   // Una venta propia no se discute: el RFC del emisor es el tuyo y eso lo dice el timbrado.
   // El mismo RFC efectivo que usa el cruce: si el bloqueo dependiera de que alguien tecleó el
   // RFC, no protegería justo el caso que falló.
@@ -4802,7 +4801,6 @@ function guardarGasto(){
     } else {
       const _msg=`⚠ DUPLICADO DETECTADO\n\n${_dup.reason}\n\nGasto existente:\n${_dup.gasto.proveedor} · ${fmt(_dup.gasto.importe)} · ${fmtDate(_dup.gasto.fecha)}\n\n¿Guardar de todas formas?`;
       if(!confirm(_msg)){ setStatus("statusGuardar",`🚫 No guardado — ${_dup.reason}`,"err"); return; }
-      _saltarExtraccion=true;   // duplicado a propósito: no vale una 2ª lectura de IA solo por el desglose
     }
   }
   getActiveWeek().gastos.push(gasto);
@@ -4819,13 +4817,10 @@ function guardarGasto(){
     }
   }catch(_){}
   save();
-  // El desglose NO se salta si los productos ya vinieron en la MISMA lectura (_productosPreleidos):
-  // usarlos no cuesta otra llamada a la IA y evita que el catálogo se quede sin los renglones.
-  // Saltarlos daba por hecho que "sus productos ya están en el catálogo", y no siempre era cierto:
-  // el gasto original pudo capturarse a mano (p. ej. desde la conciliación SAT, que solo trae
-  // folio/monto/fecha) o con la extracción fallida — y entonces nadie alimentaba el catálogo.
-  const _hayPreleidos = Array.isArray(_productosPreleidos) && _productosPreleidos.length > 0;
-  if(!_saltarExtraccion || _hayPreleidos) extraerProductosEnSegundoPlano(gasto.id, capturedB64, capturedFile?.type||"image/jpeg");
+  // Guardar un gasto YA NO dispara la lectura de productos: era una 2ª llamada a la IA por cada
+  // captura, que escribía gasto._productos — un campo que ninguna pantalla lee — y alimentaba un
+  // catálogo que ya no consume nadie (Menú/ForX leen sus propios XML). Egresos se queda con
+  // gastos, presupuestos, categorías y pagos.
   subirRespaldoAStorage(gasto.id, capturedB64, capturedFile?.type||"image/jpeg", gasto.factura);
   const conRespaldo=gasto.respaldo?" 📎 con respaldo":"";
   // Si el gasto quedó fuera de lo que el usuario está viendo hay que decírselo AQUÍ: si no,
@@ -5220,9 +5215,6 @@ function splitGuardar(){
   }
   try{if(_gmailPendienteCaptura&&capturedFile?._gmailMsgId===_gmailPendienteCaptura.msg_id)registrarGmailRevisado(_gmailPendienteCaptura,"capturado");}catch(_){}
   _gmailPendienteCaptura=null;
-  // Productos individuales con precio unitario (no el importe de la partida agrupada) para
-  // "Sincronizar a Menú".
-  extraerProductosEnSegundoPlano(id, capturedB64, capturedFile?.type||"image/jpeg");
   subirRespaldoAStorage(id, capturedB64, capturedFile?.type||"image/jpeg", factura);
   save(); closeSplitModal(); limpiarCaptura();
   setStatus("statusLectura",`✅ Factura guardada — total ${fmt(total)} dividido en ${partidasValidas.length} categorías (ver Presupuesto/Reporte).`,"ok");

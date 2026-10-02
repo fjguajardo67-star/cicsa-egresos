@@ -1099,6 +1099,41 @@ t("el dialogo del descarte en bloque dice QUE, no solo cuantos", () => {
   assert.ok(/deshacer/i.test(b), "y avisar que se puede deshacer");
 });
 
+console.log("\n== el catalogo de productos no corre en el camino de guardado ==");
+// El subsistema de productos se va a MiDespensa. Mientras tanto deja de ejecutarse: corria SOLO
+// en cada captura —nadie tenia que pedirlo— y escribia `_productos` dentro del gasto, un campo
+// que en las 14,949 lineas de la app se escribe una vez y NUNCA se lee.
+// Estas guardas son sobre el codigo fuente a proposito: ninguna prueba ejecuta guardarGasto (las
+// que lo mencionan solo inspeccionan su texto), asi que una regresion ahi no se veria en verde.
+// Y extraerProductosEnSegundoPlano NO es async: si volviera a llamarse y fallara, lanzaria de
+// forma SINCRONA y el gasto no se guardaria. Es la operacion mas critica de la app.
+function _cuerpoDe(nombre){
+  const i = script.indexOf("function " + nombre + "(");
+  assert.ok(i > -1, "no se encontro " + nombre);
+  let j = script.indexOf("{", i), d = 0;
+  for (let k = j; k < script.length; k++) {
+    if (script[k] === "{") d++;
+    else if (script[k] === "}") { d--; if (!d) return script.slice(i, k + 1); }
+  }
+  return "";
+}
+
+t("guardar un gasto no dispara la lectura de productos", () => {
+  assert.ok(!/extraerProductosEnSegundoPlano/.test(_cuerpoDe("guardarGasto")),
+    "corria sola en cada captura y escribia un campo que nadie lee");
+});
+t("guardar una factura dividida tampoco", () => {
+  assert.ok(!/extraerProductosEnSegundoPlano/.test(_cuerpoDe("splitGuardar")));
+});
+t("ningun camino de guardado toca el catalogo", () => {
+  // Mas amplio que las dos anteriores: cubre cualquier via nueva al subsistema.
+  ["guardarGasto", "splitGuardar"].forEach(f=>{
+    const b = _cuerpoDe(f).replace(/^\s*\/\/.*$/gm, "");
+    assert.ok(!/CATALOGO_COL|PROVEEDORES_COL|escribirPrecios|cargarCatalogo\(/.test(b),
+      f + " no puede depender del catalogo de productos");
+  });
+});
+
 console.log("\n== leer lo archivado: fase 2 ==");
 // El peligro propio de esta fase: como la fase 3 todavia no quita nada, cada movimiento
 // archivado SIGUE estando en el documento. Unirlos sin deduplicar duplicaria dinero — y un
