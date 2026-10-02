@@ -1532,6 +1532,32 @@ t("un mes mal escrito no se cuela", () => {
 t("sin listas, no se libera nada", () => {
   assert.equal(S.estadoLiberacion("2026-04", null, null, true).puede, false);
 });
+t("'no pude preguntar a la nube' no es 'no hay nada archivado'", () => {
+  // listarArchivos devolvia [] cuando el listado fallaba, asi que la pantalla decia "Todavia no
+  // hay ningun mes archivado" justo debajo de un archivado con ✅. Confundir no-se con no-hay es
+  // la misma mentira que ya conto esta pantalla una vez.
+  const noSe = S.estadoLiberacion("2026-04", ["2026-04"], null, true);
+  const noHay = S.estadoLiberacion("2026-04", ["2026-04"], [], true);
+  assert.equal(noSe.puede, false);
+  assert.equal(noHay.puede, false);
+  assert.notEqual(noSe.motivo, noHay.motivo, "los dos son 'no', pero por razones distintas y se arreglan distinto");
+  assert.ok(/no se pudo consultar/i.test(noSe.motivo));
+});
+t("la pantalla no convierte un fallo del listado en 'no esta archivado'", () => {
+  const b = _cuerpoDe("renderArchivoMeses");
+  assert.ok(/_archivosError\s*\?\s*null/.test(b),
+    "con [] la columna diria que un mes archivado no lo esta");
+});
+t("listarArchivos se acuerda de POR QUE fallo", () => {
+  const b = _cuerpoDe("listarArchivos");
+  assert.ok(/_archivosError\s*=\s*""/.test(b), "y de limpiarlo cuando sale bien");
+  assert.ok(/_archivosError\s*=\s*String\(/.test(b), "tragarse el error deja a la pantalla inventando");
+});
+t("la lista de la nube distingue vacia de fallida", () => {
+  const b = _cuerpoDe("renderArchivosEnNube");
+  assert.ok(/_archivosError/.test(b), "si no, 'no hay ningun mes archivado' sale tambien cuando si los hay");
+  assert.ok(/No se pudo consultar la nube/.test(b));
+});
 
 t("la pantalla PREGUNTA por la ventana, no se la inventa", () => {
   const b = _cuerpoDe("renderArchivoMeses");
