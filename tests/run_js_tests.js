@@ -1487,6 +1487,18 @@ t("subir verifica ANTES de darlo por bueno", () => {
   assert.ok(/verificarArchivo\(/.test(b), "subir sin releer no prueba que el archivo sirva");
   assert.ok(/currentRole!=="admin"/.test(b));
 });
+t("archivar refresca la lista de la nube en lugar de dejarla mintiendo", () => {
+  // Archivar 2026-09 salio ✅ y justo abajo seguia diciendo "Todavia no hay ningun mes
+  // archivado": esa lista se consulta UNA vez por sesion y se queda cacheada. Leer eso
+  // despues del palomazo es lo que hace dudar de si de verdad se guardo.
+  const b = _cuerpoDe("archivarMes");
+  assert.ok(/renderArchivosEnNube\(\s*true\s*\)/.test(b),
+    "sin forzar la relectura, la lista de la nube se queda con lo que habia al abrir el modal");
+  // Y va DESPUES de verificar: anunciar en la lista un archivo que no cuadro seria peor que no
+  // anunciarlo. En el camino de error la funcion ya salio con return antes de llegar aqui.
+  assert.ok(b.indexOf("verificarArchivo(") < b.indexOf("renderArchivosEnNube("),
+    "primero se comprueba, luego se presume");
+});
 
 console.log("\n== el medidor de espacio, en tiempo y a la vista ==");
 // El tope de 1 MiB no avisa por su cuenta: el dia que se cruza, la app deja de poder guardar.

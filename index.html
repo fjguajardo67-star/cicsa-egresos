@@ -2121,7 +2121,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-02-egresos-v14";
+const APP_BUILD = "2026-10-02-egresos-v15";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -3449,6 +3449,10 @@ async function archivarMes(mes, opts){
   di(`✅ ${mes} archivado y verificado — ${r.n} movimiento(s): ${detalle}. `+
      `Nada se quitó del documento: esta fase solo escribe.`, "ok");
   try{ renderArchivoMeses(); }catch(_){}
+  // La lista de la nube se consulta UNA vez por sesión y se queda cacheada. Sin forzarla aquí,
+  // acabar de archivar un mes y leer "Todavía no hay ningún mes archivado" justo abajo del ✅
+  // es lo que hace dudar de que se haya guardado.
+  try{ renderArchivosEnNube(true); }catch(_){}
   return { ok:true, resumen:r };
 }
 
