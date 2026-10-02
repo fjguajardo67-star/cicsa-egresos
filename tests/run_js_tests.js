@@ -7189,6 +7189,61 @@ t("los folios ya importados se detectan para no repetir", () => {
   assert.ok(!S.foliosCorteImportados().has("RCE-2026-99999"));
 });
 
+console.log("\n== cada ruta de Storage donde la app escribe tiene regla ==");
+// Archivar 2026-09 devolvio 403 al subir: storage.rules declaraba facturas/ y cortes/, y la ruta
+// archivo/ caia en el deny final. Nada en el repo lo decia — se descubrio apretando el boton en
+// produccion, que es el peor lugar para enterarse. Estas pruebas parten de las subidas REALES del
+// codigo, no de una lista escrita a mano: encuentran cada fetchStorage que sube algo, resuelven
+// que prefijo usa y exigen que storage.rules traiga su bloque match.
+// Lo que NO prueban, y hay que decirlo: que las reglas del repo sean las publicadas en la consola.
+// Eso no se puede saber desde aqui.
+const _reglasStorage = fs.readFileSync(path.join(__dirname, "..", "storage.rules"), "utf8");
+
+function _prefijosDeStorageQueSeEscriben(){
+  const subidas = [...script.matchAll(/uploadType=media&name=\$\{encodeURIComponent\((\w+)\)\}/g)];
+  return subidas.map(m => {
+    const v = m[1];
+    // La ruta se arma justo antes de subirla: su declaracion es la ultima que quedo atras.
+    const decl = [...script.slice(0, m.index)
+      .matchAll(new RegExp("(?:const|let)\\s+" + v + "\\s*=\\s*`([^`]+)`", "g"))].pop();
+    assert.ok(decl, `No encontre como se arma la ruta de Storage "${v}"`);
+    let pref = decl[1].split("/")[0];
+    const porConstante = pref.match(/^\$\{(\w+)\}$/);
+    if (porConstante) {
+      const val = script.match(new RegExp("const\\s+" + porConstante[1] + "\\s*=\\s*[\"']([^\"']+)[\"']"));
+      assert.ok(val, `No encontre el valor de ${porConstante[1]}`);
+      pref = val[1];
+    }
+    return pref;
+  });
+}
+
+t("toda ruta de Storage donde la app escribe esta declarada en storage.rules", () => {
+  const prefijos = _prefijosDeStorageQueSeEscriben();
+  assert.ok(prefijos.length >= 3,
+    `Solo encontre ${prefijos.length} subidas a Storage: el extractor se quedo ciego y la prueba ya no cubre nada`);
+  [...new Set(prefijos)].forEach(p => {
+    assert.ok(new RegExp("match\\s+/" + p + "/\\{").test(_reglasStorage),
+      `storage.rules no declara /${p}/: subir ahi devuelve 403 y solo se descubre usando la app`);
+  });
+});
+
+t("el archivo mensual no se puede borrar desde la app", () => {
+  const i = _reglasStorage.indexOf("match /archivo/");
+  assert.ok(i >= 0, "no encontre el bloque de archivo/ en storage.rules");
+  const bloque = _reglasStorage.slice(i, _reglasStorage.indexOf("\n    }", i));
+  assert.ok(/allow\s+delete:\s*if\s+false/.test(bloque),
+    "cuando la fase 3 quite el mes del documento, este archivo sera la UNICA copia de esa contabilidad");
+});
+
+t("el archivo mensual solo lo escribe un admin, y solo como JSON", () => {
+  const i = _reglasStorage.indexOf("match /archivo/");
+  const bloque = _reglasStorage.slice(i, _reglasStorage.indexOf("\n    }", i));
+  assert.ok(/allow\s+create,\s*update:\s*if\s+esAdmin\(\)/.test(bloque),
+    "el gate de rol en el cliente no es una regla: archivarMes revisa currentRole, pero eso se cambia desde la consola del navegador");
+  assert.ok(/contentType\s*==\s*'application\/json'/.test(bloque));
+});
+
   // Las pruebas encoladas corren AQUI, en fila, antes del resumen y antes de salir. Ponerlas
   // sueltas dejaba promesas sin esperar: se entremezclaban, compartian estado y process.exit
   // mataba el proceso antes de que terminaran.

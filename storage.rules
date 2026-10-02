@@ -54,6 +54,24 @@ service firebase.storage {
         && request.resource.contentType == 'application/json';
       allow delete: if esAdmin();
     }
+    // El archivo mensual: la copia completa de un mes que la app escribe y vuelve a releer para
+    // comprobarla. Sin este bloque la ruta caía en el deny final y archivar devolvía 403.
+    // Se permite update porque un mes se REESCRIBE cuando alguien corrige un movimiento suyo; el
+    // nombre es fijo por mes (archivo/2026-09.json), así que no se acumulan versiones sueltas.
+    // La lectura es para cualquier usuario, no solo admin: el archivo contiene los MISMOS
+    // movimientos del documento compartido que ese usuario ya puede leer, así que restringirlo
+    // no protegería nada y dejaría al personal operativo sin los meses archivados en el Balance.
+    // El borrado queda denegado a todos, incluido el dueño: cuando la fase 3 quite el mes del
+    // documento, este archivo será la ÚNICA copia de esa contabilidad. Si alguna vez hay que
+    // quitar uno, se hace desde la consola, a mano y a propósito.
+    match /archivo/{mes} {
+      allow read: if esUsuario();
+      allow create, update: if esAdmin()
+        && request.resource.size > 0
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType == 'application/json';
+      allow delete: if false;
+    }
     // Las demás rutas, incluidas subcarpetas no declaradas, quedan denegadas.
   }
 }
