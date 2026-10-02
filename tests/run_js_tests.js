@@ -1593,6 +1593,23 @@ t("confirmar obliga a escribir el mes, no a apretar Aceptar", () => {
   assert.ok(/await previaLiberacion\(/.test(b),
     "entre que se pinto la tabla y este clic pudieron pasar minutos: hay que volver a preguntar");
 });
+t("tras liberar se repinta TODO lo que lee del estado", () => {
+  // Liberar 2026-04 dejo la tabla "Meses ya archivados" diciendo "si, 20 movimiento(s) en el
+  // documento" tres lineas arriba de un Revisar que decia que ese mes ya no estaba. Las dos salian
+  // de la misma pantalla. Repintar solo lo que se estaba mirando no alcanza.
+  const b = _cuerpoDe("confirmarLiberar");
+  const exito = b.slice(b.indexOf("liberado"));
+  ["renderArchivosEnNube", "renderArchivoMeses", "renderLiberar", "pintarMedidorEstado"].forEach(f=>{
+    assert.ok(new RegExp(f + "\\s*\\(").test(exito), `${f} no se repinta: su pantalla queda mintiendo`);
+  });
+});
+t("la seccion no dice que no hay boton, porque si lo hay", () => {
+  const i = html.indexOf("Liberar un mes del documento");
+  assert.ok(i > -1);
+  const encabezado = html.slice(i, i + 400);
+  assert.ok(!/sin bot[oó]n/i.test(encabezado),
+    "el titulo se quedo diciendo que no se puede ejecutar cuando ya se puede");
+});
 t("el respaldo va ANTES de quitar, y si falla no se quita", () => {
   const b = _cuerpoDe("liberarMes");
   assert.ok(b.indexOf("respaldoAntesDeLiberar(") < b.indexOf("quitarMesDelDocumento("),

@@ -713,7 +713,7 @@ body.snav-min .side-theme span { display:none; }
 
     <div style="margin-top:14px;border-top:1px dashed var(--border);padding-top:12px">
       <div style="font-weight:600;font-size:12.5px;margin-bottom:4px">🗑 Liberar un mes del documento
-        <span style="font-weight:400;font-size:11px;color:var(--txt2)">— fase 3, sin botón de ejecutar todavía</span></div>
+        <span style="font-weight:400;font-size:11px;color:var(--red)">— esto sí borra</span></div>
       <div style="font-size:12px;color:var(--txt2);margin-bottom:8px;line-height:1.5">
         Esto es lo único que <strong>quita</strong> movimientos del documento. Aquí abajo se ve qué
         pasaría con cada mes: cuántos saldrían, cuánto suman y si el archivo <strong>vuelve a cuadrar
@@ -2136,7 +2136,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-02-egresos-v22";
+const APP_BUILD = "2026-10-02-egresos-v23";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -3686,6 +3686,12 @@ async function confirmarLiberar(mes){
     `✅ ${mes} liberado — ${res.quitados} movimiento(s) salieron del documento. `+
     `Respaldo completo de antes: ${res.registro.respaldo}. El mes se sigue consultando en `+
     `"Meses ya archivados en la nube".`, "ok");
+  // Repintar todo lo que lee del estado, no solo la tabla que se estaba mirando. La de "Meses ya
+  // archivados en la nube" calcula su columna "En el documento" al pintarse: si no se refresca,
+  // queda diciendo que el mes sigue ahí tres líneas arriba de un Revisar que dice lo contrario.
+  // Y la de arriba saca sus meses de los movimientos que existen, así que también se queda vieja.
+  try{ await renderArchivosEnNube(true); }catch(_){}
+  try{ await renderArchivoMeses(); }catch(_){}
   await renderLiberar();
   try{ pintarMedidorEstado(); }catch(_){}
 }
