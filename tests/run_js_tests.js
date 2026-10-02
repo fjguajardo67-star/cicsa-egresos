@@ -112,6 +112,7 @@ const FUNCS = [
   "listarArchivos", "_archivosPreguntandoMesAMes", "_urlArchivo",
   "leerArchivoMes", "revisarArchivoMes",
   "registroLiberacion", "quitarMesDelDocumento", "previaLiberacion", "liberarMes",
+  "respaldoAntesDeLiberar", "confirmarLiberar",
   "mesesDelRango", "unirConArchivo", "archivoValido", "coberturaArchivo", "cfdiMovidoDePeriodo", "movimientosDePeriodo",
   "puedeMoverPeriodo", "aplicarFechaBalance", "quitarFechaBalance", "facturasFueraDelPeriodo",
   "validarArchivoCortes", "avisosControlCortes", "proveedorDeEgresoCorte", "canonizarProveedor",
@@ -173,7 +174,10 @@ const sandbox = {
   // Los reintentos de fbAuthHeader esperan entre intento e intento.
   setTimeout,
   // Stubs para consolidarFacturaDividida (efectos de UI/persistencia fuera de alcance del test).
-  confirm: () => true, alert: () => {}, save: () => {}, marcarBorrado: () => {},
+  confirm: () => true, prompt: () => null, alert: () => {}, save: () => {}, marcarBorrado: () => {},
+  // Los respaldos hablan con Firestore; aqui se espian. Lo que se prueba es la COMPROBACION que
+  // hace respaldoAntesDeLiberar encima de ellos, no la plomeria, que ya tiene sus pruebas.
+  guardarRespaldo: async () => ({}), leerRespaldo: async () => null,
   renderRevisionDuplicados: () => {},
   // Los campos del formulario de Auditoría se simulan con un mapa: null cuando el id no está,
   // igual que un DOM donde ese elemento no existe.
@@ -1565,17 +1569,41 @@ t("previaLiberacion revisa de verdad, no se cree lo que ya tenia", () => {
   assert.ok(/revisarArchivoMes\(/.test(b), "revisarArchivoMes baja el archivo otra vez");
   assert.ok(/estadoLiberacion\(/.test(b), "y la respuesta pasa por la misma puerta");
 });
-t("todavia NO hay forma de llegar al borrado desde la pantalla", () => {
-  // Esta entrega es para revisar la pantalla de confirmacion. El dia que esto falle tiene que ser
-  // porque alguien agrego el boton a proposito, no porque se le fue.
+t("al borrado NO se llega desde ningun boton: solo por la confirmacion", () => {
+  // Un onclick directo a liberarMes se saltaria el teclear-el-mes y el respaldo previo.
   const manejadores = [...html.matchAll(/\bon\w+\s*=\s*"([^"]*)"/g)].map(m=>m[1]).join(" ");
-  assert.ok(!/liberarMes\s*\(/.test(manejadores), "apareció un camino hasta el borrado");
+  assert.ok(!/liberarMes\s*\(/.test(manejadores), "apareció un camino que se salta la confirmacion");
+  assert.ok(/confirmarLiberar\s*\(/.test(manejadores), "y el camino bueno tiene que existir");
 });
-t("la pantalla de confirmacion dice que no ejecuto nada", () => {
+t("la vista no ejecuta: solo pinta lo que pasaria", () => {
   const b = _cuerpoDe("renderLiberar");
-  assert.ok(/Nada de esto se ejecut/.test(b), "una pantalla que lista borrados tiene que decir que no borro");
   assert.ok(/previaLiberacion\(/.test(b));
-  assert.ok(!/liberarMes\(/.test(b), "la vista no ejecuta");
+  assert.ok(!/liberarMes\(/.test(b), "pintar la tabla no puede borrar nada");
+  assert.ok(/confirmarLiberar\(/.test(b), "el boton de cada fila va a la confirmacion");
+  assert.ok(/estado\.puede\n?\s*\?/.test(b) || /p\.estado\.puede/.test(b),
+    "el boton solo aparece cuando la puerta dice que si");
+});
+t("confirmar obliga a escribir el mes, no a apretar Aceptar", () => {
+  const b = _cuerpoDe("confirmarLiberar");
+  assert.ok(/prompt\(/.test(b), "un confirm() de Aceptar/Cancelar se aprieta sin leer");
+  assert.ok(/!==\s*mes/.test(b), "y lo tecleado tiene que compararse contra el mes");
+  assert.ok(/escribe el mes/i.test(b),
+    "pedir que se escriba el mes sin decirlo en el cuadro es una puerta que nadie sabe abrir");
+  assert.ok(b.indexOf("prompt(") < b.indexOf("liberarMes("), "primero se pregunta, luego se borra");
+  assert.ok(/await previaLiberacion\(/.test(b),
+    "entre que se pinto la tabla y este clic pudieron pasar minutos: hay que volver a preguntar");
+});
+t("el respaldo va ANTES de quitar, y si falla no se quita", () => {
+  const b = _cuerpoDe("liberarMes");
+  assert.ok(b.indexOf("respaldoAntesDeLiberar(") < b.indexOf("quitarMesDelDocumento("),
+    "respaldar despues de borrar no respalda nada");
+  assert.ok(/if\(!resp\.ok\) return/.test(b), "un borrado cuyo respaldo fallo es un borrado a secas");
+});
+t("el respaldo se RELEE: guardarRespaldo contesta igual si ya existia", () => {
+  const b = _cuerpoDe("respaldoAntesDeLiberar");
+  assert.ok(b.indexOf("guardarRespaldo(") < b.indexOf("leerRespaldo("), "primero guardar, luego releer");
+  assert.ok(/hay !== esperados/.test(b),
+    "no basta que el respaldo exista: tiene que traer los movimientos que van a salir");
 });
 
 // Y ahora el camino completo, con la red simulada: es la funcion que borra contabilidad.
@@ -1597,18 +1625,51 @@ tAsyncQ("liberar un mes quita sus movimientos Y deja constancia, en la misma gua
   const archivo = S.construirArchivoMes(st, "2026-04", "Prueba");
   let guardadas = 0; const realSave = S.save; S.save = () => { guardadas++; };
   const realFetch = S.fetch; S.fetch = _storageCon(archivo);
+  // El respaldo que se guarda es una copia del estado de ANTES: eso es lo que debe releerse.
+  const copia = JSON.parse(JSON.stringify(st));
+  const rG = S.guardarRespaldo, rL = S.leerRespaldo;
+  S.guardarRespaldo = async () => ({}); S.leerRespaldo = async () => copia;
   vm.runInContext("_archivosEnStorage = null; _archivosError = ''; _archivosParciales = '';", sandbox);
   try {
     const r = await S.liberarMes("2026-04");
     assert.equal(r.ok, true, r.motivo);
     assert.equal(r.quitados, 2, "g1 y c1");
+    assert.ok(/antes-de-liberar-2026-04$/.test(r.registro.respaldo),
+      "el registro tiene que decir DONDE quedo la copia de antes");
     assert.deepEqual(st.weeks[0].gastos.map(g=>g.id), ["g2"], "septiembre no se toca");
     assert.deepEqual(st.weeks[0].cortes, []);
     assert.equal(st.mesesLiberados.length, 1, "sin registro, el hueco no se puede explicar");
     assert.equal(st.mesesLiberados[0].mes, "2026-04");
     assert.equal(st.mesesLiberados[0].n, 2);
     assert.equal(guardadas, 1, "una sola escritura: el borrado y su registro viajan juntos");
-  } finally { S.save = realSave; S.fetch = realFetch; }
+  } finally { S.save = realSave; S.fetch = realFetch; S.guardarRespaldo = rG; S.leerRespaldo = rL; }
+});
+
+tAsyncQ("si el respaldo no se puede comprobar, NO se quita nada", async () => {
+  // guardarRespaldo contesta lo mismo ante un 409 (ese id ya existia) que ante un guardado nuevo.
+  // Creerle sin releer dejaria borrar con un respaldo que no se escribio.
+  const casos = [
+    ["guardarRespaldo truena",   { g: async () => { throw new Error("Firestore respondió 403"); }, l: async () => null }],
+    ["el respaldo no se relee",  { g: async () => ({}), l: async () => { throw new Error("sin red"); } }],
+    ["lo releido no es un estado", { g: async () => ({}), l: async () => ({ cualquier: "cosa" }) }],
+    ["el respaldo no trae el mes", { g: async () => ({}), l: async () => ({ weeks: [{ id:"w", gastos:[], cortes:[], retiros:[], aportaciones:[] }] }) }],
+  ];
+  for(const [nombre, { g, l }] of casos){
+    const st = _docLib(); S.state = st;
+    const archivo = S.construirArchivoMes(st, "2026-04", "Prueba");
+    let guardadas = 0; const realSave = S.save; S.save = () => { guardadas++; };
+    const realFetch = S.fetch; S.fetch = _storageCon(archivo);
+    const rG = S.guardarRespaldo, rL = S.leerRespaldo;
+    S.guardarRespaldo = g; S.leerRespaldo = l;
+    vm.runInContext("_archivosEnStorage = null; _archivosError = ''; _archivosParciales = '';", sandbox);
+    try {
+      const r = await S.liberarMes("2026-04");
+      assert.equal(r.ok, false, nombre);
+      assert.equal(st.weeks[0].gastos.length, 2, `${nombre}: ni un movimiento salio`);
+      assert.ok(!st.mesesLiberados, `${nombre}: ni se invento un registro`);
+      assert.equal(guardadas, 0, `${nombre}: no se guardo nada`);
+    } finally { S.save = realSave; S.fetch = realFetch; S.guardarRespaldo = rG; S.leerRespaldo = rL; }
+  }
 });
 
 tAsyncQ("si el archivo YA NO cuadra, no se quita nada", async () => {
