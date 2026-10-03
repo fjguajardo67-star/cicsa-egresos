@@ -2136,7 +2136,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-03-egresos-v24";
+const APP_BUILD = "2026-10-03-egresos-v25";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -9870,6 +9870,21 @@ function mapaUuidAFolio(cfdis){
   return m;
 }
 // La identidad con la que se agrupa un gasto: su folio, resolviendo el UUID cuando se puede.
+// Un UUID de CFDI es único por comprobante: lo garantiza el SAT al timbrar. Dos UUID distintos
+// son dos comprobantes distintos, y eso no es una heurística — es el único dato de esta pantalla
+// que no admite discusión. 32 hexadecimales, con guiones o sin ellos.
+function _pareceUuidCfdi(s){ return /^[0-9A-F]{32}$/.test(_dupFolioCanon(s)); }
+
+// El UUID de un gasto, venga del campo cfdiUuid o del de Factura (la conciliación SAT y los PDF
+// timbrados lo dejan ahí). "" cuando no hay uno de verdad: un folio corto es hexadecimal también
+// y casaría con cualquier cosa por casualidad.
+function _uuidDeGasto(g){
+  if(!g) return "";
+  if(_pareceUuidCfdi(g.cfdiUuid)) return _dupFolioCanon(g.cfdiUuid);
+  if(_pareceUuidCfdi(g.factura))  return _dupFolioCanon(g.factura);
+  return "";
+}
+
 function _folioIdentidad(g, mapaUuidFolio){
   const m = mapaUuidFolio || {};
   const f = _dupFolioCanon(g && g.factura);
@@ -10060,12 +10075,24 @@ function duplicadosSospechosos(gastos, mapaUuidFolio){
     if(parecidos.length<2) return;
     if(new Set(parecidos.map(g=>grupoDe.get(g.id))).size<2) return;   // mismo folio: ya evaluado
     const orden=[...parecidos].sort((a,b)=>String(a.id)<String(b.id)?-1:1);
+    // Fuera del grupo lo que está PROBADO distinto. Un comprobante cuyo UUID no se repite entre
+    // estos es, por definición del timbrado, otro comprobante — y da igual que coincidan día,
+    // importe y proveedor. Lo destapó la nómina fiscal: un CFDI por empleado, el mismo día, y dos
+    // que ganan igual salían agrupados con cinco marcados para borrar.
+    // Lo que SÍ queda: los que repiten UUID (ésos sí son la misma factura dos veces) y los que no
+    // traen UUID, que es el caso para el que se escribió esta regla — la misma factura capturada
+    // una vez desde la conciliación SAT y otra desde el PDF, con folios que no se parecen.
+    const _cuantos = new Map();
+    orden.forEach(g=>{ const u=_uuidDeGasto(g); if(u) _cuantos.set(u, (_cuantos.get(u)||0)+1); });
+    const sospechosos = orden.filter(g=>{ const u=_uuidDeGasto(g); return !u || _cuantos.get(u) > 1; });
+    if(sospechosos.length < 2) return;
     grupos.push({
-      proveedor: orden[0].proveedor, folio: _dupFolioCanon(orden[0].factura),
-      registros: orden, sugeridos: orden.slice(1).map(g=>g.id),
-      motivo: "Mismo día y mismo importe exacto con el folio escrito distinto — posible captura repetida.",
+      proveedor: sospechosos[0].proveedor, folio: _dupFolioCanon(sospechosos[0].factura),
+      registros: sospechosos, sugeridos: sospechosos.slice(1).map(g=>g.id),
+      motivo: "Mismo día y mismo importe exacto, y ninguno trae un UUID que pruebe que son "+
+              "comprobantes distintos — puede ser una captura repetida. Revísalos antes de borrar.",
       consolidable: false,
-      exceso: orden.slice(1).reduce((s,g)=>s+imp(g),0)
+      exceso: sospechosos.slice(1).reduce((s,g)=>s+imp(g),0)
     });
   });
 

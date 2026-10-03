@@ -99,7 +99,7 @@ const FUNCS = [
   "permisosDetalle", "claveFormaPago", "filtrarGastosPanel", "totalesPorFormaPago", "folioDuplicado",
   "filasDetalleGastos", "gastosRepetidosPorId",
   "mapaUuidAFolio", "_folioIdentidad", "facturaEnteraYSusPartes",
-  "comprobantesDistintos", "tieneDocumento",
+  "comprobantesDistintos", "tieneDocumento", "_pareceUuidCfdi", "_uuidDeGasto",
   "basePresupuestoPeriodo",
   "vigenciaPrecio", "aplicarPrecioDeFactura", "puedeValidarse", "motivoNoValidable",
   "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte", "cfdiIncompleto",
@@ -3854,6 +3854,64 @@ t("mismo día e importe con folios totalmente distintos → se marca como posibl
   assert.equal(r.length, 1);
   assert.deepEqual(r[0].sugeridos, ["2"]);
 });
+t("seis nominas timbradas del mismo dia y mismo importe NO son un duplicado", () => {
+  // El caso real: nomina fiscal, un CFDI por empleado, 02 oct, $2,205.40 cada uno porque ganan lo
+  // mismo. El limpiador los agrupaba y marcaba CINCO para borrar — $11,027.00 de contabilidad
+  // buena. Un UUID es unico por comprobante: lo garantiza el SAT, no es una heuristica.
+  const uuids = ["CF817DAC-9A87-4449-8B03-286A14E0BBDA","CAAD0885-FFF9-48E8-ACFB-56CEB5C931B3",
+    "511D6605-74BB-4EC0-8338-A6A3F80B2E3B","8681627A-6A4C-4C5F-98B9-07D60C71F14C",
+    "9C05FFCC-47B1-4959-B384-3CF2C57B8FB5","6F66B020-C6F3-46CA-9167-1708F331E97A"];
+  const r = S.duplicadosSospechosos(uuids.map((u,i)=>(
+    { id:String(i+1), proveedor:"COMEDORES INDUSTRIALES DE CUAUHTEMOC", factura:u,
+      fecha:"2026-10-02", categoria:"Nomina Fiscal", importe:2205.40 })));
+  assert.deepEqual(r, [], "ni un grupo: son seis comprobantes distintos");
+});
+t("el mismo UUID capturado dos veces SI se marca", () => {
+  // Que la regla deje de disparar de mas no puede volverla ciega a lo que si es una recaptura.
+  const u = "CF817DAC-9A87-4449-8B03-286A14E0BBDA";
+  const r = S.duplicadosSospechosos([
+    { id:"1", proveedor:"NOMINA", factura:u,            fecha:"2026-10-02", categoria:"Nomina Fiscal", importe:2205.40 },
+    { id:"2", proveedor:"NOMINA", factura:u.toLowerCase(), fecha:"2026-10-02", categoria:"Nomina Fiscal", importe:2205.40 },
+  ]);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r[0].sugeridos, ["2"]);
+});
+t("un UUID probado distinto sale del grupo; los que no lo traen se quedan", () => {
+  // Mezcla: dos sin UUID (la misma factura capturada desde SAT y desde el PDF, el caso para el que
+  // se escribio la regla) y uno timbrado que no tiene nada que ver.
+  const r = S.duplicadosSospechosos([
+    { id:"1", proveedor:"PROV", factura:"A-100",       fecha:"2026-07-11", categoria:"X", importe:500 },
+    { id:"2", proveedor:"PROV", factura:"MOJBE550120", fecha:"2026-07-11", categoria:"X", importe:500 },
+    { id:"3", proveedor:"PROV", factura:"CF817DAC-9A87-4449-8B03-286A14E0BBDA", fecha:"2026-07-11", categoria:"X", importe:500 },
+  ]);
+  assert.equal(r.length, 1);
+  assert.deepEqual(r[0].registros.map(g=>g.id), ["1","2"], "el timbrado no entra al grupo");
+  assert.deepEqual(r[0].sugeridos, ["2"], "y nunca se sugiere borrarlo");
+});
+t("si al sacar los timbrados queda uno solo, no hay grupo", () => {
+  const r = S.duplicadosSospechosos([
+    { id:"1", proveedor:"PROV", factura:"A-100", fecha:"2026-07-11", categoria:"X", importe:500 },
+    { id:"2", proveedor:"PROV", factura:"CF817DAC-9A87-4449-8B03-286A14E0BBDA", fecha:"2026-07-11", categoria:"X", importe:500 },
+  ]);
+  assert.deepEqual(r, [], "un solo registro no es un duplicado de nada");
+});
+t("_pareceUuidCfdi: 32 hexadecimales, ni mas ni menos", () => {
+  assert.equal(S._pareceUuidCfdi("CF817DAC-9A87-4449-8B03-286A14E0BBDA"), true);
+  assert.equal(S._pareceUuidCfdi("cf817dac9a8744498b03286a14e0bbda"), true, "sin guiones y en minusculas");
+  assert.equal(S._pareceUuidCfdi("A-100"), false);
+  assert.equal(S._pareceUuidCfdi("MOJBE550120"), false, "un folio corto tambien es hexadecimal a ratos");
+  assert.equal(S._pareceUuidCfdi("CF817DAC-9A87-4449-8B03-286A14E0BBD"), false, "31 no es un UUID");
+  assert.equal(S._pareceUuidCfdi(""), false);
+  assert.equal(S._pareceUuidCfdi(null), false);
+});
+t("_uuidDeGasto lo busca en los dos campos donde aparece", () => {
+  const u = "CF817DAC-9A87-4449-8B03-286A14E0BBDA", canon = "CF817DAC9A8744498B03286A14E0BBDA";
+  assert.equal(S._uuidDeGasto({ cfdiUuid:u }), canon);
+  assert.equal(S._uuidDeGasto({ factura:u }), canon, "los PDF timbrados lo dejan en Factura");
+  assert.equal(S._uuidDeGasto({ factura:"A-100" }), "", "un folio normal no es un UUID");
+  assert.equal(S._uuidDeGasto(null), "");
+});
+
 t("mismo día e importe SIN folio (compras reales repetidas) → NO se marca", () => {
   const r = S.duplicadosSospechosos([
     { id: "1", proveedor: "TORTILLERIA", factura: "", fecha: "2026-07-06", categoria: "Tortilla", importe: 1200.00 },
