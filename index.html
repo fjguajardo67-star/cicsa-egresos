@@ -2136,7 +2136,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-02-egresos-v23";
+const APP_BUILD = "2026-10-03-egresos-v24";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -5117,20 +5117,23 @@ function guardarGasto(){
               `¿Registrarlo de todas formas?`)){
     return;
   }
-  const _dup=findDuplicate(gasto.proveedor,gasto.importe,gasto.fecha,gasto.factura);
+  const _dup=findDuplicate(gasto.proveedor,gasto.importe,gasto.fecha,gasto.factura,gasto.cfdiUuid);
   if(_dup){
     // Si el gasto existente no tiene factura adjunta (ej. se capturó a mano desde la
     // conciliación SAT, que solo trae folio/monto/fecha) y esta nueva captura sí trae un
     // documento real (Gmail u otra fuente con imagen), prioriza el documento real: en vez
     // de forzar "duplicar o descartar", ofrece reemplazar el registro viejo por este.
-    const _dupSinRespaldo=!_dup.gasto.respaldo && !_dup.gasto._gmailMsgId;
+    const _dupSinRespaldo=!tieneDocumento(_dup.gasto);
     const _nuevoConRespaldo=!!(capturedB64 || gasto._gmailMsgId);
+    // El folio de cada uno, en los dos mensajes: sin verlos, dos comprobantes distintos del mismo
+    // día y del mismo importe se leen idénticos y no hay forma de decidir.
+    const _folios=`\nFolio del existente: ${_dup.gasto.factura||"(sin folio)"}\nFolio del nuevo: ${gasto.factura||"(sin folio)"}`;
     if(_dupSinRespaldo && _nuevoConRespaldo){
-      const _msg=`⚠ DUPLICADO DETECTADO\n\n${_dup.reason}\n\nGasto existente (capturado sin factura adjunta):\n${_dup.gasto.proveedor} · ${fmt(_dup.gasto.importe)} · ${fmtDate(_dup.gasto.fecha)}\n\nEsta nueva captura sí trae la factura real. \n\nAceptar = reemplazar el gasto existente por este (con la factura adjunta)\nCancelar = no guardar nada`;
+      const _msg=`⚠ DUPLICADO DETECTADO\n\n${_dup.reason}\n\nGasto existente (sin documento adjunto):\n${_dup.gasto.proveedor} · ${fmt(_dup.gasto.importe)} · ${fmtDate(_dup.gasto.fecha)}${_folios}\n\nEsta nueva captura sí trae el documento.\n\nSi los folios son distintos NO es una recaptura: cancela y cámbiale el folio a uno de los dos.\n\nAceptar = REEMPLAZAR el existente por este (el existente se borra)\nCancelar = no guardar nada`;
       if(!confirm(_msg)){ setStatus("statusGuardar",`🚫 No guardado — se conservó el gasto existente.`,"err"); return; }
       state.weeks.forEach(w=>{ w.gastos=(w.gastos||[]).filter(g=>g.id!==_dup.gasto.id); });
     } else {
-      const _msg=`⚠ DUPLICADO DETECTADO\n\n${_dup.reason}\n\nGasto existente:\n${_dup.gasto.proveedor} · ${fmt(_dup.gasto.importe)} · ${fmtDate(_dup.gasto.fecha)}\n\n¿Guardar de todas formas?`;
+      const _msg=`⚠ DUPLICADO DETECTADO\n\n${_dup.reason}\n\nGasto existente:\n${_dup.gasto.proveedor} · ${fmt(_dup.gasto.importe)} · ${fmtDate(_dup.gasto.fecha)}${_folios}\n\n¿Guardar de todas formas? (nada se borra: se guardan los dos)`;
       if(!confirm(_msg)){ setStatus("statusGuardar",`🚫 No guardado — ${_dup.reason}`,"err"); return; }
     }
   }
@@ -5507,7 +5510,7 @@ function splitGuardar(){
   const proveedor=canonizarProveedor(splitData.proveedor||document.getElementById("fProv").value);
   const fecha=splitData.fecha||document.getElementById("fFecha").value;
   const factura=splitData.factura||document.getElementById("fFactura").value;
-  const _dup=findDuplicate(proveedor,total,fecha,factura);
+  const _dup=findDuplicate(proveedor,total,fecha,factura,_cfdiUuidDeEsteFormulario());
   if(_dup){
     const _msg=`⚠ DUPLICADO DETECTADO\n\n${_dup.reason}\n\nGasto existente:\n${_dup.gasto.proveedor} · ${fmt(_dup.gasto.importe)} · ${fmtDate(_dup.gasto.fecha)}\n\n¿Guardar de todas formas?`;
     if(!confirm(_msg)){ setStatus("statusLectura",`🚫 No guardado — ${_dup.reason}`,"err"); return; }
@@ -11352,20 +11355,48 @@ async function guardarProducto(nuevoEstado){
 // ═══════════════════════════════════════════════════════════════════════════
 // DUPLICATE DETECTION
 // ═══════════════════════════════════════════════════════════════════════════
-function findDuplicate(proveedor,importe,fecha,factura){
+// ¿Dos comprobantes son PROBABLEMENTE el mismo, o provablemente distintos?
+// Un timbrado trae su UUID y su folio. Si los dos lo traen y no coinciden, son documentos
+// distintos, y da igual que coincidan proveedor, importe y fecha. El caso que lo destapó: la
+// nómina fiscal son muchos CFDI del mismo día, del mismo emisor, y dos empleados que ganan lo
+// mismo daban "mismo proveedor, importe y fecha" — que es cierto, y no los hace una recaptura.
+// "No se sabe" NO es "distintos": si a uno le falta el dato, el aviso de duplicado se queda.
+function comprobantesDistintos(uuidA, folioA, uuidB, folioB){
+  const u1=String(uuidA||"").trim().toUpperCase(), u2=String(uuidB||"").trim().toUpperCase();
+  if(u1 && u2) return u1 !== u2;
+  const f1=_dupFolioCanon(folioA), f2=_dupFolioCanon(folioB);
+  if(f1 && f2) return f1 !== f2;
+  return false;
+}
+
+function findDuplicate(proveedor,importe,fecha,factura,uuid){
   const todos=allGastosAllWeeks(),prov=(proveedor||"").trim().toUpperCase(),imp=parseFloat(importe)||0,fac=(factura||"").trim();
   for(const g of todos){
     const gProv=(g.proveedor||"").trim().toUpperCase(),gFac=(g.factura||"").trim(),gImp=parseFloat(g.importe)||0;
     if(fac&&gFac&&fac===gFac&&prov===gProv) return{gasto:g,reason:`Mismo No. de factura: ${fac}`};
+    // El timbrado manda sobre el parecido: dos comprobantes distintos no son una recaptura.
+    if(comprobantesDistintos(uuid, fac, g.cfdiUuid, g.factura)) continue;
     if(prov===gProv&&Math.abs(gImp-imp)<0.02&&g.fecha===fecha) return{gasto:g,reason:`Mismo proveedor, importe y fecha`};
     if(prov&&prov===gProv&&Math.abs(gImp-imp)<=1&&imp>0){const d1=new Date(fecha+"T12:00:00"),d2=new Date(g.fecha+"T12:00:00");if(Math.abs((d1-d2)/86400000)<=3) return{gasto:g,reason:`Mismo proveedor e importe similar en fecha cercana`};}
   }
   return null;
 }
+
+// ¿Este gasto tiene de verdad su documento? La rama que REEMPLAZA un gasto por otro preguntaba
+// por `g.respaldo`, que se pone en null al crear el gasto y no se vuelve a asignar nunca: la
+// subida a Storage escribe `_respaldoUrl`, otro campo. Así que esa rama —la que borra— salía en
+// TODA captura con archivo, también cuando el gasto existente sí tenía su factura guardada.
+function tieneDocumento(g){
+  if(!g) return false;
+  if(g._respaldoUrl) return true;                                       // subido a Storage
+  if(typeof g.respaldo === "string" && g.respaldo) return true;         // legado: data: en el documento
+  if(g._gmailMsgId) return true;                                        // vino de un correo
+  return false;
+}
 function checkDuplicateForm(){
   const prov=document.getElementById("fProv")?.value.trim()||"",imp=document.getElementById("fImporte")?.value||"0",fecha=document.getElementById("fFecha")?.value||"",fac=document.getElementById("fFactura")?.value.trim()||"",warn=document.getElementById("dupWarning"),info=document.getElementById("dupInfo");
   if(!prov||!imp||parseFloat(imp)===0){warn.style.display="none";return;}
-  const dup=findDuplicate(prov,imp,fecha,fac);
+  const dup=findDuplicate(prov,imp,fecha,fac,_cfdiUuidDeEsteFormulario());
   // esc() en los dos: el proveedor lo teclea o lo lee la IA, y dup.reason lleva dentro el
   // número de factura ("Mismo No. de factura: XXX"). Los dos vienen de fuera.
   if(dup){info.innerHTML=`<span class="dup-badge">${esc(dup.gasto.proveedor)}</span> ${fmt(dup.gasto.importe)} · ${fmtDate(dup.gasto.fecha)} · ${esc(dup.reason)}`;warn.style.display="block";}

@@ -99,6 +99,7 @@ const FUNCS = [
   "permisosDetalle", "claveFormaPago", "filtrarGastosPanel", "totalesPorFormaPago", "folioDuplicado",
   "filasDetalleGastos", "gastosRepetidosPorId",
   "mapaUuidAFolio", "_folioIdentidad", "facturaEnteraYSusPartes",
+  "comprobantesDistintos", "tieneDocumento",
   "basePresupuestoPeriodo",
   "vigenciaPrecio", "aplicarPrecioDeFactura", "puedeValidarse", "motivoNoValidable",
   "cfdisDescartados", "resumenDescarte", "sinMarcaDescarte", "cfdiIncompleto",
@@ -365,6 +366,70 @@ t("findDuplicate: mismo folio+proveedor; mismo prov+importe+fecha; ±3 días", (
   assert.ok(S.findDuplicate("WALMART", 500.5, "2026-07-03", ""));
   assert.equal(S.findDuplicate("OTRO", 500, "2026-07-01", ""), null);
 });
+console.log("\n== dos CFDI timbrados distintos no son una recaptura ==");
+// La nomina fiscal entra un PDF por empleado: mismo emisor, mismo dia, y dos empleados que ganan
+// lo mismo daban "mismo proveedor, importe y fecha" — que es cierto, y no los hace un duplicado.
+// Peor: la rama que salia era la que BORRA el gasto existente para reemplazarlo.
+
+t("mismo proveedor, importe y fecha, pero folios distintos: NO es duplicado", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"g1", proveedor:"NOMINA", factura:"A-101", importe:4500, fecha:"2026-09-30" } ]}];
+  assert.equal(S.findDuplicate("NOMINA", 4500, "2026-09-30", "A-102"), null,
+    "dos nominas timbradas de empleados distintos que ganan lo mismo");
+});
+t("el mismo folio sigue siendo duplicado", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"g1", proveedor:"NOMINA", factura:"A-101", importe:4500, fecha:"2026-09-30" } ]}];
+  assert.ok(S.findDuplicate("NOMINA", 4500, "2026-09-30", "A-101"), "recapturar el mismo sigue avisando");
+});
+t("si a uno le falta el folio, el aviso se queda: no saber no es saber que son distintos", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"g1", proveedor:"NOMINA", factura:"", importe:4500, fecha:"2026-09-30" } ]}];
+  assert.ok(S.findDuplicate("NOMINA", 4500, "2026-09-30", "A-102"),
+    "con un folio vacio no hay con que descartarlo, y callarse seria peor");
+});
+t("UUID distinto basta aunque no haya folios", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"g1", proveedor:"NOMINA", factura:"", importe:4500, fecha:"2026-09-30", cfdiUuid:"AAA-111" } ]}];
+  assert.equal(S.findDuplicate("NOMINA", 4500, "2026-09-30", "", "BBB-222"), null);
+  assert.ok(S.findDuplicate("NOMINA", 4500, "2026-09-30", "", "AAA-111"), "el mismo UUID si es el mismo");
+});
+t("el UUID gana sobre el folio cuando los dos estan", () => {
+  // Dos capturas del MISMO comprobante con el folio tecleado distinto siguen siendo una sola.
+  assert.equal(S.comprobantesDistintos("AAA-111", "A-101", "AAA-111", "A101"), false);
+  // Y dos comprobantes distintos lo son aunque alguien les haya puesto el mismo folio a mano.
+  assert.equal(S.comprobantesDistintos("AAA-111", "A-101", "BBB-222", "A-101"), true);
+});
+t("el folio se compara sin guiones ni mayusculas", () => {
+  assert.equal(S.comprobantesDistintos("", "a-101", "", "A101"), false, "es el mismo folio escrito distinto");
+  assert.equal(S.comprobantesDistintos("", "A-101", "", "A-102"), true);
+});
+
+t("tieneDocumento mira donde el documento VIVE de verdad", () => {
+  // `respaldo` se pone en null al crear el gasto y no se vuelve a asignar: la subida escribe
+  // `_respaldoUrl`. Preguntar por `respaldo` daba "no tiene documento" SIEMPRE, y por eso la rama
+  // que reemplaza —la que borra— salia en toda captura con archivo.
+  assert.equal(S.tieneDocumento({ respaldo:null }), false, "un gasto recien creado");
+  assert.equal(S.tieneDocumento({ respaldo:null, _respaldoUrl:"https://storage/x" }), true, "subido a Storage");
+  assert.equal(S.tieneDocumento({ respaldo:"data:image/jpeg;base64,xx" }), true, "legado dentro del documento");
+  assert.equal(S.tieneDocumento({ respaldo:null, _gmailMsgId:"abc" }), true, "vino de un correo");
+  assert.equal(S.tieneDocumento(null), false);
+});
+t("la rama que BORRA no pregunta por un campo que nunca se llena", () => {
+  const b = _cuerpoDe("guardarGasto");
+  assert.ok(/tieneDocumento\(_dup\.gasto\)/.test(b),
+    "preguntar por _dup.gasto.respaldo daba true siempre y ofrecia reemplazar en toda captura");
+  assert.ok(!/!_dup\.gasto\.respaldo/.test(b));
+});
+t("los dos avisos de duplicado muestran los dos folios", () => {
+  // Sin verlos, dos comprobantes distintos del mismo dia y del mismo importe se leen identicos
+  // en el cuadro y no hay con que decidir.
+  const b = _cuerpoDe("guardarGasto");
+  const avisos = b.split("DUPLICADO DETECTADO").slice(1);
+  assert.equal(avisos.length, 2, "son dos ramas: reemplazar y guardar los dos");
+  avisos.forEach((a,i)=>assert.ok(/_folios/.test(a.slice(0, 600)), `al aviso ${i+1} le falta el folio`));
+});
+
 t("conciliarSAT: clasifica conciliada / faltante / diferencia", () => {
   // Los CFDI llevan proveedor: emparejar por monto ahora lo EXIGE. Antes esta prueba pasaba con
   // comprobantes sin proveedor, que es justo lo que permitia casar una factura de gasolina
