@@ -1,10 +1,11 @@
-/* Interfaz de revisión por excepciones. FORX consume datos/precios; no edita precios aquí. */
+/* Productos comprados: catálogo e historial de precio y cantidad, de los XML y de las lecturas.
+   Egresos ya no publica a FORX; datos/precios queda congelado con sus últimos valores. */
 (function(){
   'use strict';
   const C=window.CicsaIngredients;
   const store=window.CicsaIngredientStore({base:FB_BASE,key:FB_KEY,fetcher:(...args)=>fetch(...args),headers:fbAuthHeader,core:C,session:()=>auth.currentUser?.uid||''});
   const old={list:cargarCatalogo,update:fbUpdateDoc,create:fbCreateDoc,editor:abrirEditorProducto,cfdis:guardarCfdisEnStore};
-  let cached=new Map(),view='revision',query='',busy=false,publishing=null,timer=null,retries=0,lastStatus='',lastUid='',renderEpoch=0,analysisCache=null,manual=null;
+  let cached=new Map(),view='revision',query='',busy=false,timer=null,lastStatus='',lastUid='',renderEpoch=0,analysisCache=null,manual=null;
   const money=x=>new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN'}).format(x);
   const unit=x=>({pz:'pieza',porcion:'porción',lt:'L',kg:'kg'}[x]||x);
   const clean=p=>{const {id,...data}=p;return data;};
@@ -15,7 +16,7 @@
     const el=$('ingStatus');
     if(el){el.textContent=message;el.classList.toggle('ing-error',error);}
   }
-  function reset(){cached=new Map();analysisCache=null;manual=null;_catalogoProductos=[];_catalogoProveedores=[];_catalogoCargado=false;query='';lastStatus='';clearTimeout(timer);retries=0;renderEpoch++;}
+  function reset(){cached=new Map();analysisCache=null;manual=null;_catalogoProductos=[];_catalogoProveedores=[];_catalogoCargado=false;query='';lastStatus='';clearTimeout(timer);renderEpoch++;}
   async function load(force=false){
     const uid=auth.currentUser?.uid;
     if(!uid) throw new Error('Inicia sesión para abrir los ingredientes.');
@@ -27,40 +28,19 @@
     _catalogoProductos=[...cached].map(([id,data])=>({id,...structuredClone(data)}));
     analysisCache=null;
     _catalogoProveedores=suppliers;_catalogoCargado=true;
-    const meta=docs.find(x=>x.id==='_forx_sync')?.data;
-    if(meta?.pending)schedule();
-    else if(meta?.publishedAt&&!lastStatus)status('Última publicación para FORX: '+new Date(meta.publishedAt).toLocaleString('es-MX')+'. Recepción en FORX no verificada.');
+    // El documento _forx_sync marcaba lo que faltaba publicar; ya no hay publicación que agendar.
+    // Se deja donde está, sin leerlo: borrarlo sería una escritura a datos de producción por una
+    // limpieza cosmética.
   }
   async function saveRows(rows){
     const expected=Object.fromEntries(rows.map(p=>[p.id,cached.get(p.id)??null]));
     await store.save(rows,expected);
     analysisCache=null;
     for(const p of rows){cached.set(p.id,structuredClone(clean(p)));const idx=_catalogoProductos.findIndex(x=>x.id===p.id);if(idx<0)_catalogoProductos.push(p);else _catalogoProductos[idx]=p;}
-    retries=0;schedule();
   }
-  function schedule(){clearTimeout(timer);timer=setTimeout(()=>publish().catch(()=>{}),800);}
-  async function publish(){
-    if(publishing)return publishing;
-    const uid=auth.currentUser?.uid;
-    if(!uid)return;
-    publishing=(async()=>{
-      status('Comprobando los precios pendientes de publicación…');
-      try{
-        const result=await store.publish();
-        if(auth.currentUser?.uid!==uid)return;
-        retries=0;
-        const conflicts=result.plan?.conflicts.length||result.marker?.conflicts?.length||0;
-        status((result.state==='publicado'?'Precios publicados para FORX. ':'Sin publicaciones pendientes. ')+(conflicts?conflicts+' ingrediente(s) requieren revisión; sus precios anteriores se conservaron. ':'')+'La recepción en FORX no está verificada.');
-        const newer=await store.get(store.markerPath);
-        if(newer?.data.pending)schedule();
-        return result;
-      }catch(err){
-        if(auth.currentUser?.uid===uid){status('Pendiente de publicar para FORX. '+err.message,true);if(![401,403].includes(err.status)&&retries<2){retries++;clearTimeout(timer);timer=setTimeout(()=>publish().catch(()=>{}),2000*retries);}}
-        throw err;
-      }finally{publishing=null;}
-    })();
-    return publishing;
-  }
+  // Aquí vivían schedule() y publish(): cada guardado agendaba una escritura a datos/precios
+  // para FORX. Egresos ya no publica. El documento se deja como está —congelado, no
+  // borrado— para que lo que todavía lo lea no se quede sin nada.
   async function hash(text){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));return [...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,'0')).join('');}
   async function ingest(items,supplier,folio,context={}){
     await load(true);
@@ -118,7 +98,7 @@
   }
   async function saveEditor(id,data){
     const current=id?_catalogoProductos.find(p=>p.id===id):null;
-    let p={...current,...data,id:id||'p_'+crypto.randomUUID(),forx_destino:$('pcForxDestino')?.value||current?.forx_destino||'auto'};
+    let p={...current,...data,id:id||'p_'+crypto.randomUUID()};
     if(current){
       p.compras_forx=C.observations(current);
       if(data.fecha_precio===current.fecha_precio?.slice(0,10))p.fecha_precio=current.fecha_precio;
@@ -148,9 +128,9 @@
     await saveRows([p]);
     closeProductoModal();await render();status('Producto guardado. La publicación se comprobará automáticamente.');
   }
-  function labelState(result){return {excluido:'Solo Egresos',pendiente:'Por verificar',conflicto:'Revisar conflicto',listo:'Verificado'}[result.state];}
+  function labelState(result){return {excluido:'Omitido',pendiente:'Por verificar',conflicto:'Revisar conflicto',listo:'Verificado'}[result.state];}
   function quickActions(p){
-    return `<div class="ing-actions ing-quick"><button type="button" data-action="manual-open" data-id="${e(p.id)}">Homologar manualmente</button><button type="button" data-action="omit" data-id="${e(p.id)}" title="Mover a Solo Egresos sin borrar compras ni historial">Omitir</button></div>`;
+    return `<div class="ing-actions ing-quick"><button type="button" data-action="manual-open" data-id="${e(p.id)}">Homologar manualmente</button><button type="button" data-action="omit" data-id="${e(p.id)}" title="Sacarlo de la lista sin borrar compras ni historial">Omitir</button></div>`;
   }
   function productDetails(p){
     const calc=C.conversion(p),reason=C.destination(p);
@@ -159,7 +139,7 @@
   function manualResults(){
     const results=C.manualTargets(_catalogoProductos,manual.sourceId,manual.query);
     if(C.norm(manual.query).length<2)return '<p>Escribe al menos dos letras. La búsqueda incluye nombres de productos y proveedores.</p>';
-    return results.length?`<p>${results.length} ingrediente(s) encontrados. Elige solo si representan el mismo alimento.</p><ul class="ing-targets">${results.slice(0,8).map(g=>`<li><div><strong>${e(g.name)}</strong><p>${e(g.products.map(p=>p.nombre_comercial).join(' · '))}</p></div><button type="button" data-action="manual-select" data-id="${e(manual.sourceId)}" data-other="${e(g.targetId)}">Elegir ${e(g.name)}</button></li>`).join('')}</ul>${results.length>8?'<p>Se muestran ocho resultados. Escribe más para acotar la búsqueda.</p>':''}`:'<p>No hay otros ingredientes con ese texto. Prueba otro nombre o recupera primero el producto desde Solo Egresos.</p>';
+    return results.length?`<p>${results.length} ingrediente(s) encontrados. Elige solo si representan el mismo alimento.</p><ul class="ing-targets">${results.slice(0,8).map(g=>`<li><div><strong>${e(g.name)}</strong><p>${e(g.products.map(p=>p.nombre_comercial).join(' · '))}</p></div><button type="button" data-action="manual-select" data-id="${e(manual.sourceId)}" data-other="${e(g.targetId)}">Elegir ${e(g.name)}</button></li>`).join('')}</ul>${results.length>8?'<p>Se muestran ocho resultados. Escribe más para acotar la búsqueda.</p>':''}`:'<p>No hay otros ingredientes con ese texto. Prueba otro nombre o recupera primero el producto desde Omitidos.</p>';
   }
   function manualPanel(){
     const source=_catalogoProductos.find(p=>p.id===manual.sourceId),target=_catalogoProductos.find(p=>p.id===manual.targetId);
@@ -189,15 +169,17 @@
         if(other){seenPairs.add([g.id,C.groupId(other)].sort().join('|'));matches.set(g.id,{p,other});break;}
       }
     }
-    const collisions=C.publication(_catalogoProductos).conflicts.filter(c=>c.reason.startsWith('Nombre de receta'));
-    for(const c of collisions){const g=grouped.find(g=>g.id===c.id);if(g)g.result={state:'conflicto',reason:c.reason,candidates:[]};}
     analysisCache={grouped,matches};
     }
     const needs=g=>g.result.state!=='excluido'&&(g.result.state!=='listo'||g.result.issues?.length||matches.has(g.id));
+    // La vista «Solo Egresos» tenía dentro 391 productos excluidos por categoría o por nombre.
+    // Ya no: lo único que sale de la lista es lo que alguien omitió a mano. La vista se queda
+    // —ahora «Omitidos»— porque sin ella «Omitir» sería una puerta de un solo sentido: el
+    // producto desaparecería sin forma de verlo ni de recuperarlo.
     const omitted=g=>g.products.filter(p=>!C.destination(p).include);
-    const counts={revision:grouped.filter(needs).length,ingredientes:grouped.filter(g=>g.result.state!=='excluido').length,operacion:grouped.filter(g=>omitted(g).length).length};
-    const visible=grouped.filter(g=>view==='revision'?needs(g):view==='operacion'?omitted(g).length:g.result.state!=='excluido')
-      .map(g=>{if(view!=='operacion')return g;const subset={...g,products:omitted(g)};return {...subset,result:C.priceForGroup(subset)};})
+    const counts={revision:grouped.filter(needs).length,ingredientes:grouped.filter(g=>g.result.state!=='excluido').length,omitidos:grouped.filter(g=>omitted(g).length).length};
+    const visible=grouped.filter(g=>view==='revision'?needs(g):view==='omitidos'?omitted(g).length:g.result.state!=='excluido')
+      .map(g=>{if(view!=='omitidos')return g;const subset={...g,products:omitted(g)};return {...subset,result:C.priceForGroup(subset)};})
       .filter(g=>C.norm([g.name,...g.products.map(p=>p.nombre_comercial+' '+p.proveedor_nombre)].join(' ')).includes(C.norm(query)));
     const rows=visible.slice(0,100).map(g=>{
       const r=g.result,w=r.winner;
@@ -207,7 +189,7 @@
       const shortcuts=active?(g.products.length===1?quickActions(active):`<div class="ing-actions ing-quick"><button type="button" data-action="manual-open" data-id="${e(active.id)}">Homologar manualmente</button></div>`):'';
       return `<article class="ing-row"><div class="ing-row-head"><div><h3>${e(g.name)}</h3><p>${g.products.length} presentación(es) vinculada(s)</p></div><div class="ing-price">${w?`<strong>${money(w.calc.price)} <span>/ ${e(unit(w.calc.unit))}</span></strong><p>Factura: ${e(w.fecha)}</p>`:'<strong>Sin cambio de precio</strong>'}</div><span class="ing-state ${r.state==='listo'?'ing-ready':''}">${labelState(r)}</span></div>${r.reason?`<p class="ing-reason">${e(r.reason)}</p>`:''}${r.issues?.length?`<p class="ing-reason">Hay presentaciones por verificar. Se usa la última compra válida.</p>`:''}${choices?`<div class="ing-actions">${choices}</div>`:''}${shortcuts}${openManual?manualPanel():''}<details ${r.state==='pendiente'?'open':''}><summary>Ver presentaciones, proveedor e historial</summary>${g.products.map(p=>productDetails(p)+`<details class="ing-history"><summary>Compras de esta presentación</summary>${C.observations(p).map(o=>`<p>${e(o.fecha||'Sin fecha')}${o.cantidad?' · '+e(String(o.cantidad))+(o.unidad?' '+e(unit(o.unidad)):''):''} · ${money(o.precio)} por presentación${o.codigo_proveedor?' · SKU '+e(o.codigo_proveedor):''} · ${e(o.folio||'Sin folio')} · ${e(o.proveedor)}</p>`).join('')||'<p>Sin compras registradas.</p>'}</details>`).join('')}</details>${openManual?'':reviews}</article>`;
     }).join('');
-    return `<section class="ing-workspace" aria-label="Ingredientes y precios para FORX"><header class="ing-heading"><div><h2>Ingredientes para FORX</h2><p>Identifica una vez. Las siguientes compras actualizan el precio automáticamente.</p></div><div class="ing-actions"><button type="button" data-action="refresh">Actualizar</button><button type="button" data-action="new" class="ing-primary">Agregar ingrediente</button></div></header><div class="ing-toolbar" role="group" aria-label="Vista del catálogo">${Object.entries({revision:'Por revisar',ingredientes:'Ingredientes',operacion:'Solo Egresos'}).map(([key,label])=>`<button type="button" data-action="view" data-view="${key}" aria-pressed="${key===view}">${label} <span>${counts[key]}</span></button>`).join('')}</div><div class="ing-search"><label for="ingSearch">Buscar ingrediente, producto o proveedor</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aderezo ranch" autocomplete="off"></div><div class="ing-publication"><p id="ingStatus" role="status" aria-live="polite">${e(lastStatus||'Los precios se publican al guardar cambios verificados.')}</p><button type="button" data-action="publish">Comprobar publicación</button></div><p class="ing-policy">Limpieza, refrescos y desechables permanecen en Solo Egresos. Autoriza individualmente las excepciones de Grill Express.</p><div id="ingRows">${rows||'<div class="ing-empty"><h3>No hay ingredientes en esta vista</h3><p>Cambia de vista o limpia la búsqueda. Las compras siguen registradas en Egresos.</p></div>'}</div>${visible.length>100?`<p>Mostrando 100 de ${visible.length}. Usa la búsqueda para acotar los resultados.</p>`:''}</section>`;
+    return `<section class="ing-workspace" aria-label="Productos comprados"><header class="ing-heading"><div><h2>Productos comprados</h2><p>Todo lo que entra por factura, con su historial de precio y cantidad.</p></div><div class="ing-actions"><button type="button" data-action="refresh">Actualizar</button><button type="button" data-action="new" class="ing-primary">Agregar ingrediente</button></div></header><div class="ing-toolbar" role="group" aria-label="Vista del catálogo">${Object.entries({revision:'Por revisar',ingredientes:'Productos',omitidos:'Omitidos'}).map(([key,label])=>`<button type="button" data-action="view" data-view="${key}" aria-pressed="${key===view}">${label} <span>${counts[key]}</span></button>`).join('')}</div><div class="ing-search"><label for="ingSearch">Buscar producto, SKU o proveedor</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aderezo ranch" autocomplete="off"></div><div class="ing-publication"><p id="ingStatus" role="status" aria-live="polite">${e(lastStatus||'Se registra todo lo comprado, de los XML y de las facturas leídas.')}</p></div><div id="ingRows">${rows||'<div class="ing-empty"><h3>No hay productos en esta vista</h3><p>Cambia de vista o limpia la búsqueda.</p></div>'}</div>${visible.length>100?`<p>Mostrando 100 de ${visible.length}. Usa la búsqueda para acotar los resultados.</p>`:''}</section>`;
   }
   async function render(force=false){
     const epoch=++renderEpoch;
@@ -224,11 +206,10 @@
     busy=true;button.disabled=true;
     try{
       if(action==='refresh'){manual=null;await render(true);return;}
-      if(action==='publish'){retries=0;await publish();return;}
       const p=_catalogoProductos.find(x=>x.id===id);
       if(!p)throw new Error('Actualiza el catálogo para encontrar este producto.');
       if(action==='manual-open'){
-        if(!C.destination(p).include)throw new Error('Recupera primero el producto desde Solo Egresos.');
+        if(!C.destination(p).include)throw new Error('Recupera primero el producto desde Omitidos.');
         manual={sourceId:id,targetId:'',query:'',error:''};await render();$('ingManualSearch')?.focus();return;
       }else if(action==='manual-select'||action==='manual-back'){
         if(!manual||manual.sourceId!==id)throw new Error('Vuelve a abrir la homologación manual.');
@@ -245,10 +226,12 @@
         status('Son distintos. Esta sugerencia no volverá a aparecer.');
       }else if(action==='omit'){
         await saveRows([{...p,estado:'ignorado'}]);manual=null;
-        status('Producto omitido: '+p.nombre_comercial+'. Se conserva en Solo Egresos; puedes recuperarlo para revisión.');
+        status('Producto omitido: '+p.nombre_comercial+'. Se conserva en Omitidos con todo su historial; puedes recuperarlo.');
       }else if(action==='include'||action==='exclude'){
-        await saveRows([{...p,forx_destino:action==='include'?'incluir':'excluir',estado:p.estado==='ignorado'?'pendiente':p.estado}]);
-        status(action==='include'?'Excepción autorizada. Revisa su conversión antes de publicarla.':'Producto guardado en Solo Egresos. Sus compras se conservan.');
+        // Las dos acciones eran «autorizar la excepción para FORX» y «mandar a Solo Egresos».
+        // Sin destino que elegir, lo único que queda de ellas es recuperar lo omitido.
+        await saveRows([{...p,estado:p.estado==='ignorado'?'pendiente':p.estado}]);
+        status('Producto recuperado: '+p.nombre_comercial+'. Sus compras nunca se tocaron.');
       }else if(action==='split'){
         await saveRows([{...p,ingrediente_id:'ing:'+crypto.randomUUID(),ingrediente_nombre:p.nombre_comercial,ingrediente_generico:p.nombre_comercial,sinonimos_menu:[],estado:'pendiente'}]);
         status('Presentación separada. Revisa su ingrediente antes de volver a publicarla.');
@@ -282,9 +265,12 @@
   };
   cargarCatalogo=load;
   renderCatalogoProductos=render;
-  setCatProdFiltro=function(filter){view=filter==='ignorado'?'operacion':filter==='todos'||filter==='validado'?'ingredientes':'revision';render();};
-  abrirSyncMenuModal=function(){view='ingredientes';render().then(()=>publish()).catch(err=>status(err.message,true));};
-  confirmarSyncMenu=()=>publish().catch(err=>status(err.message,true));
+  setCatProdFiltro=function(filter){view=filter==='ignorado'?'omitidos':filter==='todos'||filter==='validado'?'ingredientes':'revision';render();};
+  // Las dos puertas viejas hacia FORX quedan tapiadas aquí a propósito: el modal de index.html
+  // sí sabe escribir datos/precios, y dejar su función original al descubierto reabriría la
+  // publicación por la puerta de atrás.
+  abrirSyncMenuModal=function(){view='ingredientes';render().catch(err=>status(err.message,true));};
+  confirmarSyncMenu=()=>{status('Egresos ya no publica precios a FORX.');};
   window.abrirRevisionIngredientesCfdi=async function(){
     try{await ingestXml(_cfdisStore||[]);view='revision';showPage('catalogo-productos',$('navCatalogoProductos'));await render(true);}
     catch(err){setStatus('satStatus',err.message,'err');}
@@ -311,10 +297,9 @@
     $('pcDetalles').style.display='none';
     $('pcDetallesBtn').textContent='▸ Más detalles (proveedor, marca, categoría…)';
     $('pcBtnEliminar').style.display='none';
+    // Aquí se dibujaba el selector «Destino del producto» (automático / usar en FORX /
+    // Solo Egresos). No hay destino que elegir: todo lo comprado se registra.
     $('pcForxControls')?.remove();
-    const controls=document.createElement('div');controls.id='pcForxControls';controls.className='ing-editor-destination';
-    controls.innerHTML=`<label for="pcForxDestino">Destino del producto</label><select id="pcForxDestino"><option value="auto">Automático según el producto y su categoría</option><option value="incluir">Usar en recetas de FORX (excepción individual)</option><option value="excluir">Solo Egresos</option></select><p>Limpieza, refrescos y desechables se excluyen automáticamente. Autoriza aquí las excepciones de Grill Express. Corregir la conversión modifica la compra mostrada y las futuras; el resto del historial se conserva.</p><p id="pcForxError" role="alert"></p>`;
-    modal.querySelector('h3').after(controls);$('pcForxDestino').value=p?.forx_destino||'auto';
     if(!p)$('pcGenerico').value='';
     if(p?.ingrediente_id)$('pcGenerico').value=C.ingredientName(p);
     setTimeout(()=>$('pcNombre').focus(),0);
@@ -338,7 +323,6 @@
     if(event.key==='Escape'){closeProductoModal();$('ingSearch')?.focus();}
     if(event.key==='Tab'){const nodes=[...modal.querySelectorAll('input,select,button,[href]')].filter(x=>!x.disabled&&x.type!=='hidden'&&x.getClientRects().length);const first=nodes[0],last=nodes.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}
   });
-  window.addEventListener('online',()=>{retries=0;schedule();});
   auth.onAuthStateChanged(user=>{if(user?.uid!==lastUid){reset();lastUid=user?.uid||'';}if(user)timer=setTimeout(()=>load(true).catch(()=>{}),4000);});
-  window.CicsaCatalog={ingest,ingestXml,saveEditor,publish,load,store,render};
+  window.CicsaCatalog={ingest,ingestXml,saveEditor,load,store,render};
 })();

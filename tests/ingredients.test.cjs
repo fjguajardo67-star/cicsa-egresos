@@ -6,13 +6,24 @@ const C=require('../assets/ingredients-core.js');
 const createStore=require('../assets/ingredients-store.js');
 const product=(changes={})=>({id:'a',nombre_comercial:'Arroz bolsa 3kg',ingrediente_generico:'Arroz',proveedor_nombre:'Proveedor A',estado:'validado',contenido_cantidad:3,contenido_unidad:'kg',unidad_base:'kg',merma_pct:0,precio_actual:81.84,fecha_precio:'2026-09-01',factura_origen:'F-1',...changes});
 const price=p=>C.priceForGroup(C.groups([p])[0]);
+// Explicar en un comentario por qué algo se retiró no es volver a hacerlo. Se quitan los dos
+// tipos: bloques /* */ y líneas // ENTERAS — cortar desde '//' a media línea se come las URLs.
+const sinComentarios=src=>src.replace(/\/\*[\s\S]*?\*\//g,'').replace(/^\s*\/\/.*$/gm,'');
 
-test('prefiltro por partida y excepción individual, sin contaminar otros productos',()=>{
-  for(const name of ['Detergente 5 L','Servilletas','Vasos desechables','Refresco Pepsi 2L','Papel higiénico'])assert.equal(C.destination(product({nombre_comercial:name})).include,false,name);
-  for(const name of ['Sal','Salsa catsup','Aceite vegetal','Leche 1L','Limón'])assert.equal(C.destination(product({nombre_comercial:name})).include,true,name);
-  assert.equal(C.destination(product({categoria:'Refrescos / Pepsi',forx_destino:'incluir'})).include,true);
-  assert.equal(C.destination(product({categoria:'Refrescos / Pepsi'})).include,false);
-  assert.equal(C.destination(product({forx_destino:'excluir'})).include,false);
+test('se registra TODO lo comprado: ya no hay prefiltro por categoría ni por nombre',()=>{
+  // Antes esto dejaba fuera 391 de 736 productos. Para un historial de compras la regla estorba:
+  // el precio del detergente sube igual que el del aceite y hay que poder verlo.
+  for(const name of ['Detergente 5 L','Servilletas','Vasos desechables','Refresco Pepsi 2L','Papel higiénico',
+                     'Sal','Salsa catsup','Aceite vegetal','Leche 1L','Limón'])
+    assert.equal(C.destination(product({nombre_comercial:name})).include,true,name);
+  for(const categoria of ['Refrescos / Pepsi','Limpieza','Desechables','Combustible','Nomina Fiscal'])
+    assert.equal(C.destination(product({categoria})).include,true,categoria);
+  // El destino guardado para FORX tampoco decide nada: ya no hay a dónde mandar un producto.
+  assert.equal(C.destination(product({forx_destino:'excluir'})).include,true);
+});
+test('lo único que sale de la lista es lo que alguien omitió a mano, y se puede recuperar',()=>{
+  assert.equal(C.destination(product({estado:'ignorado'})).include,false);
+  assert.match(C.destination(product({estado:'ignorado'})).reason,/mano/i);
 });
 test('conversiones de peso, volumen, piezas y porciones sin suponer cantidad uno',()=>{
   assert.equal(C.conversion(product()).price,27.28);
@@ -44,11 +55,11 @@ test('homologar mantiene compras y conversiones separadas, calcula el último pr
   assert.equal(a.ingrediente_id,undefined,'no muta el catálogo original');
   assert(rows[0].sinonimos_menu.includes('Arroz'));
 });
-test('no reaparece una relación rechazada y no hay sugerencias para Solo Egresos',()=>{
+test('no reaparece una relación rechazada y no hay sugerencias para lo omitido',()=>{
   const a=product({nombre_comercial:'Aderezo ranch 3.8L',ingrediente_generico:'Aderezo'}),b=product({id:'b',nombre_comercial:'Aderezo ranch 1L',ingrediente_generico:'Aderezo ranch'});
   assert.equal(C.suggest([a,b],a).length,1);
   assert.equal(C.suggest([{...a,forx_distintos:['b']},b],{...a,forx_distintos:['b']}).length,0);
-  assert.equal(C.suggest([a,b],{...a,forx_destino:'excluir'}).length,0);
+  assert.equal(C.suggest([a,b],{...a,estado:'ignorado'}).length,0,'un omitido no sugiere homologaciones');
 });
 const matchPair=(left,right)=>{
   const a=product({ingrediente_generico:'',...left,id:'a',ingrediente_id:'group-a'});
@@ -137,19 +148,6 @@ test('no mezcla unidades; factura prevalece sobre provisional, sin dejar huecos 
   const p=C.recordPurchase(product({precio_origen:'web',precio_fuente:'tienda',fecha_precio:'2026-09-10'}),{id:'invoice',fecha:'2026-09-01',precio:60,origen:'factura'});
   assert.equal(price(p).winner.calc.price,20);
 });
-test('publicador conserva llaves ajenas y anteriores ante conflicto; retira solo las administradas',()=>{
-  const previous={Ajeno:{precio:1},Viejo:{precio:2},Arroz:{precio:28}};
-  const p=product();const plan=C.publication([p],previous,['Viejo','Arroz']);
-  assert.equal(plan.prices.Ajeno.precio,1);assert.equal(plan.prices.Viejo,undefined);assert.equal(plan.prices.Arroz.precio,27.28);
-  const conflicted=C.recordPurchase(p,{id:'tie',fecha:p.fecha_precio,precio:90});
-  assert.equal(C.publication([conflicted],previous,['Arroz']).prices.Arroz.precio,28);
-  const excluded=C.publication([{...p,forx_destino:'excluir'}],previous,['Arroz']);assert.equal(excluded.prices.Arroz,undefined);
-});
-test('colisiones entre grupos no se resuelven por orden del arreglo',()=>{
-  const a=product({ingrediente_id:'one'}),b=product({id:'b',ingrediente_id:'two',precio_actual:300});
-  const p=C.publication([a,b],{Arroz:{precio:17}},['Arroz']);assert.equal(p.prices.Arroz.precio,17);assert.equal(p.conflicts.length,2);
-});
-
 test('conversión histórica congelada, fechas imposibles y corrección explícita trazable',()=>{
   let p=C.recordPurchase(product(),{id:'xml',precio:90,fecha:'2026-09-10',evidencia:'xml'});
   const older=C.observations(p)[0];p={...p,contenido_cantidad:6};
@@ -161,19 +159,6 @@ test('conversión histórica congelada, fechas imposibles y corrección explíci
   assert.equal(p.compras_forx.find(o=>o.id==='xml').correcciones[0].precio,90);
   for(const s of ['2026-09-11T24:01','2026-09-11T10:61','2026-09-11T12:00:60'])assert.equal(C.date(s),'');
   assert.equal(C.conversion(product({unidad_base:'g'})).ok,false);
-});
-test('exclusiones heredadas retiran solo sus llaves y respetan excepciones activas',()=>{
-  const p=product({nombre_comercial:'Pepsi 2L',ingrediente_generico:'Refresco',categoria:'Refrescos'});
-  const previous={Refresco:{precio:20},Ajeno:{precio:17}};
-  assert.equal(C.publication([p],previous).prices.Refresco,undefined);
-  assert.equal(C.publication([p],previous).prices.Ajeno.precio,17);
-  const exception={...p,id:'b',ingrediente_id:'b',forx_destino:'incluir',nombre_comercial:'Pepsi 3L',contenido_unidad:'lt',unidad_base:'lt'};
-  assert.equal(C.publication([p,exception],previous).prices.Refresco.precio,27.28);
-});
-test('publicación compatible: fecha de compra separada y vigencia de provisionales',()=>{
-  const p=product({precio_origen:'web',precio_fuente:'Consulta manual',fecha_precio:'2026-01-01'});
-  const out=C.publication([p],{},[],'2026-09-11').prices.Arroz;
-  assert.equal(out.fecha_precio,'2026-01-01');assert.equal(out.fecha,'11/09/2026');assert.equal(out.provisional,true);assert.equal(out.revaluar,true);
 });
 test('No se conserva aunque una presentación se homologue con otra',()=>{
   const a=product({id:'a',ingrediente_generico:'Arroz',forx_distintos:['b']}),b=product({id:'b',ingrediente_generico:'Arroz integral'}),c=product({id:'c',ingrediente_generico:'Arroz entero'});
@@ -209,33 +194,62 @@ function memory(){
   const store=createStore({base,key:'test',fetcher,headers:async()=>({Authorization:'Bearer TEST'}),core:C,session:()=> 'test-user'});
   return {docs,calls,store,put,setFail:x=>fail=x,setHook:fn=>hook=fn};
 }
-test('producto y pendiente se guardan en un mismo commit; publicación confirmada con CAS',async()=>{
+test('el producto y su marca se guardan en un solo commit',async()=>{
+  // La segunda mitad de esta prueba comprobaba la publicación a datos/precios con CAS. Se retiró
+  // con la publicación; lo que queda —una sola escritura, no dos viajes— sigue importando.
   const m=memory();await m.store.save([product()],{a:null});
-  assert(m.docs.get('productos_comerciales/_forx_sync').data.pending);
   const writes=JSON.parse(m.calls.find(c=>c.path===':commit').options.body).writes;assert.equal(writes.length,2);
-  const result=await m.store.publish();assert.equal(result.state,'publicado');assert.equal(m.docs.get('datos/precios').data.Arroz.precio,27.28);
-  assert.equal(m.docs.get('productos_comerciales/_forx_sync').data.pending,false);
-});
-test('rechazo HTTP conserva el pendiente y nunca informa publicado',async()=>{
-  const m=memory();await m.store.save([product()]);m.setFail(403);
-  await assert.rejects(m.store.publish(),/autorizar/);
-  assert.equal(m.docs.get('productos_comerciales/_forx_sync').data.pending,true);
-  assert.equal(m.docs.has('datos/precios'),false);
-});
-test('cambio concurrente de precio se vuelve a leer; el reintento viejo no sobrescribe el nuevo',async()=>{
-  const m=memory();await m.store.save([product()]);
-  m.setHook(()=>{m.put('productos_comerciales/a',(()=>{const {id,...data}=product({precio_actual:150,fecha_precio:'2026-09-11'});return data;})());const meta=m.docs.get('productos_comerciales/_forx_sync').data;m.put('productos_comerciales/_forx_sync',{...meta,pending:true,revision:meta.revision+1});});
-  await m.store.publish();assert.equal(m.docs.get('datos/precios').data.Arroz.precio,50);
+  assert.equal(m.calls.filter(c=>c.path===':commit').length,1);
+  assert.equal(m.docs.has('datos/precios'),false,'guardar un producto no escribe el documento de FORX');
 });
 test('edición obsoleta no destruye el cambio de otro usuario',async()=>{
   const m=memory();await m.store.save([product()]);
   await assert.rejects(m.store.save([product({precio_actual:999})],{a:{precio_actual:1}}),/Otro usuario/);
   assert.equal(m.docs.get('productos_comerciales/a').data.precio_actual,81.84);
 });
+test('ningún camino de los assets escribe datos/precios',()=>{
+  // Es el documento que FORX lee. Egresos dejó de publicar, pero el documento NO se borró: queda
+  // congelado con sus últimos valores para que lo que todavía lo lea no se quede sin nada. Un
+  // publish que vuelva por la puerta de atrás reabriría la escritura sin que nadie lo note — y
+  // ahora mandaría también detergentes y refrescos, que ya no se filtran.
+  for(const f of ['ingredients-core.js','ingredients-store.js','ingredients.js']){
+    const src=fs.readFileSync(require('node:path').join(__dirname,'../assets',f),'utf8');
+    const vivo=sinComentarios(src);
+    assert.equal(/datos\/precios/.test(vivo),false,f+' volvió a nombrar datos/precios');
+  }
+});
+test('la API pública ya no ofrece publish',()=>{
+  const core=require('node:path').join(__dirname,'../assets/ingredients-core.js');
+  delete require.cache[require.resolve(core)];
+  assert.equal(typeof require(core).publication,'undefined','publication() se retiró del dominio');
+  const store=createStore({base:'x',key:'k',fetcher:async()=>({ok:true,json:async()=>({})}),headers:async()=>({}),core:C,session:()=>'u'});
+  assert.equal(typeof store.publish,'undefined','la tienda ya no sabe publicar');
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/window\.CicsaCatalog=\{[^}]*\}/);
+  assert.equal(/window\.CicsaCatalog=\{[^}]*\bpublish\b/.test(src),false,'CicsaCatalog exportaba publish');
+});
+test('la pantalla no dice que es de FORX, porque ya no lo es',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  const markup=sinComentarios(src.slice(src.indexOf('function markup('),src.indexOf('async function render(')));
+  assert.equal(/FORX/.test(markup),false,'quedó FORX en lo que se pinta');
+  assert.match(markup,/Productos comprados/);
+  assert.equal(/Solo Egresos/.test(markup),false,'la pestaña de 391 excluidos se retiró');
+});
+test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
+  // index.html todavía sabe escribir datos/precios desde ese modal. Se le quitó el botón que lo
+  // abría y la función que lo abría quedó tapiada; si alguna de las dos cosas se deshace, la
+  // publicación vuelve por la puerta de atrás.
+  const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
+  assert.equal(/onclick="abrirSyncMenuModal\(\)"/.test(html),false,'volvió el botón que abre el modal');
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/abrirSyncMenuModal=function/,'la función de index.html sigue tapiada desde aquí');
+  assert.match(src,/confirmarSyncMenu=\(\)=>\{status\(/,'confirmar ya no publica');
+});
+
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261014-historial2'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261014-historial3'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -269,7 +283,7 @@ test('omitir desde la tarjeta conserva producto e historial, persiste y se puede
   assert.equal(C.destination(m.docs.get('productos_comerciales/a').data).include,false);
   await ui.app.ingest([{nombre:before.nombre_comercial,precio:99}],'Proveedor A','NEW',{fecha:'2026-09-12'});
   assert.equal(m.docs.get('productos_comerciales/a').data.estado,'ignorado','una compra no reactiva el omitido');
-  const reloaded=integration(m);await reloaded.app.load();await reloaded.click('view','',{view:'operacion'});
+  const reloaded=integration(m);await reloaded.app.load();await reloaded.click('view','',{view:'omitidos'});
   assert(reloaded.element('page-catalogo-productos').innerHTML.includes('Recuperar para revisión'));
   await reloaded.click('include','a');
   assert.equal(m.docs.get('productos_comerciales/a').data.estado,'pendiente');
@@ -282,10 +296,10 @@ test('fallo al omitir no elimina ni cambia el producto local o remoto',async()=>
   assert.equal(ui.context._catalogoProductos[0].estado,'validado');
   assert(ui.element('ingStatus').textContent);
 });
-test('una presentación omitida de grupo activo aparece y se recupera en Solo Egresos sin romper el vínculo',async()=>{
+test('una presentación omitida de grupo activo aparece y se recupera en Omitidos sin romper el vínculo',async()=>{
   const a=product({ingrediente_id:'grupo',nombre_comercial:'Arroz bolsa 3kg'}),b=product({id:'b',ingrediente_id:'grupo',nombre_comercial:'Arroz caja 10kg',contenido_cantidad:10,precio_actual:400});
   const m=memory();await m.store.save([a,b]);const ui=integration(m);await ui.app.load();
-  await ui.click('omit','a');await ui.click('view','',{view:'operacion'});
+  await ui.click('omit','a');await ui.click('view','',{view:'omitidos'});
   let html=ui.element('page-catalogo-productos').innerHTML;
   assert(html.includes('Arroz bolsa 3kg'));assert(!html.includes('Arroz caja 10kg'));
   assert(html.includes('Recuperar para revisión'));
@@ -350,13 +364,16 @@ test('integración: factura mixta, un solo commit, repetición idempotente y pre
   const {app}=integration(m);
   const items=[{nombre:'Arroz bolsa 3kg',precio:120},{nombre:'Detergente 1L',precio:60,categoria:'Limpieza'}];
   const result=await app.ingest(items,'Proveedor A','F-NEW',{fecha:'2026-09-11'});
-  assert.equal(result.ignorados.length,1);assert.equal(m.calls.filter(c=>c.path===':commit').length,1);
+  // El detergente ya no se ignora: entra al historial como cualquier otra compra.
+  assert.equal(result.ignorados.length,0);assert.equal(m.calls.filter(c=>c.path===':commit').length,1);
   const count=m.docs.size;await app.ingest(items,'Proveedor A','F-NEW',{fecha:'2026-09-11'});assert.equal(m.docs.size,count);
   assert.equal(m.calls.filter(c=>c.path===':commit').length,1);
   await app.ingest([{nombre:'Arroz bolsa 3kg',precio:30}],'Proveedor A','F-OLD',{fecha:'2026-07-01'});
   assert.equal(m.docs.get('productos_comerciales/a').data.precio_actual,120);
-  await app.publish();assert.equal(m.docs.get('datos/precios').data.Arroz.precio,40);
-  assert.equal(Object.keys(m.docs.get('datos/precios').data).some(k=>/detergente/i.test(k)),false);
+  assert.equal(m.docs.has('datos/precios'),false,'ingerir facturas no publica nada a FORX');
+  const detergente=[...m.docs].find(([k,v])=>/detergente/i.test(v.data.nombre_comercial||''));
+  assert(detergente,'el detergente se registra como producto, con su compra');
+  assert.equal(detergente[1].data.compras_forx.length,1);
 });
 test('integración: XML solo de compras propias, guarda hora real y no genera duplicados',async()=>{
   const m=memory(),{app}=integration(m);
@@ -400,7 +417,7 @@ test('integración: una compra sin cantidad ni SKU no pinta huecos',async()=>{
     fecha:'2026-08-15',fecha_hora:'2026-08-15T10:00:00',conceptos:[{desc:'Arroz 3kg',precio:90,unidad:'kg'}]};
   await ui.app.ingestXml([xml]);await ui.app.render(true);
   const html=ui.element('page-catalogo-productos').innerHTML;
-  assert.equal(/SKU /.test(html),false,'sin SKU no se escribe la etiqueta vacía');
+  assert.equal(/· SKU /.test(html),false,'sin SKU no se escribe la etiqueta vacía en el renglón');
   assert.equal(/· undefined/.test(html),false,'ni un undefined en la línea');
   assert.match(html,/por presentación/);
 });
