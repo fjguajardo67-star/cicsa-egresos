@@ -57,6 +57,15 @@ python servidor_cicsa.py
     `python -m unittest discover -s tests -p 'test*.py'` and
     `python tests/backend_authorization_checks.py` (this last one needs
     `requirements.txt` installed, or it fails on an import, not on the code).
+  - **And an eleventh, in its own CI job**: `npm --prefix tests/firebase ci`
+    then `npm --prefix tests/firebase run test:rules`. It boots the Firestore
+    and Storage emulators (needs Java) and exercises `firestore.rules`,
+    `storage.rules` **and the real ingredient store** against them — so a
+    change to `assets/ingredients-store.js` can break it while all ten of the
+    above stay green. That is how `staff.publish is not a function` reached
+    CI. In a container without a working Storage emulator the ten Storage
+    tests fail locally and pass in CI; check a failure against the CI run
+    before chasing it.
   **Changing anything under `assets/` also means updating its `integrity` hash
   and its `?v=` in `index.html`** — `ingredients.test.cjs` recomputes the SHA
   and will catch it, but only if you run it.

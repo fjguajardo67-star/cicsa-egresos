@@ -63,22 +63,5 @@
       try { await commit(writes);return; }catch(e){ if(!e.conflict||attempt===2) throw e; }
     }
   }
-  async function publish(){
-    const uid=session();
-    for(let attempt=0;attempt<3;attempt++){
-      const marker=await get(markerPath);
-      if(!marker?.data.pending) return {state:'sin-pendientes',marker:marker?.data};
-      const [docs,previous]=await Promise.all([list(),get('datos/precios')]);
-      const products=docs.filter(x=>!x.data._internal && x.id!=='_forx_sync').map(x=>({id:x.id,...x.data}));
-      const plan=core.publication(products,previous?.data||{},marker.data.managedKeys||[],new Date().toISOString().slice(0,10));
-      const metadata={...marker.data,pending:false,publishedRevision:marker.data.revision,managedKeys:plan.managed,publishedAt:new Date().toISOString(),conflicts:plan.conflicts};
-      const writes=[write(markerPath,metadata,marker.version)];
-      if(plan.changed) writes.push(write('datos/precios',plan.prices,previous?.version));
-      else if(previous) writes.push({verify:documentName('datos/precios'),currentDocument:{updateTime:previous.version}});
-      if(session()!==uid)throw new Error('La sesión cambió antes de publicar.');
-      try { await commit(writes);return {state:'publicado',marker:metadata,plan}; }
-      catch(e){ if(!e.conflict||attempt===2) throw e; }
-    }
-  }
-  return {get,list,save,publish,markerPath};
+  return {get,list,save,markerPath};
 });

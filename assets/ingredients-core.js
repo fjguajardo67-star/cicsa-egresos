@@ -16,18 +16,15 @@
     const day = s.slice(0, 10), d = new Date(day + 'T12:00:00Z');
     return Number.isFinite(+d) && d.toISOString().slice(0, 10) === day ? s : '';
   }
+  // Todo lo comprado se registra. Antes esto decidía si un producto servía como ingrediente de
+  // FORX: dejaba fuera categorías enteras (limpieza, refrescos, desechables, combustible…) y
+  // nombres sueltos (detergente, cloro, pepsi, unicel), y mandaba 391 de 736 productos a una
+  // pestaña aparte llamada «Solo Egresos». Para un historial de compras esa regla no solo sobra,
+  // estorba: el precio del detergente sube igual que el del aceite y hay que poder verlo.
+  // Queda una sola exclusión, y no es una regla sino una decisión: lo que alguien omitió a mano.
   function destination(p) {
-    if (p.estado === 'ignorado') return { include:false, reason:'Ignorado' };
-    if (p.forx_destino === 'incluir') return { include:true, reason:'Excepción autorizada' };
-    if (p.forx_destino === 'excluir') return { include:false, reason:'Solo Egresos (decisión guardada)' };
-    const category = norm(p.categoria);
-    if (/limpieza|desechables|refrescos|mantenimiento|combustible|transporte|nomina|gastos generales|servicios|oficina/.test(category) || category === 'gas')
-      return { include:false, reason:'Categoría de operación' };
-    const name = norm(p.nombre_comercial || p.nombre);
-    // Reglas por partida. Nunca se hereda la categoría global de una factura mixta.
-    if (/\b(detergente|cloro|desengrasante|limpiador|suavizante|jabon|escoba|trapeador|servilletas?|papel higienico|refrescos?|pepsi|coca cola|sprite|fanta)\b/.test(name) || /\b(desechables?|unicel)\b/.test(name))
-      return { include:false, reason:'Producto de operación' };
-    return { include:true, reason:'Candidato a ingrediente' };
+    if (p.estado === 'ignorado') return { include:false, reason:'Omitido a mano' };
+    return { include:true, reason:'Registrado' };
   }
   function ingredientName(p) { return String(p.ingrediente_nombre || p.ingrediente_generico || p.nombre_comercial || '').trim(); }
   function groupId(p) { return p.ingrediente_id || (p.ingrediente_generico ? 'legacy:' + norm(p.ingrediente_generico) : 'producto:' + p.id); }
@@ -166,7 +163,7 @@
   function homologate(products, sourceId, targetId) {
     const source = products.find(p => p.id === sourceId), target = products.find(p => p.id === targetId);
     if (!source || !target || sourceId === targetId) throw new Error('Selecciona dos productos distintos');
-    if (!destination(source).include || !destination(target).include) throw new Error('Autoriza primero el producto para usarlo en FORX');
+    if (!destination(source).include || !destination(target).include) throw new Error('Recupera primero el producto omitido');
     const sourceGroup = groupId(source), targetGroup = groupId(target);
     if (sourceGroup === targetGroup) return [];
     const members = products.filter(p => [sourceGroup,targetGroup].includes(groupId(p)));
@@ -239,39 +236,9 @@
       .map(g=>({...g,targetId:g.products.find(p=>destination(p).include).id}))
       .sort((a,b)=>a.name.localeCompare(b.name,'es')||a.id.localeCompare(b.id));
   }
-  function publication(products, previous = {}, managed = [], publishedDay = '') {
-    const next = Object.assign(Object.create(null), previous), desired = Object.create(null), held = new Set(), conflicts = [], owners = new Map(), excluded = new Set();
-    const grouped = groups(products);
-    for (const group of grouped) {
-      const result = priceForGroup(group), names = unique(group.products.flatMap(keys));
-      if (result.state !== 'excluido') for (const k of names) {
-        if (owners.has(k) && owners.get(k) !== group.id) {
-          held.add(k);
-          for (const id of [group.id,owners.get(k)]) if (!conflicts.some(c=>c.id===id)) conflicts.push({id,reason:'Nombre de receta compartido entre ingredientes distintos: '+k});
-        } else owners.set(k,group.id);
-      }
-      if (result.state === 'pendiente' || result.state === 'conflicto') { names.forEach(k=>held.add(k)); conflicts.push({ id:group.id, reason:result.reason }); continue; }
-      if (result.state === 'excluido') { names.forEach(k=>excluded.add(k)); continue; }
-      const w = result.winner;
-      // Conserva `fecha` como fecha de publicación para el consumidor heredado;
-      // `fecha_precio` siempre representa la compra, nunca el orden de carga.
-      const value = { precio:w.calc.price, unidad_base:w.calc.unit, fecha_precio:w.fecha, fecha:(publishedDay||w.fecha.slice(0,10)).split('-').reverse().join('/'), origen:w.origen || 'factura', provisional:w.origen === 'web', ingrediente_id:group.id };
-      if(value.provisional){
-        const start=new Date((date(w.fecha_consulta)||w.fecha).slice(0,10)+'T12:00:00Z');
-        start.setUTCDate(start.getUTCDate()+60);
-        value.vigencia=date(w.vigencia_hasta)||start.toISOString().slice(0,10);
-        value.revaluar=Boolean(publishedDay&&value.vigencia.slice(0,10)<publishedDay);
-      }
-      names.forEach(k => { desired[k] = value; });
-    }
-    // Solo se retiran llaves que este publicador administraba; nunca se borra todo el mapa.
-    for (const k of managed) if (!held.has(k) && !Object.hasOwn(desired,k)) delete next[k];
-    // Migra exclusiones heredadas únicamente para nombres presentes en el catálogo.
-    // Una excepción activa con el mismo nombre conserva la propiedad de su llave.
-    for (const k of excluded) if (!owners.has(k)) delete next[k];
-    for (const [k,v] of Object.entries(desired)) if (!held.has(k)) next[k] = v;
-    return { prices:next, managed:unique([...Object.keys(desired).filter(k=>!held.has(k)), ...managed.filter(k=>held.has(k))]), conflicts,
-      changed:JSON.stringify(next) !== JSON.stringify(previous) };
-  }
-  return { norm, date, destination, ingredientName, groupId, findProduct, conversion, observations, observationPrice, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets, publication };
+  // publication() vivía aquí: armaba el mapa de precios por ingrediente que se escribía en
+  // datos/precios para que FORX costeara recetas. Egresos ya no publica: el documento queda
+  // congelado con sus últimos valores, así que lo que todavía lo lea sigue leyendo algo.
+  // Con ella se va el único consumidor de priceForGroup fuera de la pantalla.
+  return { norm, date, destination, ingredientName, groupId, findProduct, conversion, observations, observationPrice, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets };
 });
