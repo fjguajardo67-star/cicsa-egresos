@@ -623,7 +623,7 @@ body.snav-min .side-theme span { display:none; }
 <link rel="stylesheet" href="assets/ingredients.css?v=20260912-egresos3" integrity="sha384-q4Rvv5tbRTrsyuCz5tuU/Ii3fPm4yyWkKT8PyKIEv8V76UWCyiuVuHXjMkhh+vIX" crossorigin="anonymous">
 <script src="assets/ingredients-core.js?v=20260912-egresos3" integrity="sha384-bR6Ehg5MFVbuMaTOlrQjeYEraJ4lXXibZ/swSdHVW8ehML59uz/JQ09zZaPJtqWn" crossorigin="anonymous"></script>
 <script src="assets/ingredients-store.js?v=20260912-egresos3" integrity="sha384-1t1r7qDywMGV3TumAi7h3DKdgU5FSImkC521K3f8vaZST4Gzj87WBYHNq2CJ+Omb" crossorigin="anonymous"></script>
-<script src="assets/ingredients.js?v=20260926-congelados1" integrity="sha384-8cPkaxMAm7BgmIEG8kGnfK0snEy0nmKLD3AXzMfsXzdoim7dvNR345v8vG+nbtsf" crossorigin="anonymous" defer></script>
+<script src="assets/ingredients.js?v=20261014-historial1" integrity="sha384-tHnlro87DehlVoee+Y7wDoNtOS+VivUBBz3kbW8/wawMa6Sn2zu5Dhz9vgtiXD/K" crossorigin="anonymous" defer></script>
 <script src="assets/workspace.js?v=20260926-palette2" integrity="sha384-utxWq7sfWaHcdhDZ1l40ybYR/aaKZVKvELLmcM0g9VEMnazYIosqYmkVmUwVVVSB" defer></script>
 </head>
 <body>
@@ -2136,7 +2136,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-03-egresos-v25";
+const APP_BUILD = "2026-10-14-egresos-v26";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -8120,6 +8120,11 @@ function _cfdiConceptos(xml){
     };
     const desc = _desescaparXml(a("Descripcion")).trim();
     if(!desc) continue;
+    // NoIdentificacion es el SKU que el PROVEEDOR le pone al producto, y es lo único que
+    // identifica un renglón sin depender de cómo esté escrita la descripción. Medido sobre los
+    // XML reales de agosto y septiembre: viene en 98.7% y 98.9% de los renglones.
+    // `clave` es otra cosa: ClaveProdServ, la clasificación oficial del SAT, que es gruesa.
+    const sku = _desescaparXml(a("NoIdentificacion")).trim();
     out.push({
       desc,
       clave:    a("ClaveProdServ"),
@@ -8127,6 +8132,7 @@ function _cfdiConceptos(xml){
       cantidad: parseFloat(a("Cantidad"))  || 0,
       precio:   parseFloat(a("ValorUnitario")) || 0,
       importe:  parseFloat(a("Importe"))   || 0,
+      ...(sku ? { sku } : {}),
     });
     if(out.length >= TOPE) break;
   }

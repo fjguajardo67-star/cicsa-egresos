@@ -81,7 +81,12 @@
       const receipt=context.uuid||folio||context.gastoId;
       if(!receipt)throw new Error('Falta el folio o identificador del gasto para registrar sus partidas sin duplicarlas.');
       const observationId=await hash([C.norm(supplier),receipt,C.norm(name),C.norm(item.unidad),context.evidencia==='xml'?index:Number(item.precio)].join('|'));
-      const observation={id:observationId,precio:Number(item.precio),fecha:C.date(context.fecha)||'',folio:receipt,proveedor:supplier||'',unidad:item.unidad||'',origen:'factura',evidencia:context.evidencia||'lectura',descripcion:name};
+      // La cantidad y el SKU van en la OBSERVACIÓN, no solo en el producto: el producto guarda
+      // el último valor, y lo que sirve para un histórico es cuánto se compró en cada factura y
+      // con qué clave la facturó el proveedor ese día. Ausente = no se sabe, que no es cero.
+      const cantidad=Number(item.cantidad), sku=String(item.codigo_proveedor||'').trim();
+      const observation={id:observationId,precio:Number(item.precio),fecha:C.date(context.fecha)||'',folio:receipt,proveedor:supplier||'',unidad:item.unidad||'',origen:'factura',evidencia:context.evidencia||'lectura',descripcion:name,
+        ...(Number.isFinite(cantidad)&&cantidad>0?{cantidad}:{}),...(sku?{codigo_proveedor:sku}:{})};
       const updated=C.recordPurchase(p,observation);
       // Clasificación operativa separada del ingrediente y de su conversión.
       // Una compra antigua no reemplaza los metadatos de la presentación vigente.
@@ -106,7 +111,9 @@
     for(const c of cfdis||[]){
       const stored=(_cfdisStore||[]).find(x=>(x.uuid||'')===(c.uuid||''));
       if(c.ignorado||stored?.ignorado||c.tipo!=='I'||String(c.rfcReceptor||'').toUpperCase()!==own||String(c.rfc||'').toUpperCase()===own)continue;
-      await ingest((c.conceptos||[]).map(k=>({nombre:k.desc,precio:k.precio,unidad:unidadDesdeClaveSAT(k.unidad),categoria:k.categoria||''})),c.proveedor,c.uuid||c.folio,{uuid:c.uuid,fecha:c.fecha_hora||c.fecha,evidencia:'xml'});
+      // cantidad y sku venían en el concepto y se perdían aquí: el mapeo solo pasaba cuatro
+      // campos. El XML es la fuente exacta de los dos — dato fiscal, no leído por IA.
+      await ingest((c.conceptos||[]).map(k=>({nombre:k.desc,precio:k.precio,cantidad:k.cantidad,codigo_proveedor:k.sku||'',unidad:unidadDesdeClaveSAT(k.unidad),categoria:k.categoria||''})),c.proveedor,c.uuid||c.folio,{uuid:c.uuid,fecha:c.fecha_hora||c.fecha,evidencia:'xml'});
     }
   }
   async function saveEditor(id,data){

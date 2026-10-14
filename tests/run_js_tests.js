@@ -3936,6 +3936,29 @@ t("las entidades XML se desescapan o el alias nunca casaría", () => {
   assert.equal(c[0].desc, "JUGO SAZONADOR M&E BOT 1 L");
   assert.equal(S._desescaparXml("A &lt;b&gt; &quot;c&quot;"), 'A <b> "c"');
 });
+t("el SKU del proveedor (NoIdentificacion) se captura", () => {
+  // Es lo unico que identifica un renglon sin depender de como este escrita la descripcion, y el
+  // dato venia en el XML desde siempre: el parser leia seis atributos y se saltaba este.
+  const c = S._cfdiConceptos("<x>" + CONCEPTO("ARROZ 3KG", "90", 'NoIdentificacion="000075056656001"') + "</x>");
+  assert.equal(c[0].sku, "000075056656001");
+  assert.notEqual(c[0].sku, c[0].clave, "ClaveProdServ es la clasificacion del SAT, no el SKU del proveedor");
+});
+t("sin NoIdentificacion el renglón NO trae la llave sku", () => {
+  // Ausente es "no se sabe"; un "" se ve igual que un SKU vacio y agrupa renglones que no tienen
+  // nada que ver. Los CFDI guardados antes de esto no lo traen, y asi se distinguen.
+  const c = S._cfdiConceptos("<x>" + CONCEPTO("ARROZ 3KG", "90") + "</x>");
+  assert.equal(Object.hasOwn(c[0], "sku"), false);
+});
+t("el SKU tambien se desescapa", () => {
+  const c = S._cfdiConceptos("<x>" + CONCEPTO("X", "1", 'NoIdentificacion="A&amp;B-1"') + "</x>");
+  assert.equal(c[0].sku, "A&B-1");
+});
+t("la cantidad del renglón ya se guardaba y se sigue guardando", () => {
+  // La ingesta la tiraba al mapear; el parser nunca. Si esto se rompe, el historico de cantidad
+  // deja de poder reconstruirse de los CFDI que ya estan guardados.
+  const c = S._cfdiConceptos("<x>" + CONCEPTO("ARROZ 3KG", "90") + "</x>");
+  close(c[0].cantidad, 905);
+});
 t("un renglón sin descripción no entra (no hay nada que identificar)", () => {
   assert.deepEqual(S._cfdiConceptos("<x>" + CONCEPTO("", "25") + "</x>"), []);
 });
