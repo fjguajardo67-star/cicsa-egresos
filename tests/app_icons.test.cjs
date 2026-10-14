@@ -24,7 +24,11 @@ test('HTML anuncia favicon, apple-touch-icon y manifiesto sin alterar el script 
   assert.match(html,/<link rel="icon"[^>]*href="favicon\.ico\?/);
   assert.match(html,/<link rel="apple-touch-icon"[^>]*sizes="180x180"/);
   assert.match(html,/<link rel="manifest"[^>]*href="site\.webmanifest\?/);
-  assert(html.includes('2026-09-26-egresos-v5'));
+  // Aqui habia un APP_BUILD clavado a mano ('2026-09-26-egresos-v5'). Se rompia en cada
+  // version publicada y no decia nada sobre iconos. Lo que de verdad importa es que cada enlace
+  // lleve su parametro de version, para que el navegador no sirva un icono viejo de cache.
+  for(const link of html.match(/<link rel="(?:icon|apple-touch-icon|manifest)"[^>]*>/g)||[])
+    assert.match(link,/href="[^"]+\?v=[^"&]+"/,link);
 });
 test('ICO contiene imágenes válidas de 16, 32, 48 y 256 píxeles',()=>{
   const ico=fs.readFileSync(path.join(root,'favicon.ico'));

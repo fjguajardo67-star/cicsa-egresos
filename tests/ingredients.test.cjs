@@ -235,7 +235,7 @@ test('edición obsoleta no destruye el cambio de otro usuario',async()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20260926-congelados1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261014-historial1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -364,6 +364,47 @@ test('integración: XML solo de compras propias, guarda hora real y no genera du
   await app.ingestXml([{...xml,tipo:'P'},{...xml,rfcReceptor:'AJENO'},xml]);
   let products=(await m.store.list()).filter(x=>!x.data._internal);assert.equal(products.length,1);assert.equal(products[0].data.fecha_precio,xml.fecha_hora);
   await app.ingestXml([xml]);products=(await m.store.list()).filter(x=>!x.data._internal);assert.equal(products[0].data.compras_forx.length,1);
+});
+test('integración: cada compra guarda su cantidad y el SKU del proveedor',async()=>{
+  // Sin cantidad, un histórico solo dice qué precio tuvo algo, no cuánto se compró — y la mitad
+  // del valor de la consulta es ver que de 40 kg en agosto se pasó a 12 en septiembre.
+  // El SKU (NoIdentificacion del CFDI) es lo único que identifica el renglón sin depender de
+  // cómo esté escrita la descripción.
+  const m=memory(),{app}=integration(m);
+  const xml={uuid:'UUID-CANT',tipo:'I',rfcReceptor:'EMPRESA123',rfc:'PROVEEDOR',proveedor:'Proveedor A',
+    fecha:'2026-09-11',fecha_hora:'2026-09-11T15:04:02',
+    conceptos:[{desc:'Arroz 3kg',precio:90,unidad:'kg',cantidad:40,sku:'000075056656001'}]};
+  await app.ingestXml([xml]);
+  const compras=(await m.store.list()).filter(x=>!x.data._internal)[0].data.compras_forx;
+  assert.equal(compras.length,1);
+  assert.equal(compras[0].cantidad,40);
+  assert.equal(compras[0].codigo_proveedor,'000075056656001');
+  assert.equal(compras[0].evidencia,'xml');
+});
+test('integración: lo que no viene en el XML queda AUSENTE, no en cero',async()=>{
+  // Un cero se suma y se promedia; un campo ausente se ve como lo que es: no se sabe. Los CFDI
+  // guardados antes de capturar NoIdentificacion no traen SKU, y no deben inventar uno vacío.
+  const m=memory(),{app}=integration(m);
+  const xml={uuid:'UUID-SIN',tipo:'I',rfcReceptor:'EMPRESA123',rfc:'PROVEEDOR',proveedor:'Proveedor A',
+    fecha:'2026-09-11',fecha_hora:'2026-09-11T15:04:02',conceptos:[{desc:'Arroz 3kg',precio:90,unidad:'kg'}]};
+  await app.ingestXml([xml]);
+  const c=(await m.store.list()).filter(x=>!x.data._internal)[0].data.compras_forx[0];
+  assert.equal(Object.hasOwn(c,'cantidad'),false,'sin cantidad no se escribe cantidad:0');
+  assert.equal(Object.hasOwn(c,'codigo_proveedor'),false,'sin SKU no se escribe uno vacío');
+  assert.equal(c.precio,90,'lo que sí venía sigue ahí');
+});
+test('integración: reprocesar el mismo XML rellena la compra que ya estaba, sin duplicarla',async()=>{
+  // Es cómo se recupera el histórico viejo: los CFDI ya guardados traen cantidad aunque la
+  // ingesta la tiraba. Volver a procesarlos la rellena en su sitio, no agrega una compra nueva.
+  const m=memory(),{app}=integration(m);
+  const base={uuid:'UUID-RE',tipo:'I',rfcReceptor:'EMPRESA123',rfc:'PROVEEDOR',proveedor:'Proveedor A',
+    fecha:'2026-09-11',fecha_hora:'2026-09-11T15:04:02'};
+  await app.ingestXml([{...base,conceptos:[{desc:'Arroz 3kg',precio:90,unidad:'kg'}]}]);
+  await app.ingestXml([{...base,conceptos:[{desc:'Arroz 3kg',precio:90,unidad:'kg',cantidad:40,sku:'SKU-1'}]}]);
+  const compras=(await m.store.list()).filter(x=>!x.data._internal)[0].data.compras_forx;
+  assert.equal(compras.length,1,'la misma factura no se cuenta dos veces');
+  assert.equal(compras[0].cantidad,40);
+  assert.equal(compras[0].codigo_proveedor,'SKU-1');
 });
 test('integración: validación preserva hora XML y fallo de red no altera la memoria',async()=>{
   const m=memory(),p=product({fecha_precio:'2026-09-11T15:04:02'});await m.store.save([p]);

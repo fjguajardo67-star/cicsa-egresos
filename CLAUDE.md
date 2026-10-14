@@ -39,13 +39,28 @@ python servidor_cicsa.py
   this constant.
 - There is no linter or build tooling, but there **are** tests, and they are the
   only safety net this repo has:
-  - `node tests/run_js_tests.js` — 400 tests. Extracts the real functions out of
-    `index.html` by brace-matching into a `vm` sandbox, so it tests the shipped
-    code, not a copy. New functions must be listed in `FUNCS`, constants in
-    `CONSTS`.
-  - `python3 tests/test_gmail_cicsa.py` — 17 tests, with Google's modules stubbed
-    so they run without network or credentials.
-  Run both before pushing. Several tests are deliberately *source-level guards*
+  - `node tests/run_js_tests.js` — the big one. Extracts the real functions out
+    of `index.html` by brace-matching into a `vm` sandbox, so it tests the
+    shipped code, not a copy. New functions must be listed in `FUNCS`,
+    constants in `CONSTS`.
+  - `python3 tests/test_gmail_cicsa.py` — Google's modules stubbed, so it runs
+    without network or credentials.
+  - **Nine more suites that CI runs and this file used to omit.** Running only
+    the two above is how `capture_context` stayed red for twelve days: it
+    asserted a call that a deliberate change had removed, and nothing local
+    said so. The authoritative list is `.github/workflows/tests.yml` — read it,
+    don't trust this paragraph to stay current. Today it is:
+    `node tests/security_sync_tests.js`, then `node --test` over
+    `ingredients.test.cjs` (covers `assets/ingredients*.js` with a vm + fake
+    DOM), `financial_access`, `app_icons`, `gastos_layout`, `capture_context`,
+    `expense_classification`, `budget_dark` and `brand_theme`; plus
+    `python -m unittest discover -s tests -p 'test*.py'` and
+    `python tests/backend_authorization_checks.py` (this last one needs
+    `requirements.txt` installed, or it fails on an import, not on the code).
+  **Changing anything under `assets/` also means updating its `integrity` hash
+  and its `?v=` in `index.html`** — `ingredients.test.cjs` recomputes the SHA
+  and will catch it, but only if you run it.
+  Run them all before pushing. Several tests are deliberately *source-level guards*
   (no `<script src>` without `integrity`, `setStatus` never back to `innerHTML`,
   `gmail_token.json` never versioned again) — if one of those fails, it is
   telling you a protection was removed, not that a test is flaky.

@@ -84,7 +84,11 @@ test('SAT tipo I después de Gmail tipo P guarda la factura nueva sin adjunto ni
   assert.equal(f.saved[0].cfdiUuid,'test-uuid');
   assert.equal(f.saved[0]._gmailMsgId,null);
   assert.equal(f.uploads[0][1],null);
-  assert.equal(f.products[0][1],null);
+  // Antes aqui se exigia que la lectura de productos SI se llamara, con b64 en null para no
+  // arrastrar el adjunto anterior. Esa llamada se corto a proposito (68a0750): guardar un gasto
+  // ya no dispara una segunda lectura de IA. Lo que importaba —que el adjunto anterior no viaje—
+  // lo sigue cubriendo la linea de arriba, sobre la subida a Storage.
+  assert.equal(f.products.length,0,'guardar ya no dispara la lectura de productos');
 });
 test('un verdadero tipo P seleccionado desde SAT sigue bloqueado aunque se escriba un importe',()=>{
   const f=fixture(); f.openSAT('P'); f.S.guardarGasto();
