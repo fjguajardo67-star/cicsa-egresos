@@ -235,7 +235,7 @@ test('edición obsoleta no destruye el cambio de otro usuario',async()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261014-historial1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261014-historial2'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -380,6 +380,29 @@ test('integración: cada compra guarda su cantidad y el SKU del proveedor',async
   assert.equal(compras[0].cantidad,40);
   assert.equal(compras[0].codigo_proveedor,'000075056656001');
   assert.equal(compras[0].evidencia,'xml');
+});
+test('integración: el historial MUESTRA la cantidad y el SKU, no solo los guarda',async()=>{
+  // Guardarlos sin pintarlos deja al usuario sin forma de comprobar que la captura sirvió: la
+  // línea del historial decía solo fecha · precio · folio · proveedor.
+  const m=memory(),ui=integration(m);
+  const xml={uuid:'UUID-VER',tipo:'I',rfcReceptor:'EMPRESA123',rfc:'PROVEEDOR',proveedor:'Proveedor A',
+    fecha:'2026-08-15',fecha_hora:'2026-08-15T10:00:00',
+    conceptos:[{desc:'Arroz 3kg',precio:90,unidad:'kg',cantidad:40,sku:'000075056656001'}]};
+  await ui.app.ingestXml([xml]);await ui.app.render(true);
+  const html=ui.element('page-catalogo-productos').innerHTML;
+  assert.match(html,/40 kg/,'la cantidad con su unidad');
+  assert.match(html,/SKU 000075056656001/,'el SKU del proveedor');
+  assert.match(html,/por presentación/,'y lo que ya estaba sigue ahí');
+});
+test('integración: una compra sin cantidad ni SKU no pinta huecos',async()=>{
+  const m=memory(),ui=integration(m);
+  const xml={uuid:'UUID-VER2',tipo:'I',rfcReceptor:'EMPRESA123',rfc:'PROVEEDOR',proveedor:'Proveedor A',
+    fecha:'2026-08-15',fecha_hora:'2026-08-15T10:00:00',conceptos:[{desc:'Arroz 3kg',precio:90,unidad:'kg'}]};
+  await ui.app.ingestXml([xml]);await ui.app.render(true);
+  const html=ui.element('page-catalogo-productos').innerHTML;
+  assert.equal(/SKU /.test(html),false,'sin SKU no se escribe la etiqueta vacía');
+  assert.equal(/· undefined/.test(html),false,'ni un undefined en la línea');
+  assert.match(html,/por presentación/);
 });
 test('integración: lo que no viene en el XML queda AUSENTE, no en cero',async()=>{
   // Un cero se suma y se promedia; un campo ausente se ve como lo que es: no se sabe. Los CFDI
