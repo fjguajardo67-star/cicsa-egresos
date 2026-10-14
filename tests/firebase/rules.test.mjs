@@ -61,15 +61,19 @@ test('Ingredientes: transporte real, pendiente atómico, CAS y permisos existent
   const p={id:'ingrediente-prueba',nombre_comercial:'Arroz 3kg',ingrediente_generico:'Arroz de prueba',estado:'validado',precio_actual:90,fecha_precio:'2026-09-11',unidad_base:'kg',contenido_cantidad:3,contenido_unidad:'kg'};
   await staff.save([p],{[p.id]:null});
   assert.equal((await staff.get(staff.markerPath)).data.pending,true);
-  const first=await staff.publish();assert.equal(first.state,'publicado');
-  assert.equal((await staff.get('datos/precios')).data['Arroz de prueba'].precio,30);
+  // Aquí se publicaba a datos/precios contra el emulador y se comprobaba el precio por kilo, la
+  // rama sin cambios y que un rechazo no lo dejara a medias. La publicación se retiró: guardar un
+  // producto ya no escribe ese documento, y eso es justo lo que hay que comprobar ahora.
+  // El fixture siembra datos/precios, así que lo que hay que probar no es que no exista sino que
+  // GUARDAR NO LO TOCA: queda congelado con lo que tuviera, que es la promesa de esta fase.
+  const preciosAntes=(await getDoc(doc(db('staff'),'datos/precios'))).data();
   const {id,...before}=p;
   await staff.save([{...p,notas:'Sin cambio del precio'}],{[id]:before});
-  // La rama sin cambios utiliza una escritura verify con precondición real.
-  assert.equal((await staff.publish()).plan.changed,false);
   await assert.rejects(staff.save([{...p,precio_actual:999}],{[id]:before}),/Otro usuario/);
   await assert.rejects(store('outsider').save([{...p,id:'intruso'}]),e=>e.status===403);
-  assert.equal((await staff.get('datos/precios')).data['Arroz de prueba'].precio,30);
+  assert.equal(typeof staff.publish,'undefined','la tienda ya no sabe publicar');
+  assert.deepEqual((await getDoc(doc(db('staff'),'datos/precios'))).data(),preciosAntes,
+    'ningún camino de guardado reescribió el documento que lee FORX');
 });
 
 for (const uid of [null, 'outsider', 'inactive', 'inactiveAdmin', 'badActive', 'numericActive', 'nullActive', 'badRole']) {
