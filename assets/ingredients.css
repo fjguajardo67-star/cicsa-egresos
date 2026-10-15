@@ -61,7 +61,6 @@
 /* ─── Consulta: filtros, gráfica y tabla del historial ─────────────────────── */
 .ing-filters{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:18px;}
 .ing-filters>div{display:flex;flex-direction:column;min-width:150px;}
-.ing-filters>div:last-of-type{flex:1;min-width:220px;}
 .ing-filters label{font-size:.8rem;font-weight:600;margin-bottom:6px;}
 .ing-filters input,.ing-filters select{font:inherit;padding:9px 11px;border:1px solid #afc3b7;border-radius:8px;background:#fff;color:#173a2c;}
 .ing-tiles{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;}
@@ -76,10 +75,28 @@
 .ing-key{width:16px;height:2px;border-radius:1px;flex:none;}
 .ing-chart p{padding:0 12px;}
 .ing-table-wrap{overflow-x:auto;border:1px solid #e3e9e5;border-radius:10px;}
-.ing-table{border-collapse:collapse;width:100%;font-size:.84rem;}
-.ing-table th,.ing-table td{text-align:left;padding:9px 11px;border-bottom:1px solid #eef2ef;white-space:nowrap;}
-.ing-table th{background:#f4f7f4;color:var(--ing-green);font-weight:600;position:sticky;top:0;}
+/* table-layout:fixed reparte los anchos y obliga al texto largo a partirse dentro de su celda.
+   Con layout automático y white-space:nowrap los nombres se salían por encima de la columna
+   de al lado: «87 Octanos (gasolina87 Octanos (gasolinaSUPERSERVICIO PACIFICO AM». */
+.ing-table{border-collapse:collapse;width:100%;min-width:980px;table-layout:fixed;font-size:.84rem;}
+.ing-table th,.ing-table td{text-align:left;padding:9px 11px;border-bottom:1px solid #eef2ef;vertical-align:top;overflow-wrap:anywhere;}
+.ing-table th{background:#f4f7f4;color:var(--ing-green);font-weight:600;position:sticky;top:0;z-index:1;}
 .ing-table tbody tr:last-child td{border-bottom:none;}
 .ing-table tbody tr:hover td{background:#f7faf8;}
-.ing-table .ing-num{text-align:right;font-variant-numeric:tabular-nums;}
+.ing-table .ing-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.ing-table .ing-nw{white-space:nowrap;}
+.ing-table .ing-folio{font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ing-table .ing-sub{display:block;font-size:.76rem;font-weight:400;color:var(--ing-muted);margin-top:2px;white-space:normal;}
+.ing-table th:nth-child(1),.ing-table td:nth-child(1){width:10%}
+.ing-table th:nth-child(2),.ing-table td:nth-child(2){width:24%}
+.ing-table th:nth-child(3),.ing-table td:nth-child(3){width:16%}
+.ing-table th:nth-child(4),.ing-table td:nth-child(4){width:9%}
+.ing-table th:nth-child(5),.ing-table td:nth-child(5){width:9%}
+.ing-table th:nth-child(6),.ing-table td:nth-child(6){width:11%}
+.ing-table th:nth-child(7),.ing-table td:nth-child(7){width:10%}
+.ing-table th:nth-child(8),.ing-table td:nth-child(8){width:11%}
+.ing-chart-vacia{padding:18px 16px;}
+.ing-chart-vacia p{color:var(--ing-muted);margin:0;}
+.ing-chart-vacia strong{color:var(--ing-green);}
+.ing-filters .ing-f-ancho{flex:1;min-width:240px;}
 @media(max-width:640px){.ing-filters>div{min-width:100%;}.ing-filters input,.ing-filters select{font-size:16px;}.ing-tiles>div{min-width:calc(50% - 6px);}}
