@@ -298,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261015-consulta2'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261015-consulta3'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -623,11 +623,13 @@ test('la gráfica usa el palette validado y no se pasa de tres líneas',()=>{
   assert.match(src,/ing-legend/,'falta la leyenda');
   assert.match(src,/ing-table/,'falta la tabla, que es el relevo de la gráfica');
 });
-test('el importe se declara por lo que es: suma de renglones con cantidad, sin IVA',()=>{
+test('el importe se declara por lo que es: ni «total», ni completo si no lo está',()=>{
   const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // Lo que importa no es la redacción exacta sino que la cifra no se pueda confundir con el
+  // total del gasto: va sin IVA y dice sobre cuántos renglones de cuántos se sumó.
   assert.match(src,/sin IVA/,'llamarle «total» a esto lo haría pasar por el total del gasto');
   assert.match(src,/plural\(conImporte\.length,'renglón','renglones'\)/,'hay que decir sobre cuántos renglones se sumó');
-  assert.match(src,/con cantidad, sin IVA/);
+  assert.match(src,/conImporte\.length<rows\.length\?' de '\+rows\.length/,'y de cuántos en total, cuando faltan');
 });
 
 // ─── El desplegable de producto y la tabla sin desborde ──────────────────────
@@ -691,4 +693,159 @@ test('las cantidades se pluralizan: «6 piezas», no «6 pieza»',()=>{
   const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
   assert.match(src,/unitN=\(x,n\)=>n===1\?unit\(x\):/);
   assert.match(src,/unitN\(r\.unidad,r\.cantidad\)/);
+});
+
+// ─── Importe del CFDI y gasto por producto / proveedor ───────────────────────
+test('el importe sale del renglón del CFDI, no de una multiplicación nuestra',()=>{
+  // El Importe viene en el XML y es lo que se pagó por esa partida. Multiplicar precio ×
+  // cantidad da lo mismo cuando ambos están, pero cuando el XML trae el importe es el dato
+  // bueno y hay que usarlo: arrastra el redondeo del proveedor, no el nuestro.
+  const rows=C.purchaseRows([conCompras([
+    compra({id:'o1',precio:18.2,importe:910.07}),
+    compra({id:'o2',precio:20,cantidad:5,fecha:'2026-09-28'}),
+    compra({id:'o3',precio:21,fecha:'2026-09-29'}),
+  ])]);
+  const porId=Object.fromEntries(rows.map(r=>[r.id,r]));
+  assert.equal(porId.o1.importe,910.07,'el importe de la factura manda');
+  assert.equal(porId.o1.importeOrigen,'factura');
+  assert.equal(porId.o2.importe,100,'sin importe en la factura se calcula precio × cantidad');
+  assert.equal(porId.o2.importeOrigen,'calculado');
+  assert.equal(porId.o3.importe,null,'sin importe ni cantidad no se inventa un número');
+  assert.equal(porId.o3.importeOrigen,'');
+});
+test('un importe de cero o negativo no se toma por bueno',()=>{
+  const rows=C.purchaseRows([conCompras([compra({importe:0,precio:20,cantidad:3}),compra({id:'o2',importe:-5,precio:10,fecha:'2026-09-28'})])]);
+  const porId=Object.fromEntries(rows.map(r=>[r.id,r]));
+  assert.equal(porId.o1.importe,60,'importe 0 en el XML no vale: se calcula');
+  assert.equal(porId.o2.importe,null);
+});
+test('el gasto se agrupa por producto y por proveedor, con su cobertura',()=>{
+  const rows=C.purchaseRows([
+    conCompras([compra({id:'o1',importe:900}),compra({id:'o2',importe:600,fecha:'2026-09-20'}),compra({id:'o3',fecha:'2026-09-21'})],
+      {id:'a',nombre_comercial:'Papa',ingrediente_generico:'PAPA'}),
+    conCompras([compra({id:'o4',importe:2000,proveedor:'Beta'})],{id:'b',nombre_comercial:'Papaya',ingrediente_generico:'Papaya',proveedor_nombre:'Beta'}),
+  ]);
+  const porProducto=C.spendBy(rows,'producto');
+  assert.deepEqual(porProducto.map(x=>[x.nombre,x.importe]),[['Papaya',2000],['PAPA',1500]],'de mayor a menor gasto');
+  const papa=porProducto.find(x=>x.nombre==='PAPA');
+  assert.equal(papa.compras,3);
+  assert.equal(papa.conImporte,2,'hay que poder decir que el total deja fuera una compra');
+  const porProveedor=C.spendBy(rows,'proveedor');
+  assert.deepEqual(porProveedor.map(x=>[x.nombre,x.importe]),[['Beta',2000],['Proveedor A',1500]]);
+});
+test('el gasto por proveedor junta las grafías del mismo proveedor',()=>{
+  // «ANA KAREM HUERTA DIAZ» y «ANA KAREM HUERTA DÍAZ» son el mismo, y partirle el gasto en dos
+  // renglones haría parecer que se le compró la mitad.
+  const rows=C.purchaseRows([conCompras([
+    compra({id:'o1',importe:100,proveedor:'ANA KAREM HUERTA DIAZ'}),
+    compra({id:'o2',importe:150,proveedor:'ANA KAREM HUERTA DÍAZ',fecha:'2026-09-20'}),
+  ])]);
+  const porProveedor=C.spendBy(rows,'proveedor');
+  assert.equal(porProveedor.length,1,'una sola fila');
+  assert.equal(porProveedor[0].importe,250);
+  assert.deepEqual(C.supplierList(rows).length,1,'y una sola opción en el desplegable');
+});
+test('el desplegable de proveedores se queda con la grafía más usada',()=>{
+  const rows=C.purchaseRows([conCompras([
+    compra({id:'o1',proveedor:'ANA KAREM HUERTA DIAZ'}),
+    compra({id:'o2',proveedor:'ANA KAREM HUERTA DIAZ',fecha:'2026-09-20'}),
+    compra({id:'o3',proveedor:'ANA KAREM HUERTA DÍAZ',fecha:'2026-09-21'}),
+  ])]);
+  assert.deepEqual(C.supplierList(rows),['ANA KAREM HUERTA DIAZ']);
+});
+test('sin ningún importe, la pantalla lo dice en vez de enseñar $0.00',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // «$0.00» se lee como «no gastaste nada», y lo que pasa es que falta el dato.
+  assert.match(src,/\$\{conImporte\.length\?e\(money\(importe\)\):'—'\}/,'volvió el $0.00 engañoso');
+  assert.match(src,/ningún renglón trae con qué calcularlo/);
+  assert.match(src,/Vuelve a subir los XML/,'hay que decir cómo se arregla');
+});
+test('el XML ya no tira el Importe del renglón',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/importe:k\.importe/,'el mapeo de conceptos volvió a perderlo');
+  assert.match(src,/Number\.isFinite\(importe\)&&importe>0\?\{importe\}:\{\}/);
+});
+test('integración: reprocesar un XML rellena el importe que faltaba',async()=>{
+  const m=memory(),{app}=integration(m);
+  const base={uuid:'UUID-IMP',tipo:'I',rfcReceptor:'EMPRESA123',rfc:'PROVEEDOR',proveedor:'Proveedor A',fecha:'2026-09-11',fecha_hora:'2026-09-11T15:04:02'};
+  await app.ingestXml([{...base,conceptos:[{desc:'Arroz 3kg',precio:90,unidad:'kg'}]}]);
+  await app.ingestXml([{...base,conceptos:[{desc:'Arroz 3kg',precio:90,unidad:'kg',cantidad:40,importe:3600}]}]);
+  const compras=(await m.store.list()).filter(x=>!x.data._internal)[0].data.compras_forx;
+  assert.equal(compras.length,1,'la misma factura no se cuenta dos veces');
+  assert.equal(compras[0].importe,3600,'volver a subir el XML rellena el importe');
+});
+
+// ─── Racimos de duplicados y fusión en bloque ────────────────────────────────
+// Así llegan de verdad los productos del XML: con nombre comercial y SIN ingrediente_generico,
+// que es lo que los deja a cada uno en su propio grupo. Ponérselo aquí los agruparía solo,
+// y la prueba diría que no hay duplicados cuando en la app sí los hay.
+const prod=(id,nombre,changes={})=>product({id,nombre_comercial:nombre,ingrediente_generico:'',compras_forx:[compra({id:'c'+id})],precio_actual:null,fecha_precio:null,...changes});
+
+test('los racimos juntan lo que solo cambia en mayúsculas o acentos',()=>{
+  const racimos=C.duplicateClusters([
+    prod('a','Papa delgada europea bol 2.5 kg'),
+    prod('b','PAPA DELGADA EUROPEA BOL 2.5 KG'),
+    prod('c','Papaya'),
+  ]);
+  assert.equal(racimos.length,1);
+  assert.equal(racimos[0].nivel,'exacto','solo cambian mayúsculas: no hay nada que juzgar');
+  assert.deepEqual(racimos[0].miembros.map(g=>g.nombre).sort(),['PAPA DELGADA EUROPEA BOL 2.5 KG','Papa delgada europea bol 2.5 kg']);
+});
+test('los racimos marcan como probable lo que cambia de redacción',()=>{
+  const racimos=C.duplicateClusters([
+    prod('a','Puré de papa instantáneo 2.5 kg (HOP)'),
+    prod('b','Puré de Papa Instantáneo 2.5kg HOP'),
+  ]);
+  assert.equal(racimos.length,1);
+  assert.equal(racimos[0].nivel,'probable','no es el mismo texto: lo confirma una persona');
+});
+test('lo que cambia de calificativo no se propone siquiera',()=>{
+  // «procesado», «(botana)» y «de pollo» pueden ser productos distintos. Esa decisión no es
+  // de la máquina, así que ni aparecen como racimo.
+  for(const [a,b] of [['MM Queso Americano','MM Queso Americano procesado'],
+                      ['Pulpa de pechuga','Pulpa de pechuga de pollo'],
+                      ['Pierna sin Hueso de Cerdo','Pierna sin Hueso Frontera de Cerdo']])
+    assert.deepEqual(C.duplicateClusters([prod('a',a),prod('b',b)]),[],a+' / '+b);
+});
+test('un «son distintos» de antes se respeta y saca a los dos del racimo',()=>{
+  const racimos=C.duplicateClusters([
+    prod('a','Pepsi 12 OZ Lata 24',{forx_distintos:['b']}),
+    prod('b','Pepsi 12 oz lata 24'),
+  ]);
+  assert.deepEqual(racimos,[],'volver a proponer lo ya rechazado es ignorar una decisión tomada');
+});
+test('un producto omitido no entra a los racimos',()=>{
+  assert.deepEqual(C.duplicateClusters([prod('a','Papa Lisa'),prod('b','PAPA LISA',{estado:'ignorado'})]),[]);
+});
+test('los racimos ponen primero los seguros y los que más compras arrastran',()=>{
+  const racimos=C.duplicateClusters([
+    prod('a','Puré HOP'),prod('b','Pure hop 2.5kg'),
+    prod('c','Arroz Grano Largo'),prod('d','ARROZ GRANO LARGO'),
+  ]);
+  assert.deepEqual(racimos.map(r=>r.nivel),['exacto','probable']);
+});
+test('fusionar en bloque conserva todas las presentaciones y su historial',()=>{
+  const productos=[
+    prod('a','Papa Lisa',{compras_forx:[compra({id:'c1',precio:111}),compra({id:'c2',precio:98,fecha:'2026-08-26'})]}),
+    prod('b','PAPA LISA',{compras_forx:[compra({id:'c3',precio:119})]}),
+    prod('c','papa lisa',{compras_forx:[compra({id:'c4',precio:120})]}),
+  ];
+  const [racimo]=C.duplicateClusters(productos);
+  assert.equal(racimo.miembros.length,3);
+  const destino=racimo.miembros.find(g=>g.nombre==='Papa Lisa');
+  const cambios=C.homologateMany(productos,racimo.miembros.map(g=>g.id),destino.id);
+  assert.equal(cambios.length,3,'los tres quedan en el mismo grupo');
+  assert.equal(new Set(cambios.map(p=>p.ingrediente_id)).size,1);
+  for(const p of cambios) assert.equal(p.ingrediente_nombre,'Papa Lisa','queda el nombre del destino');
+  // Ninguna compra se pierde: 2 + 1 + 1.
+  assert.equal(cambios.reduce((n,p)=>n+C.observations(p).length,0),4);
+  // Y después de fusionar ya no hay racimo que proponer.
+  const despues=productos.map(p=>cambios.find(c=>c.id===p.id)||p);
+  assert.deepEqual(C.duplicateClusters(despues),[]);
+});
+test('fusionar exige al menos dos, y que el nombre que queda sea uno de ellos',()=>{
+  const productos=[prod('a','Papa Lisa'),prod('b','PAPA LISA')];
+  const [racimo]=C.duplicateClusters(productos);
+  assert.throws(()=>C.homologateMany(productos,[racimo.miembros[0].id],racimo.miembros[0].id),/al menos dos/);
+  assert.throws(()=>C.homologateMany(productos,racimo.miembros.map(g=>g.id),'ing:otro'),/tiene que ser uno de los que se fusionan/);
 });
