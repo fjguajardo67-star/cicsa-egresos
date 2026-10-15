@@ -298,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261014-historial4'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261015-consulta1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -507,4 +507,125 @@ test('integración: validación preserva hora XML y fallo de red no altera la me
   m.setFail(503);await assert.rejects(app.saveEditor(id,{...data,precio_actual:999}),/No se pudo guardar/);
   assert.equal(context._catalogoProductos[0].precio_actual,81.84);
   assert.equal(m.docs.get('productos_comerciales/a').data.precio_actual,81.84);
+});
+
+// ─── Fase D: la consulta del historial de compras ────────────────────────────
+const compra=(changes={})=>({id:'o1',precio:90,fecha:'2026-09-11',folio:'F-9',proveedor:'Proveedor A',origen:'factura',evidencia:'xml',...changes});
+const conCompras=(obs,changes={})=>product({compras_forx:obs,precio_actual:null,fecha_precio:null,...changes});
+
+test('la consulta aplana las compras sin inventar lo que la factura no trae',()=>{
+  const rows=C.purchaseRows([conCompras([
+    compra({id:'o1',precio:90,cantidad:40,codigo_proveedor:'SKU-1',unidad:'kg'}),
+    compra({id:'o2',precio:95,fecha:'2026-10-02'}),
+  ])]);
+  assert.equal(rows.length,2);
+  assert.equal(rows[0].dia,'2026-10-02','ordena de la más reciente a la más vieja');
+  const [nueva,vieja]=rows;
+  assert.equal(vieja.cantidad,40);
+  assert.equal(vieja.importe,3600,'importe = precio × cantidad, el Importe del renglón del CFDI');
+  assert.equal(vieja.sku,'SKU-1');
+  // Ausente no es cero: un renglón sin cantidad no vale «compré cero», vale «no se sabe».
+  assert.equal(nueva.cantidad,null);
+  assert.equal(nueva.importe,null);
+  assert.equal(nueva.sku,'','sin SKU en la factura, el renglón no hereda el del producto');
+});
+test('el SKU del producto sirve para buscar, pero no se le pega al renglón que no lo traía',()=>{
+  const rows=C.purchaseRows([conCompras([compra()],{codigo_proveedor:'SKU-HOY'})]);
+  assert.equal(rows[0].sku,'','el renglón conserva lo que decía SU factura');
+  assert.equal(rows[0].skuProducto,'SKU-HOY');
+  assert.equal(C.filterPurchases(rows,{texto:'SKU-HOY'}).length,1,'buscar por el SKU de hoy encuentra su historial');
+});
+test('lo omitido a mano no entra a la consulta',()=>{
+  assert.equal(C.purchaseRows([conCompras([compra()],{estado:'ignorado'})]).length,0);
+});
+test('una compra sin fecha o sin precio válido no entra: no se puede ni ordenar ni graficar',()=>{
+  assert.equal(C.purchaseRows([conCompras([compra({fecha:''}),compra({id:'o2',precio:0}),compra({id:'o3',fecha:'2026-13-40'})])]).length,0);
+});
+test('los filtros se acumulan: proveedor, rango de fechas y texto',()=>{
+  const rows=C.purchaseRows([
+    conCompras([compra({id:'o1',fecha:'2026-08-01'}),compra({id:'o2',fecha:'2026-09-15'})]),
+    conCompras([compra({id:'o3',fecha:'2026-09-20',proveedor:'Proveedor B'})],{id:'b',nombre_comercial:'Aceite 20L',ingrediente_generico:'Aceite',proveedor_nombre:'Proveedor B'}),
+  ]);
+  assert.equal(rows.length,3);
+  assert.equal(C.filterPurchases(rows,{proveedor:'Proveedor B'}).length,1);
+  assert.equal(C.filterPurchases(rows,{desde:'2026-09-01'}).length,2);
+  assert.equal(C.filterPurchases(rows,{hasta:'2026-09-16'}).length,2);
+  assert.equal(C.filterPurchases(rows,{desde:'2026-09-01',hasta:'2026-09-16'}).length,1);
+  assert.equal(C.filterPurchases(rows,{texto:'aceite'}).length,1);
+  assert.equal(C.filterPurchases(rows,{texto:'arroz',proveedor:'Proveedor B'}).length,0,'los filtros se suman, no se reemplazan');
+  assert.equal(C.filterPurchases(rows,{}).length,3);
+  // Una fecha a medio escribir no debe vaciar la pantalla de golpe.
+  assert.equal(C.filterPurchases(rows,{desde:'0002-01'}).length,3,'una fecha inválida no filtra');
+});
+test('buscar por acentos, mayúsculas y varias palabras sueltas',()=>{
+  const rows=C.purchaseRows([conCompras([compra()],{nombre_comercial:'Jalapeño en Rajas 2.8 KG',ingrediente_generico:'Jalapeño'})]);
+  for(const q of ['jalapeno','JALAPEÑO','rajas jalapeno','2.8'])
+    assert.equal(C.filterPurchases(rows,{texto:q}).length,1,q);
+  assert.equal(C.filterPurchases(rows,{texto:'jalapeno chipotle'}).length,0,'todas las palabras tienen que estar');
+});
+test('la gráfica lleva una línea por presentación, no por producto',()=>{
+  // Una caja de 3 kg y un frasco de 1 kg del mismo arroz cuestan distinto porque son cosas
+  // distintas. Meterlos en una línea dibujaría un desplome de precio que nunca ocurrió.
+  const series=C.priceSeries(C.purchaseRows([
+    conCompras([compra({id:'o1',precio:90})],{id:'a',nombre_comercial:'Arroz 3kg'}),
+    conCompras([compra({id:'o2',precio:31})],{id:'b',nombre_comercial:'Arroz 1kg'}),
+  ]));
+  assert.equal(series.length,2);
+  assert.deepEqual(series.map(s=>s.productoId),['a','b']);
+});
+test('varias compras el mismo día se promedian pesando por cantidad, y se guarda el rango',()=>{
+  const series=C.priceSeries(C.purchaseRows([conCompras([
+    compra({id:'o1',precio:90,cantidad:40}),
+    compra({id:'o2',precio:120,cantidad:1}),
+  ])]));
+  const [punto]=series[0].puntos;
+  assert.equal(punto.compras,2);
+  // 40 cajas a 90 pesan más que 1 a 120: (90·40 + 120·1) / 41.
+  assert.ok(Math.abs(punto.precio-(90*40+120)/41)<1e-9,'promedio ponderado por cantidad');
+  assert.equal(punto.min,90);
+  assert.equal(punto.max,120,'el rango del día se conserva: hubo dos precios, no uno');
+});
+test('el color de una línea no depende de cuántas compras tenga ni de cuántas la acompañen',()=>{
+  // Si el color se asignara por ranking, acotar las fechas repintaría las líneas que quedan y
+  // quien aprendió «el frasco es azul» leería mal la gráfica siguiente.
+  const productos=[
+    conCompras([compra({id:'o1',fecha:'2026-08-01'}),compra({id:'o2',fecha:'2026-09-01'})],{id:'b',nombre_comercial:'Frasco'}),
+    conCompras([compra({id:'o3',fecha:'2026-09-01'})],{id:'a',nombre_comercial:'Caja'}),
+  ];
+  const todo=C.priceSeries(C.purchaseRows(productos));
+  assert.deepEqual(todo.map(s=>s.productoId),['a','b'],'orden estable por id, no por número de compras');
+  const acotado=C.priceSeries(C.filterPurchases(C.purchaseRows(productos),{desde:'2026-09-01'}));
+  assert.deepEqual(acotado.map(s=>s.productoId),['a','b'],'acotar fechas no reordena las que sobreviven');
+});
+test('la lista de proveedores sale de las compras, sin repetidos ni vacíos',()=>{
+  const rows=C.purchaseRows([
+    conCompras([compra({id:'o1'}),compra({id:'o2',proveedor:''})]),
+    conCompras([compra({id:'o3',proveedor:'Zeta'})],{id:'b'}),
+    conCompras([compra({id:'o4',proveedor:'Beta'})],{id:'c'}),
+  ]);
+  assert.deepEqual(C.supplierList(rows),['Beta','Proveedor A','Zeta']);
+});
+test('la pantalla tiene la pestaña Consulta con sus filtros y su tabla',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/consulta:'Consulta'/,'falta la pestaña');
+  for(const id of ['ingDesde','ingHasta','ingProveedor'])
+    assert.match(src,new RegExp(id),'falta el filtro '+id);
+  assert.match(src,/data-action="limpiar"/,'sin forma de limpiar, los filtros son una trampa');
+});
+test('la gráfica usa el palette validado y no se pasa de tres líneas',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // Validado con scripts/validate_palette.js sobre fondo #fff, --pairs all: pasa los cinco
+  // controles. Cambiar un hex sin volver a correrlo es como cambiarlo a ojo.
+  assert.match(src,/SERIE_COLOR=\['#2a78d6','#eb6834','#1baf7a'\]/,'cambió el palette sin revalidarlo');
+  assert.match(src,/SERIE_TOPE=3/);
+  // La identidad no puede depender solo del color: leyenda siempre, y etiqueta al final de
+  // cada línea. Tres de los hex quedan bajo 3:1 contra el blanco y la tabla es el relevo.
+  assert.match(src,/ing-legend/,'falta la leyenda');
+  assert.match(src,/ing-table/,'falta la tabla, que es el relevo de la gráfica');
+});
+test('el importe se declara por lo que es: suma de renglones con cantidad, sin IVA',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/sin IVA/,'llamarle «total» a esto lo haría pasar por el total del gasto');
+  assert.match(src,/plural\(conImporte\.length,'renglón','renglones'\)/,'hay que decir sobre cuántos renglones se sumó');
+  assert.match(src,/con cantidad, sin IVA/);
 });
