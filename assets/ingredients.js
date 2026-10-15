@@ -9,6 +9,9 @@
   // pestaña solo junta lo que no tiene compras o tiene una homologación sugerida, y casi
   // siempre está vacía. Abrir la pantalla en una lista vacía la hace parecer rota.
   let cached=new Map(),view='ingredientes',query='',busy=false,timer=null,lastStatus='',lastUid='',renderEpoch=0,analysisCache=null,manual=null;
+  // Filtros de la pestaña Consulta. El texto lo comparte con el buscador de las otras vistas:
+  // escribir «arroz» en Productos y cambiar a Consulta debe seguir hablando de arroz.
+  let consulta={proveedor:'',desde:'',hasta:''};
   const money=x=>new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN'}).format(x);
   const unit=x=>({pz:'pieza',porcion:'porción',lt:'L',kg:'kg'}[x]||x);
   const clean=p=>{const {id,...data}=p;return data;};
@@ -19,7 +22,7 @@
     const el=$('ingStatus');
     if(el){el.textContent=message;el.classList.toggle('ing-error',error);}
   }
-  function reset(){cached=new Map();analysisCache=null;manual=null;_catalogoProductos=[];_catalogoProveedores=[];_catalogoCargado=false;query='';lastStatus='';clearTimeout(timer);renderEpoch++;}
+  function reset(){cached=new Map();analysisCache=null;manual=null;consulta={proveedor:'',desde:'',hasta:''};_catalogoProductos=[];_catalogoProveedores=[];_catalogoCargado=false;query='';lastStatus='';clearTimeout(timer);renderEpoch++;}
   async function load(force=false){
     const uid=auth.currentUser?.uid;
     if(!uid) throw new Error('Inicia sesión para abrir los ingredientes.');
@@ -156,6 +159,103 @@
   function suggestions(p,other){
     return `<div class="ing-match"><p>¿<strong>${e(p.nombre_comercial)}</strong> y <strong>${e(C.ingredientName(other))}</strong> corresponden al mismo ingrediente?</p><div class="ing-actions"><button type="button" class="ing-primary" data-action="merge" data-id="${e(p.id)}" data-other="${e(other.id)}">Sí, homologar</button><button type="button" data-action="different" data-id="${e(p.id)}" data-other="${e(other.id)}">No, son distintos</button></div><details><summary>Comparar detalles</summary>${productDetails(p)}${productDetails(other)}<p>Se conservan ambas presentaciones e historiales. El nombre principal será «${e(C.ingredientName(other))}».</p></details></div>`;
   }
+  // ─── Consulta: filtros, gráfica y tabla del historial de compras ─────────────
+  // Tres ranuras del palette categórico validado (azul, naranja, aqua). Se topa en tres a
+  // propósito: con más, dos líneas que se cruzan dejan de distinguirse para quien no ve bien
+  // el color, y la tabla de abajo ya carga todo lo que la gráfica no alcanza a dibujar.
+  const SERIE_COLOR=['#2a78d6','#eb6834','#1baf7a'],SERIE_TOPE=3;
+  const corto=v=>Number.isInteger(v)?new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0}).format(v):money(v);
+  const plural=(n,uno,varios)=>n.toLocaleString('es-MX')+' '+(n===1?uno:varios);
+  const fecha=d=>{const s=String(d||'').slice(0,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(s))return s;const [a,m,x]=s.split('-');return x+'/'+m+'/'+a;};
+  // Un día a número para poder colocarlo en el eje. Mediodía UTC evita que el huso lo corra un día.
+  const dayNum=d=>Math.floor(Date.parse(d+'T12:00:00Z')/86400000);
+  // Marcas del eje en números con los que se piensa ($50, $100, $250…), no en los extremos
+  // crudos del rango, que salen en $513 y nadie lee.
+  function ticks(min,max,tope=4){
+    const rango=max-min;
+    if(!(rango>0))return [min];
+    const marcas=paso=>{const out=[];for(let v=Math.ceil(min/paso)*paso;v<=max+paso/1e9;v+=paso)out.push(v);return out;};
+    // Se prueba la escalera 1·2·2.5·5 por década de menor a mayor y se toma el primer paso que
+    // no pase del tope. Buscar un paso «parecido al rango/2» daba una sola marca y caía al
+    // extremo crudo del eje: $905 y $513, que es justo lo que se quería evitar.
+    for(let exp=Math.floor(Math.log10(rango))-1;exp<=Math.ceil(Math.log10(rango))+1;exp++)
+      for(const m of [1,2,2.5,5]){
+        const out=marcas(m*Math.pow(10,exp));
+        if(out.length>=2&&out.length<=tope)return out;
+      }
+    return [min,max];
+  }
+  function chart(series){
+    const dibujables=series.slice(0,SERIE_TOPE).map((s,i)=>({...s,color:SERIE_COLOR[i]}));
+    const puntos=dibujables.flatMap(s=>s.puntos);
+    if(puntos.length<2)return '';
+    const W=680,H=260,L=64,R=120,T=18,B=34;
+    const xs=puntos.map(p=>dayNum(p.dia)),ys=puntos.map(p=>p.precio);
+    const x0=Math.min(...xs),x1=Math.max(...xs);
+    let y0=Math.min(...ys),y1=Math.max(...ys);
+    // El eje no arranca en cero: la pregunta es cuánto se movió el precio, y pegarlo al cero
+    // aplana justo eso. A cambio, el eje va rotulado en los dos extremos para que nadie lea
+    // una subida del 4% como si fuera del 400%.
+    const margen=(y1-y0)||Math.abs(y1)||1;y0-=margen*0.12;y1+=margen*0.12;
+    const px=v=>L+(x1===x0?(W-L-R)/2:((dayNum(v)-x0)/(x1-x0))*(W-L-R));
+    const py=v=>T+(1-(v-y0)/(y1-y0))*(H-T-B);
+    const rejilla=ticks(y0,y1).map(v=>{const y=py(v);
+      return `<line x1="${L}" y1="${y.toFixed(1)}" x2="${W-R}" y2="${y.toFixed(1)}" stroke="#e3e9e5" stroke-width="1"></line>`
+        +`<text x="${L-8}" y="${(y+4).toFixed(1)}" text-anchor="end" fill="#51665d" font-size="11">${e(corto(v))}</text>`;}).join('');
+    const ejeX=[x0,x1].filter((v,i,a)=>i===0||v!==a[0]).map((v,i,a)=>{
+      const d=new Date(v*86400000).toISOString().slice(0,10);
+      return `<text x="${(i===0&&a.length>1?L:i===0?L+(W-L-R)/2:W-R).toFixed(1)}" y="${H-10}" text-anchor="${i===0&&a.length>1?'start':a.length>1?'end':'middle'}" fill="#51665d" font-size="11">${e(fecha(d))}</text>`;}).join('');
+    const lineas=dibujables.map(s=>{
+      const d=s.puntos.map((p,i)=>(i?'L':'M')+px(p.dia).toFixed(1)+' '+py(p.precio).toFixed(1)).join(' ');
+      const marcas=s.puntos.map(p=>`<circle cx="${px(p.dia).toFixed(1)}" cy="${py(p.precio).toFixed(1)}" r="4" fill="${s.color}" stroke="#fff" stroke-width="2"><title>${e(fecha(p.dia)+' · '+money(p.precio)+' · '+s.presentacion)}</title></circle>`).join('');
+      const fin=s.puntos[s.puntos.length-1];
+      // Etiqueta al final de la línea: la identidad no puede depender solo del color.
+      const etiqueta=`<text x="${(W-R+8).toFixed(1)}" y="${(py(fin.precio)+4).toFixed(1)}" fill="#1b3a2c" font-size="11" font-weight="600">${e(money(fin.precio))}</text>`;
+      return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>${marcas}${etiqueta}`;
+    }).join('');
+    const leyenda=dibujables.map(s=>`<li><span class="ing-key" style="background:${s.color}"></span>${e(s.presentacion||'Sin nombre')}${s.proveedor?' · '+e(s.proveedor):''}</li>`).join('');
+    const sobran=series.length>SERIE_TOPE?`<p>Se dibujan ${SERIE_TOPE} de ${series.length} presentaciones. Acota la búsqueda o el proveedor para ver las demás; la tabla de abajo las trae todas.</p>`:'';
+    // Cada línea va en la unidad en que la factura el proveedor: una en pesos por caja y otra
+    // en pesos por litro caben en el mismo eje pero no son comparables entre sí. Decirlo.
+    const aviso=`<p>Cada línea usa la unidad con la que la factura su proveedor. Sirven para ver cómo se movió cada presentación, no para compararlas entre ellas.</p>`;
+    return `<figure class="ing-chart"><figcaption>Precio unitario de cada presentación, en el tiempo</figcaption>`
+      +`<svg viewBox="0 0 ${W} ${H}" role="img" width="100%" aria-label="Gráfica de precio por presentación. Los mismos datos están en la tabla de abajo.">`
+      +`<line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" stroke="#cfd9d3" stroke-width="1"></line>${rejilla}${ejeX}${lineas}</svg>`
+      +`<ul class="ing-legend">${leyenda}</ul>${aviso}${sobran}</figure>`;
+  }
+  function consultaMarkup(){
+    const todas=C.purchaseRows(_catalogoProductos);
+    const rows=C.filterPurchases(todas,{...consulta,texto:query});
+    const proveedores=C.supplierList(todas);
+    const series=C.priceSeries(rows);
+    const conImporte=rows.filter(r=>r.importe!=null);
+    const importe=conImporte.reduce((s,r)=>s+r.importe,0);
+    const filtros=`<div class="ing-filters" role="group" aria-label="Filtros de la consulta">`
+      +`<div><label for="ingDesde">Desde</label><input id="ingDesde" type="date" value="${e(consulta.desde)}"></div>`
+      +`<div><label for="ingHasta">Hasta</label><input id="ingHasta" type="date" value="${e(consulta.hasta)}"></div>`
+      +`<div><label for="ingProveedor">Proveedor</label><select id="ingProveedor"><option value="">Todos los proveedores</option>`
+      +proveedores.map(p=>`<option value="${e(p)}"${C.norm(p)===C.norm(consulta.proveedor)?' selected':''}>${e(p)}</option>`).join('')+`</select></div>`
+      +`<div><label for="ingSearch">Producto, SKU o folio</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aceite, 7501..., A-1234" autocomplete="off"></div>`
+      +(consulta.proveedor||consulta.desde||consulta.hasta||query?`<button type="button" data-action="limpiar">Limpiar filtros</button>`:'')
+      +`</div>`;
+    const resumen=`<div class="ing-tiles">`
+      +`<div><strong>${rows.length.toLocaleString('es-MX')}</strong><span>compras</span></div>`
+      +`<div><strong>${new Set(rows.map(r=>r.productoId)).size.toLocaleString('es-MX')}</strong><span>presentaciones</span></div>`
+      +`<div><strong>${new Set(rows.map(r=>r.proveedor).filter(Boolean)).size.toLocaleString('es-MX')}</strong><span>proveedores</span></div>`
+      // Es la suma de precio × cantidad de los renglones que traen cantidad. No es el total del
+      // gasto: va sin IVA y deja fuera lo que se capturó a mano sin cantidad. Se dice cuántos.
+      +`<div><strong>${e(money(importe))}</strong><span>importe de ${e(plural(conImporte.length,'renglón','renglones'))} con cantidad, sin IVA</span></div>`
+      +`</div>`;
+    const tope=300,visibles=rows.slice(0,tope);
+    const tabla=visibles.length?`<div class="ing-table-wrap"><table class="ing-table"><thead><tr>`
+      +['Fecha','Producto','Presentación','Proveedor','SKU','Cantidad','Precio unitario','Importe','Folio'].map(h=>`<th scope="col">${h}</th>`).join('')
+      +`</tr></thead><tbody>`+visibles.map(r=>`<tr><td>${e(fecha(r.dia))}</td><td>${e(r.producto)}</td><td>${e(r.presentacion)}</td><td>${e(r.proveedor||'—')}</td>`
+      +`<td>${e(r.sku||'—')}</td><td class="ing-num">${r.cantidad==null?'—':e(String(r.cantidad))+(r.unidad?' '+e(unit(r.unidad)):'')}</td>`
+      +`<td class="ing-num">${e(money(r.precio)+(r.unidad?' / '+unit(r.unidad):''))}</td><td class="ing-num">${r.importe==null?'—':e(money(r.importe))}</td><td>${e(r.folio||'—')}</td></tr>`).join('')
+      +`</tbody></table></div>`+(rows.length>tope?`<p>Mostrando ${tope} de ${rows.length.toLocaleString('es-MX')} compras. Acota las fechas o el proveedor.</p>`:'')
+      :`<div class="ing-empty"><h3>No hay compras con esos filtros</h3><p>Prueba otro rango de fechas, otro proveedor o limpia la búsqueda.</p></div>`;
+    return filtros+resumen+chart(series)+tabla;
+  }
   function markup(){
     let grouped=analysisCache?.grouped,matches=analysisCache?.matches;
     if(!analysisCache){
@@ -176,7 +276,8 @@
     // producto desaparecería sin forma de verlo ni de recuperarlo.
     const omitted=g=>g.products.filter(p=>!C.destination(p).include);
     const counts={revision:grouped.filter(needs).length,ingredientes:grouped.filter(g=>g.result.state!=='excluido').length,omitidos:grouped.filter(g=>omitted(g).length).length};
-    const visible=grouped.filter(g=>view==='revision'?needs(g):view==='omitidos'?omitted(g).length:g.result.state!=='excluido')
+    const consultando=view==='consulta';
+    const visible=consultando?[]:grouped.filter(g=>view==='revision'?needs(g):view==='omitidos'?omitted(g).length:g.result.state!=='excluido')
       .map(g=>{if(view!=='omitidos')return g;const subset={...g,products:omitted(g)};return {...subset,result:C.priceForGroup(subset)};})
       .filter(g=>C.norm([g.name,...g.products.map(p=>p.nombre_comercial+' '+p.proveedor_nombre)].join(' ')).includes(C.norm(query)));
     const rows=visible.slice(0,100).map(g=>{
@@ -186,7 +287,7 @@
       const shortcuts=active?(g.products.length===1?quickActions(active):`<div class="ing-actions ing-quick"><button type="button" data-action="manual-open" data-id="${e(active.id)}">Homologar manualmente</button></div>`):'';
       return `<article class="ing-row"><div class="ing-row-head"><div><h3>${e(g.name)}</h3><p>${g.products.length} presentación(es) vinculada(s)</p></div><div class="ing-price">${w?`<strong>${money(w.precio)} <span>por presentación</span></strong><p>Factura: ${e(w.fecha)}</p>`:'<strong>Sin compras</strong>'}</div><span class="ing-state ${r.state==='listo'?'ing-ready':''}">${labelState(r)}</span></div>${r.reason?`<p class="ing-reason">${e(r.reason)}</p>`:''}${shortcuts}${openManual?manualPanel():''}<details ${r.state==='pendiente'?'open':''}><summary>Ver presentaciones, proveedor e historial</summary>${g.products.map(p=>productDetails(p)+`<details class="ing-history"><summary>Compras de esta presentación</summary>${C.observations(p).map(o=>`<p>${e(o.fecha||'Sin fecha')}${o.cantidad?' · '+e(String(o.cantidad))+(o.unidad?' '+e(unit(o.unidad)):''):''} · ${money(o.precio)} por presentación${o.codigo_proveedor?' · SKU '+e(o.codigo_proveedor):''} · ${e(o.folio||'Sin folio')} · ${e(o.proveedor)}</p>`).join('')||'<p>Sin compras registradas.</p>'}</details>`).join('')}</details>${openManual?'':reviews}</article>`;
     }).join('');
-    return `<section class="ing-workspace" aria-label="Productos comprados"><header class="ing-heading"><div><h2>Productos comprados</h2><p>Todo lo que entra por factura, con su historial de precio y cantidad.</p></div><div class="ing-actions"><button type="button" data-action="refresh">Actualizar</button><button type="button" data-action="new" class="ing-primary">Agregar ingrediente</button></div></header><div class="ing-toolbar" role="group" aria-label="Vista del catálogo">${Object.entries({revision:'Por revisar',ingredientes:'Productos',omitidos:'Omitidos'}).map(([key,label])=>`<button type="button" data-action="view" data-view="${key}" aria-pressed="${key===view}">${label} <span>${counts[key]}</span></button>`).join('')}</div><div class="ing-search"><label for="ingSearch">Buscar producto, SKU o proveedor</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aderezo ranch" autocomplete="off"></div><div class="ing-publication"><p id="ingStatus" role="status" aria-live="polite">${e(lastStatus||'Se registra todo lo comprado, de los XML y de las facturas leídas.')}</p></div><div id="ingRows">${rows||'<div class="ing-empty"><h3>No hay productos en esta vista</h3><p>Cambia de vista o limpia la búsqueda.</p></div>'}</div>${visible.length>100?`<p>Mostrando 100 de ${visible.length}. Usa la búsqueda para acotar los resultados.</p>`:''}</section>`;
+    return `<section class="ing-workspace" aria-label="Productos comprados"><header class="ing-heading"><div><h2>Productos comprados</h2><p>Todo lo que entra por factura, con su historial de precio y cantidad.</p></div><div class="ing-actions"><button type="button" data-action="refresh">Actualizar</button><button type="button" data-action="new" class="ing-primary">Agregar ingrediente</button></div></header><div class="ing-toolbar" role="group" aria-label="Vista del catálogo">${Object.entries({revision:'Por revisar',ingredientes:'Productos',omitidos:'Omitidos',consulta:'Consulta'}).map(([key,label])=>`<button type="button" data-action="view" data-view="${key}" aria-pressed="${key===view}">${label}${counts[key]==null?'':` <span>${counts[key]}</span>`}</button>`).join('')}</div>${consultando?'':`<div class="ing-search"><label for="ingSearch">Buscar producto, SKU o proveedor</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aderezo ranch" autocomplete="off"></div>`}<div class="ing-publication"><p id="ingStatus" role="status" aria-live="polite">${e(lastStatus||'Se registra todo lo comprado, de los XML y de las facturas leídas.')}</p></div>${consultando?consultaMarkup():`<div id="ingRows">${rows||'<div class="ing-empty"><h3>No hay productos en esta vista</h3><p>Cambia de vista o limpia la búsqueda.</p></div>'}</div>${visible.length>100?`<p>Mostrando 100 de ${visible.length}. Usa la búsqueda para acotar los resultados.</p>`:''}`}</section>`;
   }
   async function render(force=false){
     const epoch=++renderEpoch;
@@ -198,6 +299,7 @@
     if(busy)return;
     const action=button.dataset.action,id=button.dataset.id;
     if(action==='view'){manual=null;view=button.dataset.view;await render();return;}
+    if(action==='limpiar'){consulta={proveedor:'',desde:'',hasta:''};query='';await render();$('ingSearch')?.focus();return;}
     if(action==='edit'||action==='new'){abrirEditorProducto(id||null);return;}
     if(action==='manual-cancel'){manual=null;await render();$('ingSearch')?.focus();return;}
     busy=true;button.disabled=true;
@@ -298,6 +400,14 @@
   };
   const page=$('page-catalogo-productos');
   page.addEventListener('click',event=>{const b=event.target.closest('button[data-action]');if(b)return action(b);});
+  page.addEventListener('change',event=>{
+    const campo=event.target.id;
+    if(campo==='ingProveedor')consulta={...consulta,proveedor:event.target.value};
+    else if(campo==='ingDesde')consulta={...consulta,desde:event.target.value};
+    else if(campo==='ingHasta')consulta={...consulta,hasta:event.target.value};
+    else return;
+    render().then(()=>$(campo)?.focus());
+  });
   let searchTimer;
   page.addEventListener('input',event=>{
     if(event.target.id==='ingManualSearch'&&manual){manual.query=event.target.value;manual.targetId='';manual.error='';$('ingManualResults').innerHTML=manualResults();$('ingManualError').textContent='';return;}

@@ -194,5 +194,81 @@
   // datos/precios para que FORX costeara recetas. Egresos ya no publica: el documento queda
   // congelado con sus últimos valores, así que lo que todavía lo lea sigue leyendo algo.
   // Con ella se va el único consumidor de priceForGroup fuera de la pantalla.
-  return { norm, date, destination, ingredientName, groupId, findProduct, observations, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets };
+
+  // ─── Consulta del historial de compras ───────────────────────────────────────
+  // Aplana las observaciones de todos los productos en renglones de compra. Un renglón es
+  // «esta presentación, esta factura, este día»: lo que el XML del proveedor dice que se
+  // compró. No inventa nada que la factura no traiga — cantidad y SKU ausentes quedan en
+  // null y '', que no es lo mismo que cero ni que vacío.
+  //
+  // Qué significa `precio`: en un CFDI es el ValorUnitario del renglón, o sea lo que cuesta
+  // UNA presentación (una caja, un bulto, una pieza), y `cantidad` es cuántas se compraron.
+  // Por eso precio × cantidad es el importe del renglón, y por eso el precio sí se puede
+  // comparar contra el mismo producto en otra fecha: es el precio de la misma cosa.
+  function purchaseRows(products) {
+    const rows = [];
+    for (const p of products || []) {
+      if (!destination(p).include) continue;
+      for (const o of observations(p)) {
+        const fecha = date(o.fecha);
+        if (!fecha || !positive(o.precio)) continue;
+        const cantidad = positive(o.cantidad) ? number(o.cantidad) : null;
+        const precio = number(o.precio);
+        rows.push({
+          id: o.id, productoId: p.id, grupoId: groupId(p),
+          producto: ingredientName(p), presentacion: p.nombre_comercial || '',
+          proveedor: o.proveedor || p.proveedor_nombre || '',
+          // El SKU del renglón es el que traía ESA factura. El del producto es el último
+          // conocido: sirve para buscar, nunca para rellenar un renglón que no lo traía.
+          sku: String(o.codigo_proveedor || '').trim(),
+          skuProducto: String(p.codigo_proveedor || '').trim(),
+          fecha, dia: fecha.slice(0, 10),
+          cantidad, unidad: o.unidad || p.unidad_compra || '',
+          precio, importe: cantidad == null ? null : precio * cantidad,
+          folio: o.folio || '', origen: o.origen || 'factura', evidencia: o.evidencia || '',
+        });
+      }
+    }
+    return rows.sort((a, b) => b.fecha.localeCompare(a.fecha) || a.producto.localeCompare(b.producto, 'es') || a.id.localeCompare(b.id));
+  }
+  const supplierList = rows => [...new Set((rows || []).map(r => r.proveedor).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+  function filterPurchases(rows, filter) {
+    const f = filter || {}, text = norm(f.texto), supplier = norm(f.proveedor);
+    // Una fecha inválida no filtra: vale más enseñar de más que esconder compras en silencio.
+    const from = date(f.desde).slice(0, 10), to = date(f.hasta).slice(0, 10);
+    const terms = text ? text.split(' ') : [];
+    return (rows || []).filter(r => {
+      if (supplier && norm(r.proveedor) !== supplier) return false;
+      if (from && r.dia < from) return false;
+      if (to && r.dia > to) return false;
+      if (!terms.length) return true;
+      const haystack = norm([r.producto, r.presentacion, r.proveedor, r.sku, r.skuProducto, r.folio].join(' '));
+      return terms.every(t => haystack.includes(t));
+    });
+  }
+  // Una línea por presentación, no por producto: la caja de 3 kg y el frasco de 1 kg del mismo
+  // arroz cuestan distinto porque son cosas distintas, y juntarlas en una línea dibujaría
+  // saltos de precio que nunca ocurrieron. Varias compras el mismo día se promedian pesando
+  // por cantidad —comprar 40 cajas a $90 pesa más que 1 a $120—, y se conserva el rango del
+  // día para no esconder que hubo dos precios.
+  function priceSeries(rows) {
+    const byProduct = new Map();
+    for (const r of rows || []) {
+      if (!byProduct.has(r.productoId)) byProduct.set(r.productoId, { productoId: r.productoId, presentacion: r.presentacion, proveedor: r.proveedor, unidad: r.unidad, dias: new Map(), compras: 0 });
+      const s = byProduct.get(r.productoId);
+      s.compras++;
+      const acc = s.dias.get(r.dia) || { dia: r.dia, suma: 0, peso: 0, compras: 0, min: Infinity, max: -Infinity };
+      const peso = r.cantidad == null ? 1 : r.cantidad;
+      acc.suma += r.precio * peso; acc.peso += peso; acc.compras++;
+      acc.min = Math.min(acc.min, r.precio); acc.max = Math.max(acc.max, r.precio);
+      s.dias.set(r.dia, acc);
+    }
+    return [...byProduct.values()]
+      .map(s => ({ productoId: s.productoId, presentacion: s.presentacion, proveedor: s.proveedor, unidad: s.unidad, compras: s.compras,
+        puntos: [...s.dias.values()].map(a => ({ dia: a.dia, precio: a.suma / a.peso, compras: a.compras, min: a.min, max: a.max })).sort((a, b) => a.dia.localeCompare(b.dia)) }))
+      // Orden estable por id, no por cuántas compras tiene: así acotar las fechas no le cambia
+      // el color a las líneas que sobreviven al filtro.
+      .sort((a, b) => a.productoId.localeCompare(b.productoId));
+  }
+  return { norm, date, destination, ingredientName, groupId, findProduct, observations, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets, purchaseRows, supplierList, filterPurchases, priceSeries };
 });
