@@ -25,33 +25,27 @@ test('lo único que sale de la lista es lo que alguien omitió a mano, y se pued
   assert.equal(C.destination(product({estado:'ignorado'})).include,false);
   assert.match(C.destination(product({estado:'ignorado'})).reason,/mano/i);
 });
-test('conversiones de peso, volumen, piezas y porciones sin suponer cantidad uno',()=>{
-  assert.equal(C.conversion(product()).price,27.28);
-  assert.equal(C.conversion(product({nombre_comercial:'Aceite 3L',unidad_base:'lt',contenido_unidad:'lt'})).price,27.28);
-  assert.equal(C.conversion(product({unidad_base:'pz',piezas_por_presentacion:12,precio_actual:120})).price,10);
-  assert.equal(C.conversion(product({unidad_base:'porcion',porcion_valor:100,porcion_unidad:'g',precio_actual:300})).price,10);
-  for(const changes of [{contenido_cantidad:0},{precio_actual:null},{precio_actual:Infinity},{merma_pct:-1},{merma_pct:100},{unidad_base:'pz',piezas_por_presentacion:0},{unidad_base:'porcion',porcion_valor:100,porcion_unidad:'ml'},{nombre_comercial:'Aderezo BC 3.8L'}])assert.equal(C.conversion(product(changes)).ok,false,JSON.stringify(changes));
-});
 test('fecha real y ausencia de fechas: no se usa la fecha de carga',()=>{
   assert.equal(C.date('2026-02-30'),'');
   assert.equal(C.date('09/01/2026'),'');
   assert.equal(price(product({fecha_precio:''})).state,'pendiente');
   const p=C.recordPurchase(product(),{id:'old',fecha:'2026-07-01',precio:30,origen:'factura'});
-  assert.equal(p.precio_actual,81.84);assert.equal(price(p).winner.calc.price,27.28);
+  // El precio del grupo es el de la factura más reciente, sin convertir a por-kilo.
+  assert.equal(p.precio_actual,81.84);assert.equal(price(p).winner.precio,81.84);
 });
 test('compra posterior prevalece; compra repetida no duplica; XML completa evidencia',()=>{
   const o={id:'x',fecha:'2026-09-10',precio:90,origen:'factura',evidencia:'lectura'};
   let p=C.recordPurchase(product(),o);p=C.recordPurchase(p,o);
-  assert.equal(p.compras_forx.length,2);assert.equal(price(p).winner.calc.price,30);
+  assert.equal(p.compras_forx.length,2);assert.equal(price(p).winner.precio,90);
   p=C.recordPurchase(p,{...o,precio:93,evidencia:'xml'});
-  assert.equal(p.compras_forx.length,2);assert.equal(price(p).winner.calc.price,31);
+  assert.equal(p.compras_forx.length,2);assert.equal(price(p).winner.precio,93,'el XML corrige la lectura');
   assert.deepEqual(C.recordPurchase(p,{...o,precio:999}),p);
 });
-test('homologar mantiene compras y conversiones separadas, calcula el último precio del grupo',()=>{
+test('homologar mantiene las compras separadas y toma la última del grupo',()=>{
   const a=product(),b=product({id:'b',nombre_comercial:'Arroz caja',ingrediente_generico:'Arroz blanco',contenido_cantidad:10,precio_actual:400,fecha_precio:'2026-09-10'});
   const rows=C.homologate([a,b],'a','b');
   assert.equal(C.groups(rows).length,1);assert.equal(rows[0].contenido_cantidad,3);assert.equal(rows[1].contenido_cantidad,10);
-  assert.equal(C.priceForGroup(C.groups(rows)[0]).winner.calc.price,40);
+  assert.equal(C.priceForGroup(C.groups(rows)[0]).winner.precio,400,'la compra más reciente, tal como se facturó');
   assert.equal(a.ingrediente_id,undefined,'no muta el catálogo original');
   assert(rows[0].sinonimos_menu.includes('Arroz'));
 });
@@ -122,43 +116,48 @@ test('cinco nombres elegidos manualmente conservan cada compra y la fecha más r
   assert.equal(rows.length,5);assert.equal(C.groups(rows).length,1);
   assert.deepEqual(rows.map(p=>p.nombre_comercial),names);
   assert(rows.every(p=>p.compras_forx.length===1&&p.estado==='validado'));
-  assert.equal(C.priceForGroup(C.groups(rows)[0]).winner.calc.price,34);
+  assert.equal(C.priceForGroup(C.groups(rows)[0]).winner.precio,102,'la compra más reciente de las cinco');
 });
 test('un mismo nombre de proveedores distintos no reutiliza una conversión sin aprobar',()=>{
   const a=product();assert.equal(C.findProduct([a],{nombre:a.nombre_comercial,proveedor:'Proveedor B'}),null);
   assert.equal(C.findProduct([a],{nombre:a.nombre_comercial,proveedor:'Proveedor A'}).id,'a');
   assert.equal(C.findProduct([a,{...a,id:'b'}],{nombre:a.nombre_comercial,proveedor:'Proveedor A'}),null);
 });
-test('empates verdaderos requieren elección y una factura posterior invalida la preferencia',()=>{
+test('dos compras el mismo día ya no piden elegir: se muestran las dos y gana la posterior',()=>{
+  // Antes esto era un 'conflicto' que alguien tenía que romper a mano, porque había que decidir
+  // QUÉ precio publicar a FORX. Un historial no publica: lista las dos y toma la más reciente.
   let p=C.recordPurchase(product(),{id:'tie',fecha:'2026-09-01',precio:90,origen:'factura'});
-  let result=price(p);assert.equal(result.state,'conflicto');
-  p.forx_preferido={id:'tie',fecha:'2026-09-01',candidatos:result.candidates.map(c=>c.id+':'+c.calc.price).join('|')};
-  assert.equal(price(p).winner.calc.price,30);
-  p=C.recordPurchase(p,{id:'later',fecha:'2026-09-02',precio:99,origen:'factura'});assert.equal(price(p).winner.calc.price,33);
+  const result=price(p);
+  assert.equal(result.state,'listo');
+  assert.equal(result.candidates.length,2,'las dos del mismo día siguen a la vista');
+  p=C.recordPurchase(p,{id:'later',fecha:'2026-09-02',precio:99,origen:'factura'});
+  assert.equal(price(p).winner.precio,99,'una factura posterior manda');
 });
 test('no inventa orden cuando una factura solo tiene día; con dos horas conocidas sí compara',()=>{
   let p=C.recordPurchase(product(),{id:'hour',fecha:'2026-09-01T14:00:00',precio:90});
-  assert.equal(price(p).state,'conflicto');
+  // Una trae hora y la otra no: no se asume que la que la trae sea posterior.
+  assert.equal(price(p).candidates.length,2);
   p=product({compras_forx:[{id:'early',fecha:'2026-09-01T09:00:00',precio:60},{id:'late',fecha:'2026-09-01T14:00:00',precio:90}]});
-  assert.equal(price(p).winner.calc.price,30);
+  assert.equal(price(p).winner.precio,90,'con las dos horas conocidas sí se compara');
 });
-test('no mezcla unidades; factura prevalece sobre provisional, sin dejar huecos silenciosos',()=>{
-  const rows=C.homologate([product(),product({id:'b',nombre_comercial:'Arroz envase',ingrediente_generico:'Arroz preparado',unidad_base:'lt',contenido_unidad:'lt'})],'a','b');
-  assert.equal(C.priceForGroup(C.groups(rows)[0]).state,'conflicto');
+test('una factura vieja gana a un precio consultado en internet, aunque sea más nuevo',()=>{
+  // Un precio de 'web' es provisional: alguien lo buscó, nadie lo compró. Mientras haya factura,
+  // manda la factura aunque sea anterior.
   const p=C.recordPurchase(product({precio_origen:'web',precio_fuente:'tienda',fecha_precio:'2026-09-10'}),{id:'invoice',fecha:'2026-09-01',precio:60,origen:'factura'});
-  assert.equal(price(p).winner.calc.price,20);
+  assert.equal(price(p).winner.precio,60);
+  assert.equal(price(p).winner.origen,'factura');
 });
-test('conversión histórica congelada, fechas imposibles y corrección explícita trazable',()=>{
+test('fechas imposibles y corrección explícita trazable',()=>{
+  // La mitad de esta prueba comprobaba que una conversión vieja quedara congelada aunque se
+  // cambiara el contenido de la presentación. Sin conversión no hay nada que congelar; lo que
+  // sigue importando es que una corrección deje rastro de lo que decía antes.
   let p=C.recordPurchase(product(),{id:'xml',precio:90,fecha:'2026-09-10',evidencia:'xml'});
-  const older=C.observations(p)[0];p={...p,contenido_cantidad:6};
-  assert.equal(C.observationPrice(p,older).price,27.28);
   p=C.recordPurchase(p,{id:'new',precio:120,fecha:'2026-09-11'});
-  assert.equal(price(p).winner.calc.price,20);
+  assert.equal(price(p).winner.precio,120);
   p=C.recordPurchase(p,{id:'xml',precio:99,fecha:'2026-09-10',evidencia:'manual',correcciones:[{precio:90}]});
   assert.equal(p.compras_forx.find(o=>o.id==='xml').precio,99);
   assert.equal(p.compras_forx.find(o=>o.id==='xml').correcciones[0].precio,90);
   for(const s of ['2026-09-11T24:01','2026-09-11T10:61','2026-09-11T12:00:60'])assert.equal(C.date(s),'');
-  assert.equal(C.conversion(product({unidad_base:'g'})).ok,false);
 });
 test('No se conserva aunque una presentación se homologue con otra',()=>{
   const a=product({id:'a',ingrediente_generico:'Arroz',forx_distintos:['b']}),b=product({id:'b',ingrediente_generico:'Arroz integral'}),c=product({id:'c',ingrediente_generico:'Arroz entero'});
@@ -168,8 +167,10 @@ test('No se conserva aunque una presentación se homologue con otra',()=>{
 test('XML y lectura de la misma factura: prevalece XML sin perder la evidencia original',()=>{
   let p=C.recordPurchase(product(),{id:'ocr',folio:'UUID-1',precio:999,fecha:'2026-09-11',evidencia:'lectura'});
   p=C.recordPurchase(p,{id:'xml',folio:'uuid-1',precio:90,fecha:'2026-09-11',evidencia:'xml'});
-  assert.equal(price(p).winner.calc.price,30);assert.equal(p.precio_actual,90);assert.equal(p.compras_forx.length,3);
-  assert.equal(price(product({ingrediente_generico:''})).state,'pendiente');
+  assert.equal(price(p).winner.precio,90);assert.equal(p.precio_actual,90);assert.equal(p.compras_forx.length,3);
+  // Un producto sin nombre de ingrediente de FORX ya NO queda pendiente: esa exigencia se retiró.
+  assert.equal(price(product({ingrediente_generico:''})).state,'listo');
+  assert.equal(price(product({precio_actual:null,compras_forx:[]})).state,'pendiente','sin compras sí');
 });
 
 function memory(){
@@ -207,6 +208,54 @@ test('edición obsoleta no destruye el cambio de otro usuario',async()=>{
   await assert.rejects(m.store.save([product({precio_actual:999})],{a:{precio_actual:1}}),/Otro usuario/);
   assert.equal(m.docs.get('productos_comerciales/a').data.precio_actual,81.84);
 });
+test('la API ya no ofrece conversión a precio por kilo',()=>{
+  assert.equal(typeof C.conversion,'undefined','convertía el precio de factura a por-kilo con merma');
+  assert.equal(typeof C.observationPrice,'undefined');
+  assert.equal(typeof C.priceForGroup,'function','el precio del grupo sigue, pero sin convertir');
+});
+test('un producto sin verificar y sin nombre de ingrediente ya tiene precio',()=>{
+  // La compuerta de «validado» exigía unidad de costeo, conversión, fecha y nombre de FORX para
+  // dar por bueno un producto. Es lo que producía los «Por verificar». Comprar algo no necesita
+  // que nadie lo apruebe.
+  const crudo={id:'x',nombre_comercial:'Lo que sea',estado:'pendiente',ingrediente_generico:'',
+    precio_actual:50,fecha_precio:'2026-09-01',proveedor_nombre:'P'};
+  const r=C.priceForGroup(C.groups([crudo])[0]);
+  assert.equal(r.state,'listo');
+  assert.equal(r.winner.precio,50);
+});
+test('guardar un producto no exige conversión ni nombre de FORX',()=>{
+  const b=sinComentarios(fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8'));
+  const editor=b.slice(b.indexOf('async function saveEditor('),b.indexOf('async function ingestXml('));
+  assert.equal(/C\.conversion\(/.test(editor),false,'volvió la conversión al guardado');
+  assert.equal(/ingrediente de FORX/.test(editor),false,'volvió la exigencia del nombre de FORX');
+  assert.equal(/estado==='validado'/.test(editor),false,'volvió la compuerta de validado');
+});
+test('el formulario del producto ya no pregunta por recetas, porciones ni merma',()=>{
+  const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
+  // El corte termina en faltantesModal, el siguiente modal del documento: pasarse de ahí
+  // arrastra marcado de otras ventanas y la prueba acaba revisando un formulario que no es.
+  const ini=html.indexOf('id="productoModal"'),fin=html.indexOf('id="faltantesModal"');
+  assert(ini>0&&fin>ini,'cambiaron de orden los modales; hay que rehacer el corte');
+  const modal=html.slice(ini,fin);
+  for(const campo of ['pcCosteo','pcContCantidad','pcPiezasPorPresentacion','pcPorcionValor','pcMermaPct','pcCalcPreview'])
+    assert.equal(modal.includes(campo),false,'quedó el campo '+campo);
+  // pcGenerico se queda: es lo que agrupa las presentaciones de un mismo producto bajo un
+  // renglón, y eso le sirve al historial. Lo que no puede quedar es que hable de recetas o de
+  // Menú, porque ya no alimenta ninguno.
+  assert(modal.includes('pcGenerico'),'el nombre que agrupa presentaciones sigue haciendo falta');
+  // Los comentarios HTML sí nombran lo retirado —para eso están—, pero nadie los lee en pantalla.
+  const visible=modal.replace(/<!--[\s\S]*?-->/g,'');
+  assert.equal(/recetas|Menú|FORX/i.test(visible),false,'el formulario sigue hablando de recetas o de Menú');
+  assert.equal(/validar/i.test(visible),false,'volvió el botón de validar, y ya no hay nada que validar');
+});
+test('la pantalla abre en Productos, no en una pestaña vacía',()=>{
+  // Sin la compuerta de validado, «Por revisar» solo junta lo que no tiene compras o tiene una
+  // homologación sugerida. Abrir ahí hacía parecer que la pantalla estaba rota.
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/view='ingredientes'/);
+  assert.equal(/let cached=new Map\(\),view='revision'/.test(src),false);
+});
+
 test('ningún camino de los assets escribe datos/precios',()=>{
   // Es el documento que FORX lee. Egresos dejó de publicar, pero el documento NO se borró: queda
   // congelado con sus últimos valores para que lo que todavía lo lea no se quede sin nada. Un
@@ -249,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261014-historial3'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261014-historial4'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -354,8 +403,12 @@ test('integración: una coincidencia de alimento conserva la decisión explícit
     product({nombre_comercial:'Aceituna 3kg',ingrediente_generico:'Aceituna'}),
     product({id:'b',nombre_comercial:'Aceitunas frasco 1kg',ingrediente_generico:'',estado:'pendiente'})
   ]);
-  const {app,element}=integration(m);await app.load();await app.render();
-  const html=element('page-catalogo-productos').innerHTML;
+  const ui=integration(m);await ui.app.load();await ui.app.render();
+  // La vista arranca en «Productos»; la sugerencia de homologar vive en «Por revisar», que ahora
+  // significa exactamente eso: lo que pide una decisión. El contador la anuncia desde la pestaña.
+  assert.match(ui.element('page-catalogo-productos').innerHTML,/data-view="revision"[^>]*>Por revisar <span>1<\/span>/);
+  await ui.click('view','',{view:'revision'});
+  const html=ui.element('page-catalogo-productos').innerHTML;
   assert(html.includes('Sí, homologar'),html);assert(html.includes('No, son distintos'));
   assert.equal((html.match(/data-action="merge"/g)||[]).length,1);
 });

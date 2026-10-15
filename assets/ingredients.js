@@ -5,7 +5,10 @@
   const C=window.CicsaIngredients;
   const store=window.CicsaIngredientStore({base:FB_BASE,key:FB_KEY,fetcher:(...args)=>fetch(...args),headers:fbAuthHeader,core:C,session:()=>auth.currentUser?.uid||''});
   const old={list:cargarCatalogo,update:fbUpdateDoc,create:fbCreateDoc,editor:abrirEditorProducto,cfdis:guardarCfdisEnStore};
-  let cached=new Map(),view='revision',query='',busy=false,timer=null,lastStatus='',lastUid='',renderEpoch=0,analysisCache=null,manual=null;
+  // La vista arranca en «Productos», no en «Por revisar»: sin la compuerta de validado esa
+  // pestaña solo junta lo que no tiene compras o tiene una homologación sugerida, y casi
+  // siempre está vacía. Abrir la pantalla en una lista vacía la hace parecer rota.
+  let cached=new Map(),view='ingredientes',query='',busy=false,timer=null,lastStatus='',lastUid='',renderEpoch=0,analysisCache=null,manual=null;
   const money=x=>new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN'}).format(x);
   const unit=x=>({pz:'pieza',porcion:'porción',lt:'L',kg:'kg'}[x]||x);
   const clean=p=>{const {id,...data}=p;return data;};
@@ -103,24 +106,18 @@
       p.compras_forx=C.observations(current);
       if(data.fecha_precio===current.fecha_precio?.slice(0,10))p.fecha_precio=current.fecha_precio;
     }
-    // El contenido sigue perteneciendo a esta presentación, nunca al grupo entero.
-    if(p.estado==='validado'&&C.destination(p).include){
-      const calc=C.conversion(p);
-      if(!calc.ok)throw new Error(calc.reason);
-      if(!C.date(p.fecha_precio))throw new Error('Falta una fecha de precio válida.');
-      if(!String(p.ingrediente_generico||'').trim())throw new Error('Escribe el nombre del ingrediente de FORX.');
-      if(p.precio_origen==='web'&&!String(p.precio_fuente||'').trim())throw new Error('Indica la fuente del precio provisional.');
-    }
-    const oldCalc=current&&C.conversion(current),newCalc=C.conversion(p);
-    const conversionChanged=current&&newCalc.ok&&(!oldCalc.ok||oldCalc.unit!==newCalc.unit||oldCalc.usable!==newCalc.usable);
+    // Aquí estaba la compuerta de «validado»: para dar por bueno un producto exigía su unidad de
+    // costeo, su conversión, una fecha y el nombre del ingrediente de FORX. Es lo que producía los
+    // «Por verificar». Un producto comprado no necesita que nadie lo apruebe para existir.
+    // Una fecha de precio inválida sí seguía importando y se sigue exigiendo abajo, al registrar
+    // la compra: sin fecha, el historial no se puede ordenar.
     const priceChanged=!current||Number(current.precio_actual)!==Number(p.precio_actual)||current.fecha_precio!==p.fecha_precio||current.precio_origen!==p.precio_origen;
-    if(Number(p.precio_actual)>0&&(priceChanged||conversionChanged)){
+    if(Number(p.precio_actual)>0&&priceChanged){
       const history=C.observations(p);
       const existing=history.find(o=>o.fecha===current?.fecha_precio&&Number(o.precio)===Number(current?.precio_actual));
       const observation={id:existing?.id||'manual:'+crypto.randomUUID(),precio:Number(p.precio_actual),fecha:p.fecha_precio||'',folio:p.factura_origen||'',proveedor:p.proveedor_nombre||'',origen:p.precio_origen||'factura',fuente:p.precio_fuente||'',evidencia:'manual',corregidoPor:auth.currentUser?.uid||''};
       observation.fecha_consulta=p.precio_fecha_consulta||'';observation.vigencia_hasta=p.precio_vigencia_hasta||'';
       if(existing)observation.correcciones=[...(existing.correcciones||[]),{precio:existing.precio,fecha:existing.fecha,conversion_forx:existing.conversion_forx||null,ts:new Date().toISOString()}];
-      if(newCalc.ok)observation.conversion_forx={unidad:newCalc.unit,contenido_util:newCalc.usable};
       p=C.recordPurchase(p,observation);
     }
     p.compras_forx=C.observations(p);
@@ -133,8 +130,9 @@
     return `<div class="ing-actions ing-quick"><button type="button" data-action="manual-open" data-id="${e(p.id)}">Homologar manualmente</button><button type="button" data-action="omit" data-id="${e(p.id)}" title="Sacarlo de la lista sin borrar compras ni historial">Omitir</button></div>`;
   }
   function productDetails(p){
-    const calc=C.conversion(p),reason=C.destination(p);
-    return `<div class="ing-presentation"><div><strong>${e(p.nombre_comercial)}</strong><p>${e(p.proveedor_nombre||'Proveedor no registrado')} · ${e(p.presentacion||'Presentación sin definir')}</p><p>${calc.ok?money(calc.price)+' / '+e(unit(calc.unit)):e(calc.reason)} · ${e(p.fecha_precio||'Sin fecha de factura')}</p></div><div class="ing-actions"><button type="button" data-action="edit" data-id="${e(p.id)}">Revisar</button>${reason.include?`<button type="button" data-action="omit" data-id="${e(p.id)}">Omitir</button>`:`<button type="button" data-action="include" data-id="${e(p.id)}">Recuperar para revisión</button>`}${p.ingrediente_id?`<button type="button" data-action="split" data-id="${e(p.id)}">Separar presentación</button>`:''}</div></div>`;
+    const reason=C.destination(p);
+    const ultimo=Number(p.precio_actual)>0?money(p.precio_actual)+' por presentación':'Sin precio registrado';
+    return `<div class="ing-presentation"><div><strong>${e(p.nombre_comercial)}</strong><p>${e(p.proveedor_nombre||'Proveedor no registrado')} · ${e(p.presentacion||'Presentación sin definir')}</p><p>${e(ultimo)} · ${e(p.fecha_precio||'Sin fecha de factura')}</p></div><div class="ing-actions"><button type="button" data-action="edit" data-id="${e(p.id)}">Revisar</button>${reason.include?`<button type="button" data-action="omit" data-id="${e(p.id)}">Omitir</button>`:`<button type="button" data-action="include" data-id="${e(p.id)}">Recuperar para revisión</button>`}${p.ingrediente_id?`<button type="button" data-action="split" data-id="${e(p.id)}">Separar presentación</button>`:''}</div></div>`;
   }
   function manualResults(){
     const results=C.manualTargets(_catalogoProductos,manual.sourceId,manual.query);
@@ -151,7 +149,7 @@
       const groups=C.groups(_catalogoProductos),a=groups.find(g=>g.id===C.groupId(source)),b=groups.find(g=>g.id===C.groupId(target));
       const previouslyDistinct=a.products.some(p=>(p.forx_distintos||[]).some(id=>b.products.some(o=>o.id===id)))||b.products.some(p=>(p.forx_distintos||[]).some(id=>a.products.some(o=>o.id===id)));
       const merged=C.homologate(_catalogoProductos,source.id,target.id),price=C.priceForGroup(C.groups(merged)[0]);
-      body=`<p>El nombre principal será <strong>${e(C.ingredientName(target))}</strong>. Se vincularán ${merged.length} presentaciones, no solo las dos seleccionadas.</p><ul class="ing-merge-members">${[a,b].map(g=>`<li><strong>${e(g.name)}</strong><p>${e(g.products.map(p=>p.nombre_comercial).join(' · '))}</p></li>`).join('')}</ul><p>Se conservan compras, conversiones e historiales. Ningún producto se elimina ni se valida por esta acción.</p><p>${price.state==='listo'?'Precio resultante: '+money(price.winner.calc.price)+' / '+e(unit(price.winner.calc.unit))+' · factura '+e(price.winner.fecha)+'.':'El precio requiere revisión: '+e(price.reason||'faltan datos')+'. No se publicará un precio nuevo para este grupo hasta resolverlo.'}</p>${previouslyDistinct?'<p class="ing-reason">Antes marcaste estos grupos como distintos. Confirma únicamente si revisaste esa decisión y son el mismo ingrediente.</p>':''}<div class="ing-actions"><button type="button" class="ing-primary" data-action="manual-confirm" data-id="${e(source.id)}" data-other="${e(target.id)}">Confirmar homologación</button><button type="button" data-action="manual-back" data-id="${e(source.id)}">Elegir otro ingrediente</button>${cancel}</div>`;
+      body=`<p>El nombre principal será <strong>${e(C.ingredientName(target))}</strong>. Se vincularán ${merged.length} presentaciones, no solo las dos seleccionadas.</p><ul class="ing-merge-members">${[a,b].map(g=>`<li><strong>${e(g.name)}</strong><p>${e(g.products.map(p=>p.nombre_comercial).join(' · '))}</p></li>`).join('')}</ul><p>Se conservan las compras y los historiales de las dos. Ningún producto se elimina.</p><p>${price.state==='listo'?'Última compra del grupo: '+money(price.winner.precio)+' por presentación · '+e(price.winner.fecha)+'.':e(price.reason||'Sin compras registradas todavía')+'.'}</p>${previouslyDistinct?'<p class="ing-reason">Antes marcaste estos grupos como distintos. Confirma únicamente si revisaste esa decisión y son el mismo ingrediente.</p>':''}<div class="ing-actions"><button type="button" class="ing-primary" data-action="manual-confirm" data-id="${e(source.id)}" data-other="${e(target.id)}">Confirmar homologación</button><button type="button" data-action="manual-back" data-id="${e(source.id)}">Elegir otro ingrediente</button>${cancel}</div>`;
     }
     return `<section class="ing-manual" aria-labelledby="ingManualTitle"><h4 id="ingManualTitle" tabindex="-1">Homologar manualmente</h4>${body}<p id="ingManualError" class="ing-error" role="alert">${e(manual.error||'')}</p></section>`;
   }
@@ -183,11 +181,10 @@
       .filter(g=>C.norm([g.name,...g.products.map(p=>p.nombre_comercial+' '+p.proveedor_nombre)].join(' ')).includes(C.norm(query)));
     const rows=visible.slice(0,100).map(g=>{
       const r=g.result,w=r.winner;
-      const choices=r.state==='conflicto'&&(r.candidates||[]).length?r.candidates.map(c=>`<button type="button" data-action="choose" data-id="${e(c.productId)}" data-observation="${e(c.id)}">Usar ${money(c.calc.price)}/${e(unit(c.calc.unit))} · ${e(c.proveedor)} · ${e(c.folio)}</button>`).join(''):'';
       const match=matches.get(g.id),reviews=view==='revision'&&match?suggestions(match.p,match.other):'';
       const active=g.products.find(p=>C.destination(p).include),openManual=manual&&g.products.some(p=>p.id===manual.sourceId);
       const shortcuts=active?(g.products.length===1?quickActions(active):`<div class="ing-actions ing-quick"><button type="button" data-action="manual-open" data-id="${e(active.id)}">Homologar manualmente</button></div>`):'';
-      return `<article class="ing-row"><div class="ing-row-head"><div><h3>${e(g.name)}</h3><p>${g.products.length} presentación(es) vinculada(s)</p></div><div class="ing-price">${w?`<strong>${money(w.calc.price)} <span>/ ${e(unit(w.calc.unit))}</span></strong><p>Factura: ${e(w.fecha)}</p>`:'<strong>Sin cambio de precio</strong>'}</div><span class="ing-state ${r.state==='listo'?'ing-ready':''}">${labelState(r)}</span></div>${r.reason?`<p class="ing-reason">${e(r.reason)}</p>`:''}${r.issues?.length?`<p class="ing-reason">Hay presentaciones por verificar. Se usa la última compra válida.</p>`:''}${choices?`<div class="ing-actions">${choices}</div>`:''}${shortcuts}${openManual?manualPanel():''}<details ${r.state==='pendiente'?'open':''}><summary>Ver presentaciones, proveedor e historial</summary>${g.products.map(p=>productDetails(p)+`<details class="ing-history"><summary>Compras de esta presentación</summary>${C.observations(p).map(o=>`<p>${e(o.fecha||'Sin fecha')}${o.cantidad?' · '+e(String(o.cantidad))+(o.unidad?' '+e(unit(o.unidad)):''):''} · ${money(o.precio)} por presentación${o.codigo_proveedor?' · SKU '+e(o.codigo_proveedor):''} · ${e(o.folio||'Sin folio')} · ${e(o.proveedor)}</p>`).join('')||'<p>Sin compras registradas.</p>'}</details>`).join('')}</details>${openManual?'':reviews}</article>`;
+      return `<article class="ing-row"><div class="ing-row-head"><div><h3>${e(g.name)}</h3><p>${g.products.length} presentación(es) vinculada(s)</p></div><div class="ing-price">${w?`<strong>${money(w.precio)} <span>por presentación</span></strong><p>Factura: ${e(w.fecha)}</p>`:'<strong>Sin compras</strong>'}</div><span class="ing-state ${r.state==='listo'?'ing-ready':''}">${labelState(r)}</span></div>${r.reason?`<p class="ing-reason">${e(r.reason)}</p>`:''}${shortcuts}${openManual?manualPanel():''}<details ${r.state==='pendiente'?'open':''}><summary>Ver presentaciones, proveedor e historial</summary>${g.products.map(p=>productDetails(p)+`<details class="ing-history"><summary>Compras de esta presentación</summary>${C.observations(p).map(o=>`<p>${e(o.fecha||'Sin fecha')}${o.cantidad?' · '+e(String(o.cantidad))+(o.unidad?' '+e(unit(o.unidad)):''):''} · ${money(o.precio)} por presentación${o.codigo_proveedor?' · SKU '+e(o.codigo_proveedor):''} · ${e(o.folio||'Sin folio')} · ${e(o.proveedor)}</p>`).join('')||'<p>Sin compras registradas.</p>'}</details>`).join('')}</details>${openManual?'':reviews}</article>`;
     }).join('');
     return `<section class="ing-workspace" aria-label="Productos comprados"><header class="ing-heading"><div><h2>Productos comprados</h2><p>Todo lo que entra por factura, con su historial de precio y cantidad.</p></div><div class="ing-actions"><button type="button" data-action="refresh">Actualizar</button><button type="button" data-action="new" class="ing-primary">Agregar ingrediente</button></div></header><div class="ing-toolbar" role="group" aria-label="Vista del catálogo">${Object.entries({revision:'Por revisar',ingredientes:'Productos',omitidos:'Omitidos'}).map(([key,label])=>`<button type="button" data-action="view" data-view="${key}" aria-pressed="${key===view}">${label} <span>${counts[key]}</span></button>`).join('')}</div><div class="ing-search"><label for="ingSearch">Buscar producto, SKU o proveedor</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aderezo ranch" autocomplete="off"></div><div class="ing-publication"><p id="ingStatus" role="status" aria-live="polite">${e(lastStatus||'Se registra todo lo comprado, de los XML y de las facturas leídas.')}</p></div><div id="ingRows">${rows||'<div class="ing-empty"><h3>No hay productos en esta vista</h3><p>Cambia de vista o limpia la búsqueda.</p></div>'}</div>${visible.length>100?`<p>Mostrando 100 de ${visible.length}. Usa la búsqueda para acotar los resultados.</p>`:''}</section>`;
   }
@@ -234,14 +231,11 @@
         status('Producto recuperado: '+p.nombre_comercial+'. Sus compras nunca se tocaron.');
       }else if(action==='split'){
         await saveRows([{...p,ingrediente_id:'ing:'+crypto.randomUUID(),ingrediente_nombre:p.nombre_comercial,ingrediente_generico:p.nombre_comercial,sinonimos_menu:[],estado:'pendiente'}]);
-        status('Presentación separada. Revisa su ingrediente antes de volver a publicarla.');
-      }else if(action==='choose'){
-        const group=C.groups(_catalogoProductos).find(g=>g.id===C.groupId(p)),result=C.priceForGroup(group);
-        const selected=result.candidates?.find(c=>c.id===button.dataset.observation);
-        if(!selected)throw new Error('El conflicto cambió. Actualiza el catálogo.');
-        const pref={fecha:selected.fecha.slice(0,10),id:selected.id,candidatos:result.candidates.map(c=>c.id+':'+c.calc.price).join('|')};
-        await saveRows(group.products.map(x=>({...x,forx_preferido:pref})));status('Precio elegido para esta fecha. Una factura posterior prevalecerá automáticamente.');
+        status('Presentación separada. Su historial de compras se conserva.');
       }
+      // La acción 'choose' desempataba dos precios de la misma fecha para decidir cuál
+      // publicar a FORX. Sin publicación no hay empate que romper: el historial muestra
+      // las dos compras y ya.
       await render();
     }catch(err){status(err.message,true);if(manual){manual.error=err.message;$('ingManualError').textContent=err.message;}}
     finally{busy=false;button.disabled=false;}
@@ -277,18 +271,11 @@
   };
   cambiarEstadoRapido=async function(id,state){
     const p=_catalogoProductos.find(x=>x.id===id);if(!p)return;
-    try{if(state==='validado'&&C.destination(p).include){const calc=C.conversion(p);if(!calc.ok||!C.date(p.fecha_precio))throw new Error(calc.reason||'Falta fecha de factura.');}
-      await saveRows([{...p,estado:state}]);await render();
+    try{await saveRows([{...p,estado:state}]);await render();
     }catch(err){status(err.message,true);}
   };
-  actualizarCalculoPorcion=function(){
-    syncUnidadBase();
-    const p={nombre_comercial:$('pcNombre').value,precio_actual:$('pcPrecioActual').value,unidad_base:$('pcUnidadBase').value,
-      contenido_cantidad:$('pcContCantidad').value,contenido_unidad:$('pcContUnidad').value,piezas_por_presentacion:$('pcPiezasPorPresentacion').value,
-      porcion_valor:$('pcPorcionValor').value,porcion_unidad:$('pcPorcionUnidad').value,merma_pct:$('pcMermaPct').value};
-    const calc=C.conversion(p);$('pcCalcPreview').style.display='block';
-    $('pcCalcBody').textContent=calc.ok?'Contenido utilizable: '+calc.usable.toFixed(3)+' '+unit(calc.unit)+'. Precio para FORX: '+money(calc.price)+' / '+unit(calc.unit)+'.':calc.reason+'. No se publicará hasta completar estos datos.';
-  };
+  // Aquí se pintaba «Precio que verá Menú»: el precio por kilo o por porción, con la merma
+  // descontada. Se retiró junto con sus campos y con el oninput que la llamaba.
   abrirEditorProducto=function(id){
     old.editor(id);const p=_catalogoProductos.find(x=>x.id===id);
     $('pcFechaPrecio').value=p?.fecha_precio?.slice(0,10)||'';

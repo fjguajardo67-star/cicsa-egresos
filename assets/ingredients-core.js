@@ -36,38 +36,9 @@
     const fits = candidates.filter(p => !p.unidad_compra || !input.unidad || norm(p.unidad_compra) === norm(input.unidad));
     return fits.length === 1 ? fits[0] : null;
   }
-  function conversion(p, price = p.precio_actual) {
-    if (!positive(price)) return { ok:false, reason:'Falta un precio mayor que cero' };
-    const waste = p.merma_pct == null || p.merma_pct === '' ? 0 : number(p.merma_pct);
-    if (!Number.isFinite(waste) || waste < 0 || waste >= 100) return { ok:false, reason:'Revisa la merma (0 a menos de 100 %)' };
-    const unit = p.unidad_base;
-    if (!['kg','lt','pz','porcion'].includes(unit)) return { ok:false, reason:'Elige kilo, litro, pieza o porción como unidad de costeo' };
-    let qty;
-    if (unit === 'pz') {
-      if (!positive(p.piezas_por_presentacion)) return { ok:false, reason:'Falta cuántas piezas trae la presentación' };
-      qty = number(p.piezas_por_presentacion);
-    } else {
-      if (!positive(p.contenido_cantidad)) return { ok:false, reason:'Falta el contenido real de la presentación' };
-      const units = { kg:['peso',1], g:['peso',0.001], lt:['volumen',1], l:['volumen',1], ml:['volumen',0.001] };
-      const source = units[p.contenido_unidad], dest = units[unit];
-      if (!source) return { ok:false, reason:'Revisa la unidad del contenido' };
-      qty = number(p.contenido_cantidad) * source[1];
-      if (unit === 'porcion') {
-        const portion = units[p.porcion_unidad];
-        if (!positive(p.porcion_valor) || !portion || portion[0] !== source[0]) return { ok:false, reason:'La porción debe tener una medida compatible con el contenido' };
-        qty /= number(p.porcion_valor) * portion[1];
-      } else if (!dest || dest[0] !== source[0]) return { ok:false, reason:'No se convierten litros a kilos sin una equivalencia revisada' };
-      // Datos heredados como «3.8L» capturados como kg no se publican silenciosamente.
-      const label = norm(p.nombre_comercial);
-      const volume = /\d\s*(?:l|lt|litros?|ml)\b/.test(label);
-      const mass = /\d\s*(?:kg|kilos?|gr|gramos?)\b/.test(label);
-      if (!p.conversion_revisada && ((volume && source[0] === 'peso') || (mass && source[0] === 'volumen')))
-        return { ok:false, reason:'El nombre y la unidad no coinciden: revisa la presentación' };
-    }
-    const usable = qty * (1 - waste / 100), result = number(price) / usable;
-    if (!Number.isFinite(result) || result <= 0) return { ok:false, reason:'Conversión inválida' };
-    return { ok:true, price:Math.round(result * 100) / 100, unit, usable };
-  }
+  // conversion() vivía aquí: convertía el precio de la presentación a precio por kilo, litro,
+  // pieza o porción, descontando la merma, para que FORX costeara recetas. Un historial de
+  // compras no necesita nada de eso: el precio que importa es el que dice la factura.
   function observations(p) {
     const result = [...(p.compras_forx || [])];
     if (!result.length && positive(p.precio_actual)) result.push({
@@ -76,17 +47,9 @@
       fuente:p.precio_fuente || '', unidad:p.unidad_compra || '',
       fecha_consulta:p.precio_fecha_consulta || '', vigencia_hasta:p.precio_vigencia_hasta || '',
     });
-    return result.map(o => {
-      if (Object.hasOwn(o,'conversion_forx') || p.estado !== 'validado') return o;
-      const calc = conversion(p,o.precio);
-      return calc.ok ? {...o,conversion_forx:{unidad:calc.unit,contenido_util:calc.usable}} : o;
-    });
-  }
-  function observationPrice(p,o) {
-    if (!o.conversion_forx) return conversion(p,o.precio);
-    const s=o.conversion_forx;
-    if (!positive(o.precio) || !positive(s.contenido_util) || !['kg','lt','pz','porcion'].includes(s.unidad)) return {ok:false,reason:'La conversión histórica requiere revisión'};
-    return {ok:true,price:Math.round(number(o.precio)/number(s.contenido_util)*100)/100,unit:s.unidad,usable:number(s.contenido_util)};
+    // Las compras ya guardadas conservan su campo conversion_forx: es dato histórico y borrarlo
+    // sería reescribir 736 documentos por una limpieza. Simplemente ya no se calcula ninguno nuevo.
+    return result;
   }
   function recordPurchase(p, obs) {
     if (!positive(obs.precio) || !obs.id) throw new Error('La partida necesita identificador y precio válido');
@@ -94,11 +57,7 @@
     const previous = at >= 0 ? purchases[at] : null;
     // Un XML puede completar la misma evidencia, no una compra adicional.
     if (previous && previous.evidencia === 'xml' && obs.evidencia !== 'xml' && !obs.correcciones?.length) return p;
-    const calc=conversion(p,obs.precio), recorded={...obs};
-    if (!Object.hasOwn(recorded,'conversion_forx')) {
-      if (previous?.conversion_forx) recorded.conversion_forx=previous.conversion_forx;
-      else if (p.estado === 'validado' && calc.ok) recorded.conversion_forx={unidad:calc.unit,contenido_util:calc.usable};
-    }
+    const recorded={...obs};
     if (at >= 0) purchases[at] = { ...previous, ...recorded }; else purchases.push(recorded);
     const updated = { ...p, compras_forx:purchases };
     const valid = purchases.filter(x => date(x.fecha) && positive(x.precio));
@@ -125,40 +84,35 @@
     });
     return [...map.values()].sort((a,b) => a.name.localeCompare(b.name, 'es'));
   }
+  // La compra más reciente del grupo, tal como la facturaron. Antes esto exigía que cada
+  // presentación estuviera «validada» con su unidad de costeo y su nombre de ingrediente de FORX,
+  // y convertía el precio a por-kilo descontando merma. Nada de eso aplica a un historial: el
+  // precio que importa es el de la factura, por la presentación que se compró.
   function priceForGroup(group) {
     const included = group.products.filter(p => destination(p).include);
     if (!included.length) return { state:'excluido', reason:destination(group.products[0]).reason };
-    const candidates = [], issues = [];
-    for (const p of included) {
-      if (p.estado !== 'validado') { issues.push('Falta verificar ' + p.nombre_comercial); continue; }
-      if (!String(p.ingrediente_nombre||p.ingrediente_generico||'').trim()) { issues.push('Define el ingrediente de FORX para '+p.nombre_comercial); continue; }
-      for (const o of observations(p)) {
-        const calc = observationPrice(p, o);
-        if (!calc.ok || !date(o.fecha)) { issues.push(calc.reason || 'Falta la fecha de factura'); continue; }
-        if (o.origen === 'web' && !String(o.fuente || p.precio_fuente || '').trim()) { issues.push('Precio provisional sin fuente'); continue; }
-        candidates.push({ ...o, productId:p.id, calc });
-      }
-    }
-    if (!candidates.length) return { state:'pendiente', reason:issues[0] || 'Sin precio verificable' };
-    // No se mezclan precios por litro, kilo o porción bajo una sola llave de FORX.
-    if (new Set(candidates.map(x => x.calc.unit)).size > 1) return { state:'conflicto', reason:'Las presentaciones usan unidades distintas', candidates:[] };
-    const xmlReceipts=new Set(candidates.filter(x=>x.evidencia==='xml'&&x.folio).map(x=>x.productId+'|'+norm(x.folio)));
-    const evidence=candidates.filter(x=>x.evidencia==='xml'||x.correcciones?.length||!xmlReceipts.has(x.productId+'|'+norm(x.folio)));
-    const invoices = evidence.filter(x => x.origen !== 'web');
-    const eligible = invoices.length ? invoices : evidence;
-    // Si solo se conoce el día, no se inventa un orden por la hora de carga.
-    const day = eligible.map(x => x.fecha.slice(0,10)).sort().at(-1);
-    let latest = eligible.filter(x => x.fecha.slice(0,10) === day);
+    const compras = [];
+    for (const p of included)
+      for (const o of observations(p))
+        if (date(o.fecha) && positive(o.precio)) compras.push({ ...o, productId:p.id });
+    if (!compras.length) return { state:'pendiente', reason:'Sin compras registradas todavía' };
+    // El XML gana sobre la lectura de IA de la MISMA factura: es el dato fiscal, no una
+    // interpretación de una imagen. Las dos describen una sola compra, no dos.
+    const xmlReceipts = new Set(compras.filter(x=>x.evidencia==='xml'&&x.folio).map(x=>x.productId+'|'+norm(x.folio)));
+    const evidencia = compras.filter(x=>x.evidencia==='xml'||x.correcciones?.length||!xmlReceipts.has(x.productId+'|'+norm(x.folio)));
+    // Un precio consultado en internet (origen 'web') es provisional, no una compra: mientras
+    // haya facturas, mandan ellas. Si no hay ninguna, se muestra el provisional en vez de nada.
+    const facturas = evidencia.filter(x => x.origen !== 'web');
+    const elegibles = facturas.length ? facturas : evidencia;
+    // Si de una factura solo se conoce el día, no se inventa un orden por la hora de carga.
+    const day = elegibles.map(x => x.fecha.slice(0,10)).sort().at(-1);
+    let latest = elegibles.filter(x => x.fecha.slice(0,10) === day);
     if (latest.every(x => x.fecha.length > 10)) {
       const timestamp = latest.map(x => x.fecha).sort().at(-1);
       latest = latest.filter(x => x.fecha === timestamp);
     }
     latest.sort((a,b) => a.id.localeCompare(b.id));
-    const preference = included.map(p => p.forx_preferido).find(x => x && x.fecha === day && x.candidatos === latest.map(c=>c.id+':'+c.calc.price).join('|'));
-    let winner = preference && latest.find(x => x.id === preference.id);
-    if (!winner && new Set(latest.map(x => x.calc.price)).size > 1) return { state:'conflicto', reason:'Precios distintos en la misma fecha', candidates:latest };
-    winner = winner || latest[0];
-    return { state:'listo', winner, issues, candidates:latest };
+    return { state:'listo', winner:latest[0], compras:evidencia, candidates:latest };
   }
   function homologate(products, sourceId, targetId) {
     const source = products.find(p => p.id === sourceId), target = products.find(p => p.id === targetId);
@@ -240,5 +194,5 @@
   // datos/precios para que FORX costeara recetas. Egresos ya no publica: el documento queda
   // congelado con sus últimos valores, así que lo que todavía lo lea sigue leyendo algo.
   // Con ella se va el único consumidor de priceForGroup fuera de la pantalla.
-  return { norm, date, destination, ingredientName, groupId, findProduct, conversion, observations, observationPrice, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets };
+  return { norm, date, destination, ingredientName, groupId, findProduct, observations, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets };
 });
