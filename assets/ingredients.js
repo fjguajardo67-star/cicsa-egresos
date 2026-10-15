@@ -71,9 +71,12 @@
       // La cantidad y el SKU van en la OBSERVACIÓN, no solo en el producto: el producto guarda
       // el último valor, y lo que sirve para un histórico es cuánto se compró en cada factura y
       // con qué clave la facturó el proveedor ese día. Ausente = no se sabe, que no es cero.
-      const cantidad=Number(item.cantidad), sku=String(item.codigo_proveedor||'').trim();
+      // El Importe viene en el renglón del CFDI y es el dato bueno: no hay que multiplicar
+      // nada ni arrastrar redondeos. Hasta ahora se tiraba en el mapeo y por eso el gasto
+      // por producto salía en cero para todo lo que no traía cantidad.
+      const cantidad=Number(item.cantidad), sku=String(item.codigo_proveedor||'').trim(), importe=Number(item.importe);
       const observation={id:observationId,precio:Number(item.precio),fecha:C.date(context.fecha)||'',folio:receipt,proveedor:supplier||'',unidad:item.unidad||'',origen:'factura',evidencia:context.evidencia||'lectura',descripcion:name,
-        ...(Number.isFinite(cantidad)&&cantidad>0?{cantidad}:{}),...(sku?{codigo_proveedor:sku}:{})};
+        ...(Number.isFinite(cantidad)&&cantidad>0?{cantidad}:{}),...(Number.isFinite(importe)&&importe>0?{importe}:{}),...(sku?{codigo_proveedor:sku}:{})};
       const updated=C.recordPurchase(p,observation);
       // Clasificación operativa separada del ingrediente y de su conversión.
       // Una compra antigua no reemplaza los metadatos de la presentación vigente.
@@ -100,7 +103,7 @@
       if(c.ignorado||stored?.ignorado||c.tipo!=='I'||String(c.rfcReceptor||'').toUpperCase()!==own||String(c.rfc||'').toUpperCase()===own)continue;
       // cantidad y sku venían en el concepto y se perdían aquí: el mapeo solo pasaba cuatro
       // campos. El XML es la fuente exacta de los dos — dato fiscal, no leído por IA.
-      await ingest((c.conceptos||[]).map(k=>({nombre:k.desc,precio:k.precio,cantidad:k.cantidad,codigo_proveedor:k.sku||'',unidad:unidadDesdeClaveSAT(k.unidad),categoria:k.categoria||''})),c.proveedor,c.uuid||c.folio,{uuid:c.uuid,fecha:c.fecha_hora||c.fecha,evidencia:'xml'});
+      await ingest((c.conceptos||[]).map(k=>({nombre:k.desc,precio:k.precio,cantidad:k.cantidad,importe:k.importe,codigo_proveedor:k.sku||'',unidad:unidadDesdeClaveSAT(k.unidad),categoria:k.categoria||''})),c.proveedor,c.uuid||c.folio,{uuid:c.uuid,fecha:c.fecha_hora||c.fecha,evidencia:'xml'});
     }
   }
   async function saveEditor(id,data){
@@ -257,8 +260,13 @@
       +`<div><strong>${new Set(rows.map(r=>r.proveedor).filter(Boolean)).size.toLocaleString('es-MX')}</strong><span>proveedores</span></div>`
       // Es la suma de precio × cantidad de los renglones que traen cantidad. No es el total del
       // gasto: va sin IVA y deja fuera lo que se capturó a mano sin cantidad. Se dice cuántos.
-      +`<div><strong>${e(money(importe))}</strong><span>importe de ${e(plural(conImporte.length,'renglón','renglones'))} con cantidad, sin IVA</span></div>`
-      +`</div>`;
+      +`<div><strong>${conImporte.length?e(money(importe)):'—'}</strong><span>${conImporte.length
+        ?`gasto de ${e(plural(conImporte.length,'renglón','renglones'))}${conImporte.length<rows.length?' de '+rows.length.toLocaleString('es-MX'):''}, sin IVA`
+        :'sin importe: ningún renglón trae con qué calcularlo'}</span></div>`
+      +`</div>`
+      +(rows.length&&!conImporte.length?`<div class="ing-chart ing-chart-vacia"><p><strong>Estas compras no traen importe.</strong> `
+        +`El importe viene en el renglón del XML; las facturas que se procesaron antes de que se guardara ese dato no lo tienen. `
+        +`Vuelve a subir los XML de este periodo en la pestaña SAT y se rellena solo, sin duplicar nada.</p></div>`:'');
     // La gráfica contesta «cómo se movió el precio de ESTO». Buscar «papa» trae Papa, Papaya,
     // Puré de papa y Papa Casera revueltos: ahí no hay un «esto», y tres líneas sueltas entre
     // trece son ruido con pinta de dato. Se pide elegir producto, que es para lo que está el
@@ -270,6 +278,22 @@
         +`Esta consulta trae ${e(plural(grupos.size,'producto','productos'))} distintos con `
         +`${e(plural(series.length,'presentación','presentaciones'))}; dibujarlos juntos no diría nada. `
         +`Usa el desplegable de arriba.</p></div>`;
+    // Gasto por producto y por proveedor del periodo que esté filtrado. Cada bloque dice
+    // sobre cuántos renglones sumó: dar por completo un total al que le faltan renglones sería
+    // justo el tipo de cifra que nadie puede auditar después.
+    const gasto=(titulo,campo,vacio)=>{
+      const filas=C.spendBy(rows,campo).filter(x=>x.importe>0);
+      if(!filas.length)return '';
+      const total=filas.reduce((n,x)=>n+x.importe,0),tope=10,arriba=filas.slice(0,tope);
+      const faltan=filas.reduce((n,x)=>n+(x.compras-x.conImporte),0);
+      return `<section class="ing-gasto"><h4>${e(titulo)}</h4>`
+        +`<table class="ing-table ing-table-chica"><thead><tr><th scope="col">${e(vacio)}</th><th scope="col" class="ing-num">Compras</th><th scope="col" class="ing-num">Gasto</th></tr></thead><tbody>`
+        +arriba.map(x=>`<tr><td>${e(x.nombre)}</td><td class="ing-num">${x.compras.toLocaleString('es-MX')}${x.conImporte<x.compras?`<span class="ing-sub">${x.conImporte} con importe</span>`:''}</td><td class="ing-num">${e(money(x.importe))}</td></tr>`).join('')
+        +`</tbody><tfoot><tr><td>Total${filas.length>tope?` (${e(plural(filas.length,'renglón','renglones'))})`:''}</td><td class="ing-num">${filas.reduce((n,x)=>n+x.compras,0).toLocaleString('es-MX')}</td><td class="ing-num">${e(money(total))}</td></tr></tfoot></table>`
+        +(faltan?`<p>Sin contar ${e(plural(faltan,'compra','compras'))} que no ${faltan===1?'trae':'traen'} importe.</p>`:'')
+        +`</section>`;
+    };
+    const gastos=conImporte.length?`<div class="ing-gastos">${gasto('Gasto por producto','producto','Producto')}${gasto('Gasto por proveedor','proveedor','Proveedor')}</div>`:'';
     const tope=300,visibles=rows.slice(0,tope);
     // Producto y Presentación traían el mismo texto en casi todos los renglones —solo difieren
     // si el producto está homologado— y dos columnas de nombres largos se desbordaban una
@@ -284,7 +308,7 @@
       +`<td class="ing-num">${r.importe==null?'—':e(money(r.importe))}</td><td class="ing-folio" title="${e(r.folio||'')}">${e(r.folio||'—')}</td></tr>`).join('')
       +`</tbody></table></div>`+(rows.length>tope?`<p>Mostrando ${tope} de ${rows.length.toLocaleString('es-MX')} compras. Acota las fechas, el proveedor o el producto.</p>`:'')
       :`<div class="ing-empty"><h3>No hay compras con esos filtros</h3><p>Prueba otro rango de fechas, otro proveedor o limpia la búsqueda.</p></div>`;
-    return filtros+resumen+grafica+tabla;
+    return filtros+resumen+gastos+grafica+tabla;
   }
   function markup(){
     let grouped=analysisCache?.grouped,matches=analysisCache?.matches;

@@ -224,12 +224,106 @@
           skuProducto: String(p.codigo_proveedor || '').trim(),
           fecha, dia: fecha.slice(0, 10),
           cantidad, unidad: o.unidad || p.unidad_compra || '',
-          precio, importe: cantidad == null ? null : precio * cantidad,
+          precio,
+          // El Importe del renglón del CFDI manda: es lo que se pagó por esa partida, tal
+          // cual. Solo si no viene se calcula precio × cantidad, y se dice cuál de los dos
+          // es para que nadie confunda un dato de la factura con una cuenta nuestra.
+          importe: positive(o.importe) ? number(o.importe) : (cantidad == null ? null : precio * cantidad),
+          importeOrigen: positive(o.importe) ? 'factura' : (cantidad == null ? '' : 'calculado'),
           folio: o.folio || '', origen: o.origen || 'factura', evidencia: o.evidencia || '',
         });
       }
     }
     return rows.sort((a, b) => b.fecha.localeCompare(a.fecha) || a.producto.localeCompare(b.producto, 'es') || a.id.localeCompare(b.id));
+  }
+  // Racimos de productos que parecen el mismo. Usa la MISMA identidad que ya alimenta las
+  // sugerencias de «Por revisar», pero junta el racimo completo en vez de pares, que es lo
+  // que hace inviable limpiar cientos de duplicados de uno en uno.
+  //
+  // Dos niveles, y la diferencia importa:
+  //   'exacto'   — los nombres solo difieren en mayúsculas o acentos. No hay nada que juzgar.
+  //   'probable' — misma identidad, nombre distinto («…2.5 kg (HOP)» y «…2.5kg HOP»).
+  // Lo que cambia de calificativo —«procesado», «(botana)», «de pollo»— NO cae aquí: su
+  // identidad es distinta, así que ni se propone. Eso lo decide una persona a mano.
+  function duplicateClusters(products) {
+    const all = groups(products || []);
+    const byIdentity = new Map(), identityOf = new Map();
+    for (const g of all) {
+      const activos = g.products.filter(p => destination(p).include);
+      if (!activos.length) continue;
+      // Una identidad por grupo, la del producto de id menor: así un grupo nunca aparece en
+      // dos racimos y «fusionar» no se vuelve ambiguo.
+      const identity = ingredientIdentity([...activos].sort((a, b) => a.id.localeCompare(b.id))[0]);
+      if (!identity) continue;
+      identityOf.set(g.id, identity);
+      if (!byIdentity.has(identity)) byIdentity.set(identity, []);
+      byIdentity.get(identity).push({ ...g, activos });
+    }
+    const out = [];
+    for (const [identity, miembros] of byIdentity) {
+      if (miembros.length < 2) continue;
+      // Un «no, son distintos» de antes es una decisión tomada: se respeta. Se caen los dos
+      // lados del par, no solo uno, para no volver a proponer la mitad de lo rechazado.
+      const rechazados = new Set();
+      for (const a of miembros) for (const b of miembros) {
+        if (a.id === b.id) continue;
+        const corte = a.products.some(p => (p.forx_distintos || []).some(id => b.products.some(o => o.id === id)));
+        if (corte) { rechazados.add(a.id); rechazados.add(b.id); }
+      }
+      const limpios = miembros.filter(g => !rechazados.has(g.id))
+        .map(g => ({ id:g.id, nombre:g.name, presentaciones:g.activos.length,
+          compras:g.activos.reduce((n, p) => n + observations(p).filter(o => date(o.fecha) && positive(o.precio)).length, 0) }))
+        .sort((a, b) => b.compras - a.compras || a.nombre.localeCompare(b.nombre, 'es') || a.id.localeCompare(b.id));
+      if (limpios.length < 2) continue;
+      const nivel = new Set(limpios.map(g => norm(g.nombre))).size === 1 ? 'exacto' : 'probable';
+      out.push({ identity, nivel, miembros:limpios, compras:limpios.reduce((n, g) => n + g.compras, 0) });
+    }
+    // Primero los seguros, y dentro de cada nivel los que más compras arrastran.
+    return out.sort((a, b) => (a.nivel === b.nivel ? 0 : a.nivel === 'exacto' ? -1 : 1)
+      || b.miembros.length - a.miembros.length || b.compras - a.compras
+      || a.identity.localeCompare(b.identity));
+  }
+  // Fusiona varios grupos en uno. El nombre que queda es el del destino; todas las
+  // presentaciones y todo su historial se conservan, y se deshace con «Separar presentación».
+  function homologateMany(products, groupIds, targetGroupId) {
+    const ids = unique(groupIds || []);
+    if (ids.length < 2) throw new Error('Se necesitan al menos dos productos para fusionar');
+    if (!ids.includes(targetGroupId)) throw new Error('El nombre que se conserva tiene que ser uno de los que se fusionan');
+    const working = (products || []).slice();
+    const pick = gid => working.find(p => groupId(p) === gid && destination(p).include);
+    const target = pick(targetGroupId);
+    if (!target) throw new Error('El producto que conserva el nombre ya no está disponible. Actualiza el catálogo.');
+    const targetProductId = target.id, changed = new Map();
+    for (const gid of ids) {
+      if (gid === targetGroupId) continue;
+      const source = pick(gid);
+      if (!source) continue;
+      // El destino cambia de grupo en la primera vuelta, así que se vuelve a buscar por su id
+      // de producto, que sí es estable.
+      const destino = working.find(p => p.id === targetProductId);
+      for (const u of homologate(working, source.id, destino.id)) {
+        changed.set(u.id, u);
+        const at = working.findIndex(p => p.id === u.id);
+        if (at >= 0) working[at] = u; else working.push(u);
+      }
+    }
+    return [...changed.values()];
+  }
+  // Gasto agrupado por producto o por proveedor, para el periodo que esté filtrado.
+  // Siempre viaja con su cobertura: sumar 12 de 15 renglones y presentarlo como «el gasto»
+  // sería dar por completo algo que no lo está.
+  function spendBy(rows, campo) {
+    const porProveedor = campo === 'proveedor', by = new Map();
+    for (const r of rows || []) {
+      const clave = porProveedor ? norm(r.proveedor) : r.grupoId;
+      if (!clave) continue;
+      if (!by.has(clave)) by.set(clave, { clave, nombre:(porProveedor ? r.proveedor : r.producto) || 'Sin nombre', importe:0, compras:0, conImporte:0 });
+      const a = by.get(clave);
+      a.compras++;
+      if (r.importe != null) { a.importe += r.importe; a.conImporte++; }
+    }
+    return [...by.values()].sort((a, b) => b.importe - a.importe || b.compras - a.compras
+      || a.nombre.localeCompare(b.nombre, 'es') || a.clave.localeCompare(b.clave));
   }
   function productList(rows) {
     const byGroup = new Map();
@@ -240,7 +334,21 @@
     return [...byGroup.values()].map(g => ({ ...g, presentaciones:g.presentaciones.size }))
       .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es') || a.grupoId.localeCompare(b.grupoId));
   }
-  const supplierList = rows => [...new Set((rows || []).map(r => r.proveedor).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+  function supplierList(rows) {
+    const byKey = new Map();
+    for (const r of rows || []) {
+      const key = norm(r.proveedor);
+      if (!key) continue;
+      // Se queda la grafía más frecuente; a igualdad, la primera alfabéticamente, para que
+      // la lista no cambie de forma entre dos cargas con los mismos datos.
+      const seen = byKey.get(key) || new Map();
+      seen.set(r.proveedor, (seen.get(r.proveedor) || 0) + 1);
+      byKey.set(key, seen);
+    }
+    return [...byKey.values()]
+      .map(seen => [...seen.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'es'))[0][0])
+      .sort((a, b) => a.localeCompare(b, 'es'));
+  }
   function filterPurchases(rows, filter) {
     const f = filter || {}, text = norm(f.texto), supplier = norm(f.proveedor);
     // Una fecha inválida no filtra: vale más enseñar de más que esconder compras en silencio.
@@ -280,5 +388,5 @@
       // el color a las líneas que sobreviven al filtro.
       .sort((a, b) => a.productoId.localeCompare(b.productoId));
   }
-  return { norm, date, destination, ingredientName, groupId, findProduct, observations, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets, purchaseRows, supplierList, productList, filterPurchases, priceSeries };
+  return { norm, date, destination, ingredientName, groupId, findProduct, observations, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets, purchaseRows, supplierList, productList, filterPurchases, priceSeries, spendBy, duplicateClusters, homologateMany };
 });
