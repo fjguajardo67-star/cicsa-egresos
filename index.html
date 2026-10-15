@@ -621,9 +621,9 @@ body.snav-min .side-theme span { display:none; }
 <link rel="stylesheet" href="assets/expense-classification.css?v=20260926-congelados1">
 <script src="assets/expense-classification.js?v=20260926-congelados1" integrity="sha384-lP3OZXuIgH5Z2uRsfe/kX3IugW6Yn+avwp4fhFhV7qNNV3EfJc0Z4B0LDkBNj10e" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="assets/ingredients.css?v=20260912-egresos3" integrity="sha384-q4Rvv5tbRTrsyuCz5tuU/Ii3fPm4yyWkKT8PyKIEv8V76UWCyiuVuHXjMkhh+vIX" crossorigin="anonymous">
-<script src="assets/ingredients-core.js?v=20261014-historial3" integrity="sha384-ntkWzma++y0m0rmnOubeeK5YD2jPWbBRgOPOaiOWyvf4J1peNYshAGk9OoqwU+Fj" crossorigin="anonymous"></script>
+<script src="assets/ingredients-core.js?v=20261014-historial4" integrity="sha384-UazJP2FJq7dc2eYgoiep595BtgZmDkjdpkhMzQilKUdCxQ90JZNlVbbnURfW3slu" crossorigin="anonymous"></script>
 <script src="assets/ingredients-store.js?v=20261014-historial3" integrity="sha384-GOsOADZDUnrxXP8/Kx0Za73SvCsOzy5i7BWUJoWK6eGgAFZh5iPcVC+XstyFv+gM" crossorigin="anonymous"></script>
-<script src="assets/ingredients.js?v=20261014-historial3" integrity="sha384-UZAGYUn78StJZwuh2sQ8gqXgpZJ/CEeVWrg4S2La27CMXDupHuGSgZ5L9PwhBe5M" crossorigin="anonymous" defer></script>
+<script src="assets/ingredients.js?v=20261014-historial4" integrity="sha384-TpBhiLV1Ex61xx/Mhhw7C+PZFBt7RgqgbEb+W/hROQ6l50JAOUwYZpd/N8hUKYYa" crossorigin="anonymous" defer></script>
 <script src="assets/workspace.js?v=20260926-palette2" integrity="sha384-utxWq7sfWaHcdhDZ1l40ybYR/aaKZVKvELLmcM0g9VEMnazYIosqYmkVmUwVVVSB" defer></script>
 </head>
 <body>
@@ -1636,12 +1636,9 @@ body.snav-min .side-theme span { display:none; }
   <div class="modal">
     <h3>📦 Producto comercial</h3>
     <input type="hidden" id="pcId">
-    <!-- Campos técnicos que el guardado/preview siguen usando — se llenan solos desde los controles amigables de abajo -->
-    <input type="hidden" id="pcUnidadBase">
-    <input type="hidden" id="pcUnidadFactura">
-    <input type="hidden" id="pcContUnidad">
-    <input type="hidden" id="pcPiezaCantidad">
-    <input type="hidden" id="pcPiezaUnidad" value="g">
+    <!-- Aquí había cinco campos ocultos (unidad base, unidad de factura, contenido, pieza) que
+         los controles de costeo llenaban solos para la conversión a precio por kilo. Sin esa
+         conversión no hay nada que derivar. -->
 
     <!-- ① QUÉ ES -->
     <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--vm);font-weight:700;margin-bottom:12px">① Qué es</div>
@@ -1650,14 +1647,14 @@ body.snav-min .side-theme span { display:none; }
       <input type="text" id="pcNombre" placeholder="Ej: Salsa catsup Star Value paq 204 pz">
     </div>
     <div class="field" style="margin-bottom:14px">
-      <label>🔑 Nombre en las recetas de Menú</label>
-      <input type="text" id="pcGenerico" placeholder='Ej: "Catsup" — como lo escribes en tus recetas'>
-      <div style="font-size:11px;color:var(--txt2);margin-top:3px">Escribe <strong>un solo nombre principal, sin comas ni puntos separando variantes</strong>. Es la palabra con la que Menú conecta este precio a tus recetas. Si pegas varios nombres, Egresos moverá los demás a “Otras formas” al guardar. Déjalo vacío si este producto no va a Menú.</div>
+      <label>🔑 Nombre del producto</label>
+      <input type="text" id="pcGenerico" placeholder='Ej: "Catsup" — el nombre corto, sin la presentación'>
+      <div style="font-size:11px;color:var(--txt2);margin-top:3px">Es lo que junta las <strong>presentaciones del mismo producto</strong> bajo un solo renglón: la caja de 3 kg y el frasco de 1 kg comparten historial. Escribe <strong>un solo nombre, sin comas separando variantes</strong>; si pegas varios, los demás se mueven a “Otras formas” al guardar.</div>
     </div>
     <div class="field" style="margin-bottom:14px">
-      <label>Otras formas en que lo escriben tus recetas (separadas por coma)</label>
+      <label>Otras formas en que aparece en las facturas (separadas por coma)</label>
       <input type="text" id="pcSinonimos" placeholder='Ej: tortillas de maíz, Tortilla'>
-      <div style="font-size:11px;color:var(--txt2);margin-top:3px">Plurales o variantes con calificativo: “tortillas de maíz”, “Ajo picado”. Cada una conecta con este mismo precio. <strong>Mayúsculas y acentos no hace falta ponerlos</strong> — esos ya se conectan solos.</div>
+      <div style="font-size:11px;color:var(--txt2);margin-top:3px">Plurales o variantes con calificativo: “tortillas de maíz”, “Ajo picado”. Cada una cae en este mismo producto. <strong>Mayúsculas y acentos no hace falta ponerlos</strong> — esos ya se conectan solos.</div>
     </div>
     <button type="button" onclick="togglePcDetalles()" id="pcDetallesBtn" style="background:none;border:none;color:var(--vd);cursor:pointer;font-size:12.5px;font-weight:600;padding:4px 0;margin-bottom:10px">▸ Más detalles (proveedor, marca, categoría…)</button>
     <div id="pcDetalles" style="display:none">
@@ -1726,7 +1723,7 @@ body.snav-min .side-theme span { display:none; }
     <div class="form-grid" style="margin-bottom:14px">
       <div class="field">
         <label>Precio que pagaste (por toda la presentación)</label>
-        <input type="number" id="pcPrecioActual" step="0.01" placeholder="Ej: 100.90" oninput="actualizarCalculoPorcion()">
+        <input type="number" id="pcPrecioActual" step="0.01" placeholder="Ej: 100.90">
         <div style="font-size:11px;color:var(--txt2);margin-top:3px">El total del paquete/bolsa completo, no por unidad. Normalmente se llena solo al procesar la factura.</div>
       </div>
       <div class="field">
@@ -1743,18 +1740,18 @@ body.snav-min .side-theme span { display:none; }
     </div>
     <div id="pcProvisionalCampos" style="display:none;background:#FFF8E1;border:1.5px solid var(--do);border-radius:10px;padding:14px 16px;margin-top:12px">
       <div style="font-size:12px;color:var(--txt);margin-bottom:12px;line-height:1.55">
-        Un precio provisional sirve para costear mientras no llega la factura, pero envejece.
-        Sin decir de dónde salió y cuándo, nadie va a poder juzgarlo después — por eso los dos
-        campos son obligatorios para poder validarlo. <strong>En cuanto llegue una factura de este
-        producto, la factura lo reemplaza sola</strong>, aunque sea más vieja.
+        Un precio provisional tapa el hueco mientras no llega la factura, pero envejece. Sin decir
+        de dónde salió y cuándo, nadie va a poder juzgarlo después — por eso conviene llenar los
+        dos campos. <strong>En cuanto llegue una factura de este producto, la factura lo reemplaza
+        sola</strong>, aunque sea más vieja.
       </div>
       <div class="grid-2">
         <div class="field">
-          <label>¿De dónde? *</label>
+          <label>¿De dónde?</label>
           <input type="text" id="pcPrecioFuente" placeholder="Liga, tienda o quién lo estimó">
         </div>
         <div class="field">
-          <label>¿Cuándo se consultó? *</label>
+          <label>¿Cuándo se consultó?</label>
           <input type="date" id="pcPrecioConsulta">
         </div>
       </div>
@@ -1765,65 +1762,15 @@ body.snav-min .side-theme span { display:none; }
       </div>
     </div>
 
-    <!-- ③ CÓMO SE COSTEA -->
-    <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--vm);font-weight:700;margin:20px 0 12px">③ Cómo se costea en Menú</div>
-    <div class="field" style="margin-bottom:14px">
-      <label>¿Cómo se usa este producto en las recetas?</label>
-      <select id="pcCosteo" onchange="toggleCosteoFields()">
-        <option value="">— elige una opción —</option>
-        <option value="medida">⚖️ Por peso o volumen (se pesa o se mide: carne, aceite, harina)</option>
-        <option value="pieza">🔢 Por pieza (se cuenta: pan, huevo, lata)</option>
-        <option value="porcion">🍽️ Por porción (una ración de algo grande)</option>
-      </select>
-    </div>
-
-    <div class="infobox" id="grpTotal" style="background:var(--claro);border-radius:8px;padding:12px;margin-bottom:14px;display:none">
-      <div class="form-grid" style="align-items:end">
-        <div class="field"><label id="grpTotalLabel">¿Cuánto trae en total la presentación completa?</label><input type="number" id="pcContCantidad" step="0.01" placeholder="Ej: 2.4" oninput="actualizarCalculoPorcion()"></div>
-        <div class="field">
-          <label>Unidad</label>
-          <select id="pcTotalUnidad" onchange="syncUnidadBase();actualizarCalculoPorcion()"><option value="kg">kilos (kg)</option><option value="lt">litros (lt)</option></select>
-        </div>
-      </div>
-      <div style="font-size:11px;color:var(--txt2);margin-top:8px">Suma todo lo que trae la presentación. Ej: una caja de 16 botellas de 1 litro son <strong>16 lt</strong>.</div>
-    </div>
-
-    <div class="infobox" id="grpPieza" style="background:var(--claro);border-radius:8px;padding:12px;margin-bottom:14px;display:none">
-      <div class="field"><label>¿Cuántas piezas trae la presentación completa?</label><input type="number" id="pcPiezasPorPresentacion" step="1" placeholder="Ej: 204" oninput="actualizarCalculoPorcion()"></div>
-      <div style="font-size:11px;color:var(--txt2);margin-top:8px">No hace falta el peso — algo que se cuenta por pieza (pan, huevo) no lo necesita.</div>
-    </div>
-
-    <div class="infobox" id="grpPorcionSize" style="background:var(--claro);border-radius:8px;padding:12px;margin-bottom:14px;display:none">
-      <div class="form-grid" style="align-items:end">
-        <div class="field"><label>¿De qué tamaño es una porción?</label><input type="number" id="pcPorcionValor" step="0.01" placeholder="Ej: 120" oninput="actualizarCalculoPorcion()"></div>
-        <div class="field">
-          <label>Unidad de la porción</label>
-          <select id="pcPorcionUnidad" onchange="actualizarCalculoPorcion()"><option value="g">gramos (g)</option><option value="ml">ml</option></select>
-        </div>
-      </div>
-    </div>
-
-    <div class="field" id="grpMerma" style="margin-bottom:14px;display:none">
-      <label>¿Se pierde algo al prepararlo? — opcional</label>
-      <div style="display:flex;align-items:center;gap:8px">
-        <input type="number" id="pcMermaPct" step="0.1" min="0" max="100" placeholder="Ej: 30" style="max-width:130px" oninput="actualizarCalculoPorcion()">
-        <span style="font-size:13px;color:var(--txt2)">% que se desperdicia (hueso, cáscara, descongelado)</span>
-      </div>
-    </div>
-
-    <div id="pcCalcPreview" style="display:none;margin-bottom:14px;padding:12px 14px;background:var(--white);border:1.5px solid var(--vm);border-radius:8px;font-size:13px;line-height:1.6">
-      <div style="font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--vm);font-weight:700;margin-bottom:4px">💡 Precio que verá Menú</div>
-      <div id="pcCalcBody"></div>
-    </div>
-
+    <!-- Aquí estaba la tercera sección del formulario, la del costeo por porción y merma.
+         El historial guarda el precio tal como se facturó; no hay nada que convertir. -->
     <div style="padding:10px 12px;background:var(--claro);border-radius:8px;margin-bottom:16px;font-size:12px;color:var(--txt2)">
       Última factura: <strong id="pcFacturaInfo">—</strong>
-      <div id="pcLegacyFactor" style="margin-top:6px;display:none">⚠ Este producto tiene un <code>factor_conversion</code> antiguo (<span id="pcLegacyFactorVal"></span>) de una versión anterior — ya no se usa. Elige "¿cómo se usa?" arriba en su lugar.</div>
+      <div id="pcLegacyFactor" style="margin-top:6px;display:none">⚠ Este producto trae un <code>factor_conversion</code> (<span id="pcLegacyFactorVal"></span>) de una versión anterior. Se conserva como dato histórico; ya no se usa para nada.</div>
     </div>
     <div class="btn-row">
-      <button class="btn btn-green" onclick="guardarProducto('validado')">✅ Guardar y validar</button>
-      <button class="btn btn-gold" onclick="guardarProducto()">💾 Guardar (sin cambiar estado)</button>
-      <button class="btn btn-light" onclick="guardarProducto('ignorado')">🚫 Marcar ignorado</button>
+      <button class="btn btn-green" onclick="guardarProducto()">💾 Guardar</button>
+      <button class="btn btn-light" onclick="guardarProducto('ignorado')">🚫 Omitir este producto</button>
       <button class="btn btn-red" id="pcBtnEliminar" style="display:none" onclick="eliminarProducto(document.getElementById('pcId').value)">🗑️ Eliminar</button>
       <button class="btn btn-light" onclick="closeProductoModal()">Cancelar</button>
     </div>
@@ -2135,7 +2082,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-14-egresos-v28";
+const APP_BUILD = "2026-10-14-egresos-v29";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -11082,121 +11029,9 @@ function togglePcDetalles(){
   btn.textContent = (abierto ? "▸" : "▾") + " Más detalles (proveedor, marca, categoría…)";
 }
 
-// El formulario nuevo pregunta "¿cómo se usa?" en lenguaje simple (medida/pieza/porción); esta
-// función traduce esa respuesta a los campos técnicos que el guardado y el preview ya usaban
-// (unidad_base, unidad_factura, contenido_unidad), sin cambiar nada del modelo de datos.
-function syncUnidadBase(){
-  const costeo = document.getElementById("pcCosteo")?.value || "";
-  const totalUnidad = document.getElementById("pcTotalUnidad")?.value || "kg"; // kg | lt
-  let ub = "";
-  if(costeo==="medida") ub = totalUnidad;
-  else if(costeo==="pieza") ub = "pz";
-  else if(costeo==="porcion") ub = "porcion";
-  document.getElementById("pcUnidadBase").value = ub;
-  document.getElementById("pcUnidadFactura").value = ub;               // se factura y se costea en la misma unidad
-  document.getElementById("pcContUnidad").value = (costeo==="medida"||costeo==="porcion") ? totalUnidad : "";
-}
-
-// Muestra solo los campos que aplican a la opción elegida.
-function toggleCosteoFields(){
-  const costeo = document.getElementById("pcCosteo").value;
-  document.getElementById("grpTotal").style.display       = (costeo==="medida"||costeo==="porcion") ? "block" : "none";
-  document.getElementById("grpPieza").style.display       = (costeo==="pieza") ? "block" : "none";
-  document.getElementById("grpPorcionSize").style.display = (costeo==="porcion") ? "block" : "none";
-  document.getElementById("grpMerma").style.display       = costeo ? "block" : "none";
-  const lbl = document.getElementById("grpTotalLabel");
-  if(lbl) lbl.textContent = costeo==="porcion" ? "¿Cuánto trae en total la bolsa/paquete?" : "¿Cuánto trae en total la presentación completa?";
-  syncUnidadBase();
-  actualizarCalculoPorcion();
-}
-
-// Vista previa de solo lectura: cuánto sale realmente el precio en la unidad base elegida
-// (kg, lt, pieza o porción), tomando en cuenta la merma — EXACTAMENTE el mismo cálculo que
-// precioPorUnidadBase() usa al sincronizar a Menú (index.html, sección Fase 2), para que lo
-// que se ve aquí mientras se llena el formulario sea lo mismo que se va a mandar. No escribe
-// nada, es puramente informativo.
-// Ej. bolsa de papa 2.4kg a $200, merma 5%, porción 120g -> $10.53 reales por porción.
-// Ej. paquete de 204 piezas de catsup a $100.90 -> $0.49 reales por pieza.
-function actualizarCalculoPorcion(){
-  const box = document.getElementById("pcCalcPreview");
-  const body = document.getElementById("pcCalcBody");
-  if(!box || !body) return;
-  syncUnidadBase();
-
-  const unidadBase = document.getElementById("pcUnidadBase").value;
-  if(!unidadBase){ box.style.display = "none"; return; }
-  box.style.display = "block";
-
-  const num = (id)=>{ const v = document.getElementById(id).value; const n = parseFloat(v); return (v===""||isNaN(n)) ? null : n; };
-  const precio = num("pcPrecioActual");
-  const merma = num("pcMermaPct") || 0;
-  const unidadFactura = document.getElementById("pcUnidadFactura").value;
-
-  if(precio==null){
-    body.innerHTML = `Completa el <strong>Precio actual</strong> para ver el cálculo.`;
-    return;
-  }
-
-  if(unidadBase==="pz"){
-    let piezas = num("pcPiezasPorPresentacion");
-    if((!piezas || piezas<=0) && unidadFactura===unidadBase) piezas = 1;
-    if(!piezas || piezas<=0){
-      body.innerHTML = `Completa <strong>Piezas por presentación</strong> para ver el precio por pieza (no hace falta el peso — un producto que se cuenta por pieza no lo necesita).`;
-      return;
-    }
-    const usables = piezas*(1-merma/100);
-    body.innerHTML = `
-      ${piezas} pieza(s)${merma>0?` · ${usables.toFixed(1)} usables tras ${merma}% de merma`:""}<br>
-      Precio real por pieza: <strong>$${(precio/usables).toFixed(2)}</strong>
-      ${merma>0?` (sin merma sería $${(precio/piezas).toFixed(2)})`:""}
-    `;
-    return;
-  }
-
-  // kg, lt y porción necesitan el contenido total (en gramos o ml — se tratan igual).
-  const contCant = num("pcContCantidad");
-  const contUnidad = document.getElementById("pcContUnidad").value || null;
-  const piezas = num("pcPiezasPorPresentacion");
-  const piezaCant = num("pcPiezaCantidad");
-
-  let contenidoG = null;
-  if(contCant!=null && (contUnidad==="kg"||contUnidad==="lt")) contenidoG = contCant*1000;
-  else if(piezas!=null && piezaCant!=null) contenidoG = piezas*piezaCant;
-  else if(unidadFactura && unidadFactura===unidadBase && (unidadBase==="kg"||unidadBase==="lt")) contenidoG = 1000;
-
-  if(unidadBase==="kg" || unidadBase==="lt"){
-    if(contenidoG==null){
-      body.innerHTML = `Completa <strong>Contenido</strong> (en kg/lt) o <strong>Piezas y peso</strong> para ver el precio por ${unidadBase}.`;
-      return;
-    }
-    const usable = contenidoG*(1-merma/100);
-    body.innerHTML = `
-      Contenido usable tras ${merma}% de merma: <strong>${(usable/1000).toFixed(3)} ${unidadBase}</strong><br>
-      Precio real por ${unidadBase}: <strong>$${(precio/(usable/1000)).toFixed(2)}</strong>
-      ${merma>0?` (sin merma sería $${(precio/(contenidoG/1000)).toFixed(2)})`:""}
-    `;
-    return;
-  }
-
-  if(unidadBase==="porcion"){
-    const porcionValor = num("pcPorcionValor");
-    const porcionUnidad = document.getElementById("pcPorcionUnidad").value;
-    if(contenidoG==null || !porcionValor){
-      body.innerHTML = `Completa <strong>Contenido</strong> o <strong>Piezas y peso</strong>, y <strong>Tamaño de porción</strong> para ver el cálculo.`;
-      return;
-    }
-    const usable = contenidoG*(1-merma/100);
-    const porcionesUsables = usable/porcionValor;
-    const porcionesNominal = contenidoG/porcionValor;
-    body.innerHTML = `
-      Contenido usable tras ${merma}% de merma: <strong>${(usable/1000).toFixed(3)} ${porcionUnidad==="g"?"kg":"lt"}</strong> ·
-      ${porcionesUsables.toFixed(1)} porciones de ${porcionValor}${porcionUnidad}<br>
-      Precio real por porción: <strong>$${(precio/porcionesUsables).toFixed(2)}</strong>
-      ${merma>0?` (sin merma sería $${(precio/porcionesNominal).toFixed(2)})`:""}
-    `;
-    return;
-  }
-}
+// Aquí vivía actualizarCalculoPorcion(): la vista previa del «precio que verá Menú», con la
+// merma descontada y el precio por kilo, litro, pieza o porción. El asset ya la sombreaba con
+// una versión vacía; se retira porque además tocaba campos del formulario que ya no existen.
 
 function abrirEditorProducto(id){
   const p = id ? _catalogoProductos.find(x=>x.id===id) : null;
@@ -11211,7 +11046,6 @@ function abrirEditorProducto(id){
   document.getElementById("pcCategoria").value = p?.categoria || "";
   document.getElementById("pcPresentacion").value = p?.presentacion || "";
   document.getElementById("pcNotas").value = p?.notas || "";
-  document.getElementById("pcMermaPct").value = p?.merma_pct ?? "";
   document.getElementById("pcPrecioActual").value = p?.precio_actual ?? "";
   document.getElementById("pcFechaPrecio").value = p?.fecha_precio || (p ? "" : todayStr());
   // Un producto viejo no trae precio_origen. Se asume factura: asumir "web" caducaría de golpe
@@ -11222,31 +11056,8 @@ function abrirEditorProducto(id){
   document.getElementById("pcPrecioVigencia").value = p?.precio_vigencia_hasta || "";
   togglePrecioOrigen();
 
-  // Traduce la unidad_base guardada a la pregunta amigable "¿cómo se usa?".
-  const ub = p?.unidad_base || "";
-  const costeo = (ub==="kg"||ub==="lt") ? "medida" : (ub==="pz" ? "pieza" : (ub==="porcion" ? "porcion" : ""));
-  document.getElementById("pcCosteo").value = costeo;
-
-  // Contenido total (medida/porción): usa el contenido guardado, o lo calcula de piezas×peso
-  // si el producto es de una versión anterior que lo guardó así.
-  let totalCant = "", totalUnidad = (ub==="lt") ? "lt" : "kg";
-  if(costeo==="medida" || costeo==="porcion"){
-    if(p?.contenido_cantidad!=null && (p?.contenido_unidad==="kg"||p?.contenido_unidad==="lt")){
-      totalCant = p.contenido_cantidad; totalUnidad = p.contenido_unidad;
-    } else if(p?.piezas_por_presentacion && p?.peso_pieza_valor){
-      totalUnidad = (p.peso_pieza_unidad==="ml") ? "lt" : "kg";
-      totalCant = Math.round((p.piezas_por_presentacion*p.peso_pieza_valor)/10)/100; // g→kg / ml→lt
-    }
-  }
-  document.getElementById("pcContCantidad").value = totalCant;
-  document.getElementById("pcTotalUnidad").value = totalUnidad;
-  document.getElementById("pcPiezasPorPresentacion").value = (costeo==="pieza") ? (p?.piezas_por_presentacion ?? (p?.contenido_unidad==="pz" ? p?.contenido_cantidad : "") ?? "") : "";
-  document.getElementById("pcPorcionValor").value = p?.porcion_valor ?? "";
-  document.getElementById("pcPorcionUnidad").value = p?.porcion_unidad || "g";
-  document.getElementById("pcPiezaCantidad").value = "";
-  document.getElementById("pcPiezaUnidad").value = "g";
-
-  toggleCosteoFields();
+  // Aquí se traducía la unidad_base guardada a la pregunta «¿cómo se usa?» y se llenaban los
+  // campos de contenido, piezas, porción y merma. Esos campos ya no existen en el formulario.
 
   // Abre "Más detalles" solo si el producto ya trae algo ahí, para no esconder datos existentes.
   const tieneDetalles = p && (p.proveedor_nombre||p.marca||p.familia||p.categoria||p.presentacion||(p.alias_factura||[]).length>1||p.notas);
@@ -11283,34 +11094,12 @@ async function guardarProducto(nuevoEstado){
   const sinonimos = nombresMenu.sinonimos;
   const numOrNull = (v)=>{ const n = parseFloat(v); return (v===""||isNaN(n)) ? null : n; };
 
-  // La merma tiene que ser un porcentaje real: negativa abarataría el producto por arte de
-  // magia, y 100%+ divide entre cero o da precios negativos.
-  const _merma = numOrNull(document.getElementById("pcMermaPct").value);
-  if(_merma!=null && (_merma<0 || _merma>=100)){ alert("La merma debe estar entre 0 y 99.9%."); return; }
   const _precio = numOrNull(document.getElementById("pcPrecioActual").value);
   if(_precio!=null && _precio<=0){ alert("El precio debe ser mayor que cero (o déjalo vacío)."); return; }
 
-  // Los campos técnicos de conversión se derivan de la pregunta "¿cómo se usa?" (pcCosteo).
-  // Solo se guarda lo que aplica a esa opción — los demás quedan null, para que no queden
-  // datos viejos colgando si el usuario cambia de opción.
-  syncUnidadBase();
-  const costeo = document.getElementById("pcCosteo").value;
-  const totalUnidad = document.getElementById("pcTotalUnidad").value; // kg | lt
-  let contenido_cantidad=null, contenido_unidad=null, piezas_pp=null, unidad_base=null, porcion_valor=null, porcion_unidad=null;
-  if(costeo==="medida"){
-    contenido_cantidad = numOrNull(document.getElementById("pcContCantidad").value);
-    contenido_unidad = totalUnidad;
-    unidad_base = totalUnidad;
-  } else if(costeo==="pieza"){
-    piezas_pp = numOrNull(document.getElementById("pcPiezasPorPresentacion").value);
-    unidad_base = "pz";
-  } else if(costeo==="porcion"){
-    contenido_cantidad = numOrNull(document.getElementById("pcContCantidad").value);
-    contenido_unidad = totalUnidad;
-    porcion_valor = numOrNull(document.getElementById("pcPorcionValor").value);
-    porcion_unidad = document.getElementById("pcPorcionUnidad").value;
-    unidad_base = "porcion";
-  }
+  // Aquí se derivaban los campos de conversión (contenido, piezas, porción, unidad base, merma)
+  // de la pregunta «¿cómo se usa?». Ya no se escriben: los que tengan los productos viejos se
+  // conservan como dato histórico, pero ninguno nuevo se calcula ni se guarda.
 
   const datos = {
     proveedor_id: existente?.proveedor_id ?? null,
@@ -11324,16 +11113,7 @@ async function guardarProducto(nuevoEstado){
     familia: document.getElementById("pcFamilia").value.trim(),
     categoria: document.getElementById("pcCategoria").value.trim(),
     presentacion: document.getElementById("pcPresentacion").value,
-    unidad_factura: unidad_base,
-    contenido_cantidad: contenido_cantidad,
-    contenido_unidad: contenido_unidad,
-    piezas_por_presentacion: piezas_pp,
-    peso_pieza_valor: null,
-    peso_pieza_unidad: null,
-    unidad_base: unidad_base,
-    porcion_valor: porcion_valor,
-    porcion_unidad: porcion_unidad,
-    merma_pct: numOrNull(document.getElementById("pcMermaPct").value),
+    unidad_factura: existente?.unidad_factura ?? null,
     estado: nuevoEstado || existente?.estado || "pendiente",
     precio_actual: numOrNull(document.getElementById("pcPrecioActual").value),
     fecha_precio: document.getElementById("pcFechaPrecio").value || null,
