@@ -298,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261015-consulta1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261015-consulta2'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -628,4 +628,67 @@ test('el importe se declara por lo que es: suma de renglones con cantidad, sin I
   assert.match(src,/sin IVA/,'llamarle «total» a esto lo haría pasar por el total del gasto');
   assert.match(src,/plural\(conImporte\.length,'renglón','renglones'\)/,'hay que decir sobre cuántos renglones se sumó');
   assert.match(src,/con cantidad, sin IVA/);
+});
+
+// ─── El desplegable de producto y la tabla sin desborde ──────────────────────
+test('el desplegable separa los productos que la búsqueda revuelve',()=>{
+  // Buscar «papa» traía Papa, Papaya, Puré de papa y Papa Casera en una sola lista.
+  const rows=C.purchaseRows([
+    conCompras([compra({id:'o1'}),compra({id:'o2',fecha:'2026-10-01'})],{id:'a',nombre_comercial:'Papa Lisa 2.5 kg',ingrediente_generico:'PAPA'}),
+    conCompras([compra({id:'o3'})],{id:'b',nombre_comercial:'PAPA',ingrediente_generico:'PAPA'}),
+    conCompras([compra({id:'o4'})],{id:'c',nombre_comercial:'Papaya',ingrediente_generico:'Papaya'}),
+    conCompras([compra({id:'o5'})],{id:'d',nombre_comercial:'Puré de papa',ingrediente_generico:'Puré de papa'}),
+  ]);
+  const lista=C.productList(rows);
+  assert.deepEqual(lista.map(g=>g.nombre),['PAPA','Papaya','Puré de papa'],'ordenado por nombre, un renglón por producto');
+  const papa=lista.find(g=>g.nombre==='PAPA');
+  assert.equal(papa.compras,3,'suma las compras de sus dos presentaciones');
+  assert.equal(papa.presentaciones,2);
+});
+test('elegir un producto deja solo sus compras',()=>{
+  const rows=C.purchaseRows([
+    conCompras([compra({id:'o1'})],{id:'a',ingrediente_generico:'PAPA'}),
+    conCompras([compra({id:'o2'})],{id:'b',ingrediente_generico:'Papaya'}),
+  ]);
+  const papa=C.productList(rows).find(g=>g.nombre==='PAPA');
+  const solo=C.filterPurchases(rows,{grupo:papa.grupoId});
+  assert.equal(solo.length,1);
+  assert.equal(solo[0].producto,'PAPA');
+  assert.equal(C.filterPurchases(rows,{grupo:'no-existe'}).length,0);
+});
+test('el desplegable se arma sin su propio filtro, para poder cambiar de producto',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // Si se armara con el filtro puesto, elegir un producto dejaría una sola opción en la lista
+  // y no habría forma de cambiarse a otro sin limpiar todo.
+  assert.match(src,/const base=C\.filterPurchases\(todas,\{\.\.\.consulta,producto:'',grupo:'',texto:query\}\)/);
+  assert.match(src,/productos\.some\(x=>x\.grupoId===consulta\.producto\)\?consulta\.producto:''/,'un producto que ya no está entre las opciones debe ignorarse, no vaciar la pantalla');
+});
+test('la gráfica no se dibuja con muchos productos revueltos',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/\(grupos\.size===1\|\|series\.length<=SERIE_TOPE\)\?chart\(series\)/,'tres líneas entre trece son ruido con pinta de dato');
+  assert.match(src,/Elige un producto para ver la gráfica/);
+});
+test('la tabla no repite el nombre en dos columnas ni deja que se desborde',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  const css=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.css'),'utf8');
+  const encabezados=src.match(/\['Fecha',[^\]]*\]/)[0];
+  assert.equal(/'Presentación'/.test(encabezados),false,'Producto y Presentación traían el mismo texto y se encimaban');
+  assert.match(encabezados,/'Producto'/);
+  // table-layout:fixed es lo que obliga al texto largo a partirse DENTRO de su celda; sin eso
+  // el nombre se salía por encima de la columna de al lado.
+  assert.match(css,/\.ing-table\{[^}]*table-layout:fixed/);
+  assert.match(css,/\.ing-table th,\.ing-table td\{[^}]*overflow-wrap:anywhere/);
+  // Una cifra partida a la mitad («$2,520.0 / 0») es ilegible.
+  assert.match(css,/\.ing-table \.ing-num\{[^}]*white-space:nowrap/);
+});
+test('el eje nunca rotula «-$0»',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // Math.ceil de un negativo chico devuelve -0, e Intl lo formatea como «-$0».
+  assert.match(src,/out\.push\(v===0\?0:v\)/,'volvió el -0 del eje');
+  assert.equal(Object.is(Math.ceil(-9.6/50)*50,-0),true,'si esto deja de ser -0, el guardia de arriba sobra');
+});
+test('las cantidades se pluralizan: «6 piezas», no «6 pieza»',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/unitN=\(x,n\)=>n===1\?unit\(x\):/);
+  assert.match(src,/unitN\(r\.unidad,r\.cantidad\)/);
 });

@@ -231,6 +231,15 @@
     }
     return rows.sort((a, b) => b.fecha.localeCompare(a.fecha) || a.producto.localeCompare(b.producto, 'es') || a.id.localeCompare(b.id));
   }
+  function productList(rows) {
+    const byGroup = new Map();
+    for (const r of rows || []) {
+      if (!byGroup.has(r.grupoId)) byGroup.set(r.grupoId, { grupoId:r.grupoId, nombre:r.producto || r.presentacion, compras:0, presentaciones:new Set() });
+      const g = byGroup.get(r.grupoId); g.compras++; g.presentaciones.add(r.productoId);
+    }
+    return [...byGroup.values()].map(g => ({ ...g, presentaciones:g.presentaciones.size }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es') || a.grupoId.localeCompare(b.grupoId));
+  }
   const supplierList = rows => [...new Set((rows || []).map(r => r.proveedor).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
   function filterPurchases(rows, filter) {
     const f = filter || {}, text = norm(f.texto), supplier = norm(f.proveedor);
@@ -238,6 +247,7 @@
     const from = date(f.desde).slice(0, 10), to = date(f.hasta).slice(0, 10);
     const terms = text ? text.split(' ') : [];
     return (rows || []).filter(r => {
+      if (f.grupo && r.grupoId !== f.grupo) return false;
       if (supplier && norm(r.proveedor) !== supplier) return false;
       if (from && r.dia < from) return false;
       if (to && r.dia > to) return false;
@@ -270,5 +280,5 @@
       // el color a las líneas que sobreviven al filtro.
       .sort((a, b) => a.productoId.localeCompare(b.productoId));
   }
-  return { norm, date, destination, ingredientName, groupId, findProduct, observations, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets, purchaseRows, supplierList, filterPurchases, priceSeries };
+  return { norm, date, destination, ingredientName, groupId, findProduct, observations, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets, purchaseRows, supplierList, productList, filterPurchases, priceSeries };
 });
