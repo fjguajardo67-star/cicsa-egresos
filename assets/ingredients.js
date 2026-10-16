@@ -13,8 +13,10 @@
   // escribir «arroz» en Productos y cambiar a Consulta debe seguir hablando de arroz.
   let consulta={proveedor:'',desde:'',hasta:'',producto:''};
   const money=x=>new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN'}).format(x);
-  const unit=x=>({pz:'pieza',porcion:'porción',lt:'L',kg:'kg'}[x]||x);
-  const unitN=(x,n)=>n===1?unit(x):({pz:'piezas',porcion:'porciones'}[x]||unit(x));
+  // Las claves son las que devuelve unidadDesdeClaveSAT a partir de ClaveUnidad del CFDI.
+  // Faltaban cja y paq, y se pintaban crudas: «6 cja» en vez de «6 cajas».
+  const unit=x=>({pz:'pieza',porcion:'porción',lt:'L',kg:'kg',cja:'caja',paq:'paquete'}[x]||x);
+  const unitN=(x,n)=>n===1?unit(x):({pz:'piezas',porcion:'porciones',cja:'cajas',paq:'paquetes'}[x]||unit(x));
   const clean=p=>{const {id,...data}=p;return data;};
   const $=id=>document.getElementById(id);
   const e=s=>esc(String(s??''));

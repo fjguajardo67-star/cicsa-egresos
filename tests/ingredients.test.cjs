@@ -298,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261015-consulta3'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261016-unidad1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -848,4 +848,39 @@ test('fusionar exige al menos dos, y que el nombre que queda sea uno de ellos',(
   const [racimo]=C.duplicateClusters(productos);
   assert.throws(()=>C.homologateMany(productos,[racimo.miembros[0].id],racimo.miembros[0].id),/al menos dos/);
   assert.throws(()=>C.homologateMany(productos,racimo.miembros.map(g=>g.id),'ing:otro'),/tiene que ser uno de los que se fusionan/);
+});
+
+// ─── La unidad de factura volvió a tener campo ───────────────────────────────
+test('el formulario deja decir en qué unidad factura el proveedor',()=>{
+  const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
+  const modal=html.slice(html.indexOf('id="productoModal"'),html.indexOf('id="faltantesModal"'));
+  // La fase C se llevó los controles de costeo y con ellos el único sitio donde se decía «esto
+  // se factura por litro». El dato siguió vivo —el XML lo trae y pinta «$20.12 / L»— pero un
+  // producto capturado a mano se quedaba sin él, sin forma de verlo ni corregirlo.
+  assert.match(modal,/id="pcUnidad"/,'no hay dónde poner la unidad');
+  for(const u of ['kg','lt','pz','cja','paq'])
+    assert.match(modal,new RegExp('<option value="'+u+'"'),'falta la unidad '+u);
+  // Presentación es el formato, no la unidad: la gasolina es granel Y por litro.
+  assert.match(modal,/id="pcPresentacion"/,'la presentación sigue siendo su propio campo');
+  assert.equal(/<option value="litro"/.test(modal),false,'la unidad no se mete entre las presentaciones');
+});
+test('la unidad se lee y se guarda, en los dos campos que la usan',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
+  assert.match(src,/getElementById\("pcUnidad"\)\.value = p\?\.unidad_compra \|\| p\?\.unidad_factura \|\| ""/,'el editor tiene que mostrar la que ya trae');
+  // unidad_compra es la que leen el historial y findProduct; unidad_factura la de los productos
+  // viejos. Guardar solo una las desincroniza y el «/ L» deja de salir.
+  assert.match(src,/unidad_compra: document\.getElementById\("pcUnidad"\)\.value/);
+  assert.match(src,/unidad_factura: document\.getElementById\("pcUnidad"\)\.value/);
+});
+test('una unidad puesta a mano aparece en el historial de compras',()=>{
+  // Sin unidad en la observación, purchaseRows cae en la del producto. Es el caso de todo lo
+  // capturado a mano, que es justo lo que el campo nuevo permite arreglar.
+  const [row]=C.purchaseRows([conCompras([compra({unidad:''})],{unidad_compra:'lt'})]);
+  assert.equal(row.unidad,'lt');
+});
+test('las cajas y los paquetes ya no se pintan crudos',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // unidadDesdeClaveSAT devuelve cja y paq; unit() no los conocía y salía «6 cja».
+  assert.match(src,/cja:'caja',paq:'paquete'/);
+  assert.match(src,/cja:'cajas',paq:'paquetes'/);
 });

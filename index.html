@@ -623,7 +623,7 @@ body.snav-min .side-theme span { display:none; }
 <link rel="stylesheet" href="assets/ingredients.css?v=20261015-consulta3" integrity="sha384-rcAQEvteucXE3HDZWJjjQIqWw4NcGU7BVGJ5ssAialP7/Ndyiw+ndKruYvycK483" crossorigin="anonymous">
 <script src="assets/ingredients-core.js?v=20261015-consulta3" integrity="sha384-/nFuQBXUZhQw83nmIuR9mV9cMeozyxUHJiTVrQl5jI/s1EA+4SSMU3x7uq9h79nY" crossorigin="anonymous"></script>
 <script src="assets/ingredients-store.js?v=20261014-historial3" integrity="sha384-GOsOADZDUnrxXP8/Kx0Za73SvCsOzy5i7BWUJoWK6eGgAFZh5iPcVC+XstyFv+gM" crossorigin="anonymous"></script>
-<script src="assets/ingredients.js?v=20261015-consulta3" integrity="sha384-LPZ4FaY9771JvYk8nfRE6s73t/SqythfJVnd1ziTR4TgpX8jf5hb+qXQ21KOKB2e" crossorigin="anonymous" defer></script>
+<script src="assets/ingredients.js?v=20261016-unidad1" integrity="sha384-ZFq3qgDmuroHFBCgSob6S4/ipVv7enn33JvwifaGJPAMQYFky8JW3ICCGTueJfbZ" crossorigin="anonymous" defer></script>
 <script src="assets/workspace.js?v=20260926-palette2" integrity="sha384-utxWq7sfWaHcdhDZ1l40ybYR/aaKZVKvELLmcM0g9VEMnazYIosqYmkVmUwVVVSB" defer></script>
 </head>
 <body>
@@ -1714,6 +1714,20 @@ body.snav-min .side-theme span { display:none; }
             <option value="cubeta">Cubeta</option>
           </select>
         </div>
+        <div class="field">
+          <label>Unidad que factura el proveedor</label>
+          <select id="pcUnidad">
+            <option value="">— sin definir —</option>
+            <option value="kg">Kilogramos (kg)</option>
+            <option value="lt">Litros (L)</option>
+            <option value="pz">Piezas</option>
+            <option value="cja">Cajas</option>
+            <option value="paq">Paquetes</option>
+          </select>
+          <div style="font-size:11px;color:var(--txt2);margin-top:3px">En qué unidad viene el precio de la factura. Se llena sola desde el XML; aquí solo se corrige o se pone a lo capturado a mano. No es lo mismo que la presentación: la gasolina es <strong>granel</strong> y se factura <strong>por litro</strong>.</div>
+        </div>
+      </div>
+      <div class="form-grid" style="margin-bottom:14px">
         <div class="field"><label>Notas (opcional)</label><input type="text" id="pcNotas" placeholder="Observaciones"></div>
       </div>
     </div>
@@ -2082,7 +2096,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-15-egresos-v32";
+const APP_BUILD = "2026-10-16-egresos-v33";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -11045,6 +11059,7 @@ function abrirEditorProducto(id){
   document.getElementById("pcFamilia").value = p?.familia || "";
   document.getElementById("pcCategoria").value = p?.categoria || "";
   document.getElementById("pcPresentacion").value = p?.presentacion || "";
+  document.getElementById("pcUnidad").value = p?.unidad_compra || p?.unidad_factura || "";
   document.getElementById("pcNotas").value = p?.notas || "";
   document.getElementById("pcPrecioActual").value = p?.precio_actual ?? "";
   document.getElementById("pcFechaPrecio").value = p?.fecha_precio || (p ? "" : todayStr());
@@ -11113,7 +11128,10 @@ async function guardarProducto(nuevoEstado){
     familia: document.getElementById("pcFamilia").value.trim(),
     categoria: document.getElementById("pcCategoria").value.trim(),
     presentacion: document.getElementById("pcPresentacion").value,
-    unidad_factura: existente?.unidad_factura ?? null,
+    // Las dos se escriben juntas: unidad_compra es la que lee el historial y findProduct,
+    // unidad_factura la que traen los productos viejos. Dejarlas distintas las desincroniza.
+    unidad_compra: document.getElementById("pcUnidad").value,
+    unidad_factura: document.getElementById("pcUnidad").value,
     estado: nuevoEstado || existente?.estado || "pendiente",
     precio_actual: numOrNull(document.getElementById("pcPrecioActual").value),
     fecha_precio: document.getElementById("pcFechaPrecio").value || null,
