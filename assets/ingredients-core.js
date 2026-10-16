@@ -144,12 +144,20 @@
   ]);
   const ambiguousIngredients=new Set(['producto','alimento','insumo','salsa','aderezo','pasta','aceite','carne','queso','bebida','condimento','mezcla']);
   const presentationQuantity=/\b(?:\d+(?:[.,]\d+)?\s*[x×]\s*)*\d+(?:[.,]\d+)?\s*(?:kilogramos?|kilos?|kgs?|gramos?|grs?|mg|miligramos?|g|litros?|lts?|mililitros?|ml|cc|l|onzas?|oz|libras?|lb|pzas?|pz|piezas?|unidades?|botes?|cajas?|bolsas?|latas?|frascos?|botellas?|cubetas?|paquetes?|packs?)(?=$|[\s,.;:/()])/gi;
+  // Un número de ticket o folio identifica la COMPRA, no el producto. La gasolinera factura
+  // «87 Octanos (Ticket: 757265)» y cada carga trae el suyo, así que cada una se volvía un
+  // producto distinto: decenas de «87 Octanos» que no se juntaban nunca ni se proponían como
+  // duplicados, porque sus identidades sí eran diferentes.
+  // Se exige al menos un dígito en el código: «ticket» suelto, sin número, no es una referencia.
+  // El código puede traer letras y guiones («A-4471»), así que se pide que haya ALGÚN dígito
+  // en vez de exigir que empiece por uno. Sin eso, «Referencia: A-4471» se quedaba entera.
+  const transactionRef = /[([{]?\s*\b(?:tickets?|folios?|referencias?|remisi[oó]n)\b\s*[:#-]?\s*(?:n[oº°]?\.?\s*)?(?=[A-Za-z0-9-]*\d)[A-Za-z0-9][A-Za-z0-9-]*\s*[)\]}]?/gi;
   function ingredientIdentity(p) {
     // El nombre comercial es la evidencia; un nombre genérico amplio no borra sus calificativos.
     const name=String(p.nombre_comercial||p.ingrediente_nombre||p.ingrediente_generico||'');
     // Un porcentaje puede definir el alimento (p. ej., grasa), no el tamaño del empaque.
     const percentages=unique((name.match(/\d+(?:[.,]\d+)?\s*%/g)||[]).map(x=>String(Number(x.replace('%','').replace(',','.').trim())))).sort();
-    let text=norm(name.replace(/\d+(?:[.,]\d+)?\s*%/g,' ').replace(presentationQuantity,' '));
+    let text=norm(name.replace(transactionRef,' ').replace(/\d+(?:[.,]\d+)?\s*%/g,' ').replace(presentationQuantity,' '));
     for(const metadata of [p.marca,p.proveedor_nombre]){
       const phrase=norm(metadata);if(phrase)text=(' '+text+' ').split(' '+phrase+' ').join(' ').trim();
     }
