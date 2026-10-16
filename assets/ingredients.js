@@ -234,6 +234,40 @@
       +`<line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" stroke="#cfd9d3" stroke-width="1"></line>${rejilla}${ejeX}${lineas}</svg>`
       +`<ul class="ing-legend">${leyenda}</ul>${aviso}${sobran}</figure>`;
   }
+  // ─── Quién vende más barato ──────────────────────────────────────────────────
+  // No convierte entre unidades: compara dentro de cada una y dice cuándo la comparación es
+  // directa (kg, litro) y cuándo depende del tamaño del empaque (pieza, caja, paquete).
+  function comparativa(rows){
+    const bloques=C.supplierComparison(rows);
+    if(!bloques.length)return '';
+    const bloque=b=>{
+      const titulo=b.unidad?`por ${e(unit(b.unidad))}`:'sin unidad en la factura';
+      const aviso=b.comparable
+        ? ''
+        : `<p class="ing-aviso">El precio es <strong>por ${e(unit(b.unidad)||'unidad')}</strong>, o sea por empaque: esta columna solo se compara si el empaque es del mismo tamaño. Mira la presentación de cada uno antes de concluir.</p>`;
+      // Dos «últimos precios» con meses de diferencia no se comparan en serio: uno puede verse
+      // más barato solo por ser más viejo.
+      const viejo=b.desfase>60?`<p class="ing-aviso">Entre el precio más reciente y el más viejo de esta tabla hay ${e(plural(b.desfase,'día','días'))}. Uno puede verse más barato solo por ser anterior.</p>`:'';
+      return `<section class="ing-comparativa ${b.comparable?'ing-comp-directa':'ing-comp-empaque'}">`
+        +`<h4>${titulo}${b.comparable?' <span>comparable directo</span>':' <span>depende del empaque</span>'}</h4>${aviso}${viejo}`
+        +`<div class="ing-table-wrap"><table class="ing-table ing-table-comp"><thead><tr>`
+        +['Proveedor','Presentación','Compras','Último precio','Promedio','Diferencia'].map(h=>`<th scope="col">${h}</th>`).join('')
+        +`</tr></thead><tbody>`
+        +b.proveedores.map(x=>`<tr${x.clave===b.barato?' class="ing-barato"':''}>`
+          +`<td>${e(x.nombre)}</td>`
+          +`<td>${e(x.presentaciones.join(' · ')||'—')}</td>`
+          +`<td class="ing-num">${x.compras.toLocaleString('es-MX')}</td>`
+          +`<td class="ing-num">${e(money(x.ultimo.precio))}<span class="ing-sub">${e(fecha(x.ultimo.dia))}</span></td>`
+          +`<td class="ing-num">${e(money(x.promedio))}</td>`
+          +`<td class="ing-num">${x.clave===b.barato?'<strong>el más barato</strong>'
+            :`+${e(money(x.sobreprecio))}${x.sobreprecioPct==null?'':`<span class="ing-sub">+${x.sobreprecioPct.toFixed(1)}%</span>`}`}</td>`
+          +`</tr>`).join('')
+        +`</tbody></table></div></section>`;
+    };
+    return `<div class="ing-comparativas"><h3 class="ing-comp-titulo">Quién vende más barato</h3>`
+      +`<p>Se compara dentro de cada unidad de factura, sin convertir entre ellas. La diferencia se mide contra el último precio del más barato.</p>`
+      +bloques.map(bloque).join('')+`</div>`;
+  }
   function consultaMarkup(){
     const todas=C.purchaseRows(_catalogoProductos);
     // El desplegable se arma SIN el filtro de producto: si se armara con él, elegir uno dejaría
@@ -279,7 +313,7 @@
     const grupos=new Set(rows.map(r=>r.grupoId));
     const grafica=!series.length?''
       :(grupos.size===1||series.length<=SERIE_TOPE)?chart(series)
-      :`<div class="ing-chart ing-chart-vacia"><p><strong>Elige un producto para ver la gráfica.</strong> `
+      :`<div class="ing-chart ing-chart-vacia"><p><strong>Elige un producto para ver la gráfica y la comparación de proveedores.</strong> `
         +`Esta consulta trae ${e(plural(grupos.size,'producto','productos'))} distintos con `
         +`${e(plural(series.length,'presentación','presentaciones'))}; dibujarlos juntos no diría nada. `
         +`Usa el desplegable de arriba.</p></div>`;
@@ -313,7 +347,10 @@
       +`<td class="ing-num">${r.importe==null?'—':e(money(r.importe))}</td><td class="ing-folio" title="${e(r.folio||'')}">${e(r.folio||'—')}</td></tr>`).join('')
       +`</tbody></table></div>`+(rows.length>tope?`<p>Mostrando ${tope} de ${rows.length.toLocaleString('es-MX')} compras. Acota las fechas, el proveedor o el producto.</p>`:'')
       :`<div class="ing-empty"><h3>No hay compras con esos filtros</h3><p>Prueba otro rango de fechas, otro proveedor o limpia la búsqueda.</p></div>`;
-    return filtros+resumen+gastos+grafica+tabla;
+    // La comparación contesta «a quién le compro esto más barato», así que vive bajo la
+    // misma condición que la gráfica: tiene que haber UN producto, no 370 revueltos.
+    const comparacion=(grupos.size===1&&series.length)?comparativa(rows):'';
+    return filtros+resumen+gastos+grafica+comparacion+tabla;
   }
   // ─── Fusionar duplicados ─────────────────────────────────────────────────────
   // Racimos completos en vez de pares. Con cientos de duplicados, ir de dos en dos por la

@@ -325,6 +325,58 @@
     return [...by.values()].sort((a, b) => b.importe - a.importe || b.compras - a.compras
       || a.nombre.localeCompare(b.nombre, 'es') || a.clave.localeCompare(b.clave));
   }
+  // Comparar precio entre proveedores.
+  //
+  // Lo que hace honesta esta comparación es NO convertir. Un precio por kilo de un proveedor
+  // contra el de otro es directamente comparable venga en el empaque que venga. Un precio por
+  // pieza NO lo es: es el precio del empaque, y una caja de 20 L y otra de 24 L cuestan
+  // distinto por razones legítimas. Convertir de pieza a litro exigiría saber cuánto trae cada
+  // empaque —los campos de contenido que se retiraron en la fase C, a propósito, porque eran
+  // de FORX—. Así que no se convierte: se compara dentro de cada unidad y se dice cuándo esa
+  // comparación es directa y cuándo depende de que el empaque sea del mismo tamaño.
+  const UNIDAD_MEDIDA = new Set(['kg', 'lt']);
+  const diasEntre = (a, b) => Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000);
+  function supplierComparison(rows) {
+    const porUnidad = new Map();
+    for (const r of rows || []) {
+      const proveedor = norm(r.proveedor);
+      if (!proveedor) continue;
+      const unidad = r.unidad || '';
+      if (!porUnidad.has(unidad)) porUnidad.set(unidad, new Map());
+      const sup = porUnidad.get(unidad);
+      if (!sup.has(proveedor)) sup.set(proveedor, { clave:proveedor, nombre:r.proveedor, compras:0, suma:0, peso:0, importe:0, presentaciones:new Set(), ultimo:null });
+      const a = sup.get(proveedor);
+      a.compras++;
+      // Promedio ponderado por cantidad, como en la gráfica: 40 cajas a $90 pesan más que 1 a $120.
+      const peso = r.cantidad == null ? 1 : r.cantidad;
+      a.suma += r.precio * peso; a.peso += peso;
+      if (r.importe != null) a.importe += r.importe;
+      if (r.presentacion) a.presentaciones.add(r.presentacion);
+      if (!a.ultimo || r.fecha > a.ultimo.fecha) a.ultimo = { precio:r.precio, fecha:r.fecha, dia:r.dia, presentacion:r.presentacion || '' };
+    }
+    const out = [];
+    for (const [unidad, sup] of porUnidad) {
+      const proveedores = [...sup.values()].map(a => ({
+        clave:a.clave, nombre:a.nombre, compras:a.compras, importe:a.importe,
+        promedio:a.suma / a.peso, ultimo:a.ultimo,
+        presentaciones:[...a.presentaciones].sort((x, y) => x.localeCompare(y, 'es')),
+      })).sort((a, b) => a.ultimo.precio - b.ultimo.precio || a.nombre.localeCompare(b.nombre, 'es') || a.clave.localeCompare(b.clave));
+      // Un solo proveedor no es una comparación.
+      if (proveedores.length < 2) continue;
+      const barato = proveedores[0];
+      for (const p of proveedores) {
+        p.sobreprecio = p.ultimo.precio - barato.ultimo.precio;
+        p.sobreprecioPct = barato.ultimo.precio > 0 ? (p.ultimo.precio / barato.ultimo.precio - 1) * 100 : null;
+      }
+      // Dos «últimos precios» con meses de diferencia no se comparan en serio: uno puede ser
+      // más barato solo por ser más viejo. Se mide el desfase para poder advertirlo.
+      const dias = proveedores.map(p => p.ultimo.dia).sort();
+      out.push({ unidad, comparable:UNIDAD_MEDIDA.has(unidad), proveedores, barato:barato.clave,
+        desfase:diasEntre(dias[0], dias[dias.length - 1]) });
+    }
+    return out.sort((a, b) => (b.comparable ? 1 : 0) - (a.comparable ? 1 : 0)
+      || b.proveedores.length - a.proveedores.length || a.unidad.localeCompare(b.unidad));
+  }
   function productList(rows) {
     const byGroup = new Map();
     for (const r of rows || []) {
@@ -388,5 +440,5 @@
       // el color a las líneas que sobreviven al filtro.
       .sort((a, b) => a.productoId.localeCompare(b.productoId));
   }
-  return { norm, date, destination, ingredientName, groupId, findProduct, observations, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets, purchaseRows, supplierList, productList, filterPurchases, priceSeries, spendBy, duplicateClusters, homologateMany };
+  return { norm, date, destination, ingredientName, groupId, findProduct, observations, recordPurchase, keys, groups, priceForGroup, homologate, ingredientIdentity, createMatcher, suggest, manualTargets, purchaseRows, supplierList, productList, filterPurchases, priceSeries, spendBy, supplierComparison, duplicateClusters, homologateMany };
 });

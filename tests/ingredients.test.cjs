@@ -298,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261016-fusion1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261016-proveedores1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -976,4 +976,107 @@ test('integración: se conserva el nombre que ELIGES, no el predeterminado',asyn
   await click('fusionar',null,{identity:racimo.identity});
   const nombres=new Set((await m.store.list()).filter(x=>!x.data._internal).map(x=>x.data.ingrediente_nombre));
   assert.deepEqual([...nombres],['PAPA DELGADA EUROPEA BOL 2.5 KG'],'quedó el nombre elegido, no el predeterminado');
+});
+
+// ─── Fase E: comparar precio entre proveedores ───────────────────────────────
+const cmp=(id,precio,fecha,prov,unidad,extra={})=>compra({id:String(id),precio,fecha,proveedor:prov,unidad,...extra});
+const prov=(id,nombre,p,unidad,compras)=>product({id,nombre_comercial:nombre,ingrediente_generico:'Aceite',
+  proveedor_nombre:p,unidad_compra:unidad,compras_forx:compras,precio_actual:null,fecha_precio:null});
+
+test('kilo y litro se comparan directo; pieza, caja y paquete dependen del empaque',()=>{
+  for(const [unidad,esperado] of [['kg',true],['lt',true],['pz',false],['cja',false],['paq',false],['',false]]){
+    const [b]=C.supplierComparison(C.purchaseRows([
+      prov('a','X','Alfa',unidad,[cmp(1,10,'2026-09-01','Alfa',unidad)]),
+      prov('b','X','Beta',unidad,[cmp(2,12,'2026-09-02','Beta',unidad)]),
+    ]));
+    assert.equal(b.comparable,esperado,'unidad '+JSON.stringify(unidad));
+  }
+});
+test('nunca se convierte entre unidades: cada una es su propio bloque',()=>{
+  // Convertir de pieza a litro exigiría saber cuánto trae el empaque, que es justo lo que se
+  // retiró en la fase C. Mezclarlas en un solo ranking inventaría una comparación.
+  const bloques=C.supplierComparison(C.purchaseRows([
+    prov('a','Aceite granel','Alfa','lt',[cmp(1,40,'2026-09-01','Alfa','lt')]),
+    prov('b','Aceite granel','Beta','lt',[cmp(2,42,'2026-09-02','Beta','lt')]),
+    prov('c','Aceite caja 20 L','Beta','pz',[cmp(3,820,'2026-09-03','Beta','pz')]),
+    prov('d','Aceite caja 24 L','Gama','pz',[cmp(4,999,'2026-09-04','Gama','pz')]),
+  ]));
+  assert.deepEqual(bloques.map(b=>b.unidad),['lt','pz']);
+  // Y los comparables van primero: es el bloque en el que se puede confiar sin pensar.
+  assert.deepEqual(bloques.map(b=>b.comparable),[true,false]);
+});
+test('un solo proveedor no es una comparación',()=>{
+  assert.deepEqual(C.supplierComparison(C.purchaseRows([prov('a','X','Alfa','kg',[cmp(1,10,'2026-09-01','Alfa','kg')])])),[]);
+});
+test('ordena por último precio y mide la diferencia contra el más barato',()=>{
+  const [b]=C.supplierComparison(C.purchaseRows([
+    prov('a','X','Caro','kg',[cmp(1,50,'2026-09-01','Caro','kg')]),
+    prov('b','X','Barato','kg',[cmp(2,40,'2026-09-02','Barato','kg')]),
+    prov('c','X','Medio','kg',[cmp(3,44,'2026-09-03','Medio','kg')]),
+  ]));
+  assert.deepEqual(b.proveedores.map(x=>x.nombre),['Barato','Medio','Caro']);
+  assert.equal(b.barato,C.norm('Barato'));
+  const caro=b.proveedores.find(x=>x.nombre==='Caro');
+  assert.equal(caro.sobreprecio,10);
+  assert.equal(Math.round(caro.sobreprecioPct*10)/10,25);
+  assert.equal(b.proveedores[0].sobreprecio,0,'el más barato no se cobra sobreprecio a sí mismo');
+});
+test('el promedio pesa por cantidad, y puede contradecir al último precio',()=>{
+  // Caso real: un proveedor con el último precio más alto puede haber sido más barato en
+  // conjunto. Las dos cifras se muestran porque contestan preguntas distintas.
+  const [b]=C.supplierComparison(C.purchaseRows([
+    prov('a','X','Alfa','kg',[cmp(1,38,'2026-09-01','Alfa','kg',{cantidad:200}),cmp(2,41,'2026-10-02','Alfa','kg',{cantidad:10})]),
+    prov('b','X','Beta','kg',[cmp(3,40,'2026-10-03','Beta','kg',{cantidad:100})]),
+  ]));
+  const alfa=b.proveedores.find(x=>x.nombre==='Alfa');
+  assert.equal(alfa.ultimo.precio,41,'el último es el más reciente, no el más bajo');
+  assert.ok(Math.abs(alfa.promedio-(38*200+41*10)/210)<1e-9,'promedio ponderado por cantidad');
+  assert.ok(alfa.promedio<40,'su promedio es mejor que el último de Beta');
+  assert.equal(b.barato,C.norm('Beta'),'pero el ranking va por último precio');
+});
+test('las grafías del mismo proveedor no se cuentan como dos',()=>{
+  const [b]=C.supplierComparison(C.purchaseRows([
+    prov('a','X','ANA KAREM HUERTA DIAZ','kg',[cmp(1,40,'2026-09-01','ANA KAREM HUERTA DIAZ','kg')]),
+    prov('b','X','ANA KAREM HUERTA DÍAZ','kg',[cmp(2,44,'2026-09-02','ANA KAREM HUERTA DÍAZ','kg')]),
+    prov('c','X','Otro','kg',[cmp(3,50,'2026-09-03','Otro','kg')]),
+  ]));
+  assert.equal(b.proveedores.length,2,'partirlo en dos haría parecer que hay más opciones');
+  assert.equal(b.proveedores[0].compras,2);
+});
+test('se mide el desfase entre el precio más nuevo y el más viejo del cuadro',()=>{
+  // Un precio de hace meses puede verse más barato solo por ser viejo.
+  const [b]=C.supplierComparison(C.purchaseRows([
+    prov('a','X','Viejo','kg',[cmp(1,30,'2026-06-01','Viejo','kg')]),
+    prov('b','X','Nuevo','kg',[cmp(2,40,'2026-10-01','Nuevo','kg')]),
+  ]));
+  assert.equal(b.desfase,122);
+});
+test('cada proveedor lleva sus presentaciones, que es lo que permite juzgar el empaque',()=>{
+  const [b]=C.supplierComparison(C.purchaseRows([
+    prov('a','Aceite caja 20 L','Alfa','pz',[cmp(1,820,'2026-09-01','Alfa','pz')]),
+    prov('b','Aceite caja 24 L','Beta','pz',[cmp(2,999,'2026-09-02','Beta','pz')]),
+  ]));
+  assert.deepEqual(b.proveedores.map(x=>x.presentaciones),[['Aceite caja 20 L'],['Aceite caja 24 L']]);
+});
+test('la comparación solo sale con UN producto elegido, y lo dice',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/const comparacion=\(grupos\.size===1&&series\.length\)\?comparativa\(rows\):''/,'comparar proveedores de 370 productos revueltos no contesta nada');
+  assert.match(src,/solo se compara si el empaque es del mismo tamaño/,'falta la advertencia del empaque');
+  assert.match(src,/sin convertir entre ellas/,'hay que decir que no se convierte');
+  assert.match(src,/b\.desfase>60\?/,'falta avisar cuando los precios son de fechas lejanas');
+});
+test('el bloque comparable va primero aunque llegue después en los datos',()=>{
+  // La prueba de arriba pasaba por casualidad: con «lt» y «pz», el desempate alfabético pone
+  // el litro arriba de todos modos, así que no distinguía la regla. Con «cja» y «kg» el
+  // alfabeto dice lo CONTRARIO —cja va antes que kg—, y además las cajas son las compras más
+  // recientes, que es el orden en que llegan. Solo la regla de «comparable primero» puede
+  // poner el kilo arriba.
+  const bloques=C.supplierComparison(C.purchaseRows([
+    prov('a','Queso caja 10 pz','Alfa','cja',[cmp(1,820,'2026-10-05','Alfa','cja')]),
+    prov('b','Queso caja 12 pz','Beta','cja',[cmp(2,999,'2026-10-04','Beta','cja')]),
+    prov('c','Queso granel','Alfa','kg',[cmp(3,180,'2026-09-02','Alfa','kg')]),
+    prov('d','Queso granel','Beta','kg',[cmp(4,192,'2026-09-01','Beta','kg')]),
+  ]));
+  assert.deepEqual(bloques.map(b=>b.unidad),['kg','cja']);
+  assert.deepEqual(bloques.map(b=>b.comparable),[true,false]);
 });
