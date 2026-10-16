@@ -130,3 +130,23 @@
 .ing-fusion-pie label{font-size:.8rem;font-weight:600;align-self:center;}
 .ing-fusion-pie select{flex:1;min-width:200px;font:inherit;padding:9px 11px;border:1px solid #afc3b7;border-radius:8px;background:#fff;color:#173a2c;}
 @media(max-width:640px){.ing-fusion-pie select,.ing-fusion-pie button{width:100%;}}
+
+/* ─── Comparar proveedores ─────────────────────────────────────────────────── */
+.ing-comparativas{margin:0 0 22px;}
+.ing-comp-titulo{font:600 1.05rem/1.4 system-ui,-apple-system,sans-serif;margin:0 0 4px;color:var(--ing-green);}
+.ing-comparativa{margin-top:16px;padding:14px 16px;border:1px solid #e3e9e5;border-radius:12px;}
+.ing-comp-directa{border-left:4px solid var(--ing-green);}
+.ing-comp-empaque{border-left:4px solid #c9a227;}
+.ing-comparativa h4{font:600 .95rem/1.4 system-ui,-apple-system,sans-serif;margin:0 0 10px;color:var(--ing-green);}
+.ing-comparativa h4 span{font-weight:400;font-size:.8rem;color:var(--ing-muted);}
+.ing-comp-empaque h4{color:#7a6410;}
+.ing-comparativa .ing-aviso{margin:0 0 10px;color:#7a6410;}
+.ing-table-comp{min-width:680px;}
+.ing-table-comp th:nth-child(1),.ing-table-comp td:nth-child(1){width:22%;}
+.ing-table-comp th:nth-child(2),.ing-table-comp td:nth-child(2){width:26%;}
+.ing-table-comp th:nth-child(3),.ing-table-comp td:nth-child(3){width:10%;}
+.ing-table-comp th:nth-child(4),.ing-table-comp td:nth-child(4){width:16%;}
+.ing-table-comp th:nth-child(5),.ing-table-comp td:nth-child(5){width:13%;}
+.ing-table-comp th:nth-child(6),.ing-table-comp td:nth-child(6){width:13%;}
+.ing-table-comp .ing-barato td{background:#eef6f0;}
+.ing-table-comp .ing-barato strong{color:var(--ing-green);}
