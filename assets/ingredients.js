@@ -12,6 +12,9 @@
   // Filtros de la pestaña Consulta. El texto lo comparte con el buscador de las otras vistas:
   // escribir «arroz» en Productos y cambiar a Consulta debe seguir hablando de arroz.
   let consulta={proveedor:'',desde:'',hasta:'',producto:''};
+  // Qué nombre conserva cada racimo al fusionarse. Lo que no esté aquí usa el predeterminado:
+  // el miembro con más compras, que es la grafía que más gente ha visto escrita así.
+  let fusionDestino=new Map();
   const money=x=>new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN'}).format(x);
   // Las claves son las que devuelve unidadDesdeClaveSAT a partir de ClaveUnidad del CFDI.
   // Faltaban cja y paq, y se pintaban crudas: «6 cja» en vez de «6 cajas».
@@ -25,7 +28,7 @@
     const el=$('ingStatus');
     if(el){el.textContent=message;el.classList.toggle('ing-error',error);}
   }
-  function reset(){cached=new Map();analysisCache=null;manual=null;consulta={proveedor:'',desde:'',hasta:'',producto:''};_catalogoProductos=[];_catalogoProveedores=[];_catalogoCargado=false;query='';lastStatus='';clearTimeout(timer);renderEpoch++;}
+  function reset(){cached=new Map();analysisCache=null;manual=null;fusionDestino=new Map();consulta={proveedor:'',desde:'',hasta:'',producto:''};_catalogoProductos=[];_catalogoProveedores=[];_catalogoCargado=false;query='';lastStatus='';clearTimeout(timer);renderEpoch++;}
   async function load(force=false){
     const uid=auth.currentUser?.uid;
     if(!uid) throw new Error('Inicia sesión para abrir los ingredientes.');
@@ -312,6 +315,33 @@
       :`<div class="ing-empty"><h3>No hay compras con esos filtros</h3><p>Prueba otro rango de fechas, otro proveedor o limpia la búsqueda.</p></div>`;
     return filtros+resumen+gastos+grafica+tabla;
   }
+  // ─── Fusionar duplicados ─────────────────────────────────────────────────────
+  // Racimos completos en vez de pares. Con cientos de duplicados, ir de dos en dos por la
+  // pestaña «Por revisar» no se acaba nunca, y era la única forma que había.
+  function fusionMarkup(){
+    const racimos=C.duplicateClusters(_catalogoProductos);
+    const exactos=racimos.filter(r=>r.nivel==='exacto');
+    const guia=`<div class="ing-policy"><p>Cada tarjeta es un grupo de productos que parecen el mismo. Fusionar <strong>conserva todas las presentaciones y todo su historial de compras</strong>: solo quedan bajo un mismo nombre, y se deshace con «Separar presentación» desde Productos.</p>`
+      +`<p>Lo que cambia de calificativo —«procesado», «(botana)», «de pollo»— no aparece aquí a propósito: pueden ser cosas distintas y esa decisión no es de la máquina. Ésos se unen a mano con «Homologar manualmente».</p></div>`;
+    if(!racimos.length)return guia+`<div class="ing-empty"><h3>No hay duplicados que proponer</h3><p>Ningún grupo de productos comparte identidad con otro. Si ves dos que sí son el mismo, úne­los con «Homologar manualmente» desde Productos.</p></div>`;
+    const tarjeta=r=>{
+      const destino=r.miembros.some(g=>g.id===fusionDestino.get(r.identity))?fusionDestino.get(r.identity):r.miembros[0].id;
+      const compras=r.miembros.reduce((n,g)=>n+g.compras,0);
+      return `<article class="ing-fusion ing-fusion-${e(r.nivel)}">`
+        +`<header><span class="ing-nivel">${r.nivel==='exacto'?'Solo cambian mayúsculas o acentos':'Misma identidad, distinta redacción'}</span>`
+        +`<span class="ing-fusion-cuenta">${e(plural(r.miembros.length,'producto','productos'))} · ${e(plural(compras,'compra','compras'))}</span></header>`
+        +`<ul>${r.miembros.map(g=>`<li><span>${e(g.nombre)}</span><span class="ing-sub">${e(plural(g.compras,'compra','compras'))}${g.presentaciones>1?' · '+e(plural(g.presentaciones,'presentación','presentaciones')):''}</span></li>`).join('')}</ul>`
+        +`<div class="ing-fusion-pie"><label for="dest-${e(r.identity)}">Nombre que queda</label>`
+        +`<select id="dest-${e(r.identity)}" data-destino="${e(r.identity)}">${r.miembros.map(g=>`<option value="${e(g.id)}"${g.id===destino?' selected':''}>${e(g.nombre)}</option>`).join('')}</select>`
+        +`<button type="button" class="ing-primary" data-action="fusionar" data-identity="${e(r.identity)}">Fusionar ${e(plural(r.miembros.length,'producto','productos'))}</button></div>`
+        +`</article>`;
+    };
+    const tope=60;
+    return guia
+      +(exactos.length>1?`<div class="ing-fusion-todos"><button type="button" class="ing-primary" data-action="fusionar-exactos">Fusionar ${e(plural(exactos.length,'grupo','grupos'))} que solo cambian en mayúsculas</button><p>Los que no tienen nada que juzgar, de un golpe. Cada uno conserva el nombre con más compras.</p></div>`:'')
+      +`<div id="ingRows">${racimos.slice(0,tope).map(tarjeta).join('')}</div>`
+      +(racimos.length>tope?`<p>Mostrando ${tope} de ${racimos.length.toLocaleString('es-MX')} grupos. Fusiona éstos y vuelve a entrar.</p>`:'');
+  }
   function markup(){
     let grouped=analysisCache?.grouped,matches=analysisCache?.matches;
     if(!analysisCache){
@@ -332,8 +362,8 @@
     // producto desaparecería sin forma de verlo ni de recuperarlo.
     const omitted=g=>g.products.filter(p=>!C.destination(p).include);
     const counts={revision:grouped.filter(needs).length,ingredientes:grouped.filter(g=>g.result.state!=='excluido').length,omitidos:grouped.filter(g=>omitted(g).length).length};
-    const consultando=view==='consulta';
-    const visible=consultando?[]:grouped.filter(g=>view==='revision'?needs(g):view==='omitidos'?omitted(g).length:g.result.state!=='excluido')
+    const consultando=view==='consulta',fusionando=view==='fusion';
+    const visible=consultando||fusionando?[]:grouped.filter(g=>view==='revision'?needs(g):view==='omitidos'?omitted(g).length:g.result.state!=='excluido')
       .map(g=>{if(view!=='omitidos')return g;const subset={...g,products:omitted(g)};return {...subset,result:C.priceForGroup(subset)};})
       .filter(g=>C.norm([g.name,...g.products.map(p=>p.nombre_comercial+' '+p.proveedor_nombre)].join(' ')).includes(C.norm(query)));
     const rows=visible.slice(0,100).map(g=>{
@@ -343,7 +373,7 @@
       const shortcuts=active?(g.products.length===1?quickActions(active):`<div class="ing-actions ing-quick"><button type="button" data-action="manual-open" data-id="${e(active.id)}">Homologar manualmente</button></div>`):'';
       return `<article class="ing-row"><div class="ing-row-head"><div><h3>${e(g.name)}</h3><p>${g.products.length} presentación(es) vinculada(s)</p></div><div class="ing-price">${w?`<strong>${money(w.precio)} <span>por presentación</span></strong><p>Factura: ${e(w.fecha)}</p>`:'<strong>Sin compras</strong>'}</div><span class="ing-state ${r.state==='listo'?'ing-ready':''}">${labelState(r)}</span></div>${r.reason?`<p class="ing-reason">${e(r.reason)}</p>`:''}${shortcuts}${openManual?manualPanel():''}<details ${r.state==='pendiente'?'open':''}><summary>Ver presentaciones, proveedor e historial</summary>${g.products.map(p=>productDetails(p)+`<details class="ing-history"><summary>Compras de esta presentación</summary>${C.observations(p).map(o=>`<p>${e(o.fecha||'Sin fecha')}${o.cantidad?' · '+e(String(o.cantidad))+(o.unidad?' '+e(unit(o.unidad)):''):''} · ${money(o.precio)} por presentación${o.codigo_proveedor?' · SKU '+e(o.codigo_proveedor):''} · ${e(o.folio||'Sin folio')} · ${e(o.proveedor)}</p>`).join('')||'<p>Sin compras registradas.</p>'}</details>`).join('')}</details>${openManual?'':reviews}</article>`;
     }).join('');
-    return `<section class="ing-workspace" aria-label="Productos comprados"><header class="ing-heading"><div><h2>Productos comprados</h2><p>Todo lo que entra por factura, con su historial de precio y cantidad.</p></div><div class="ing-actions"><button type="button" data-action="refresh">Actualizar</button><button type="button" data-action="new" class="ing-primary">Agregar ingrediente</button></div></header><div class="ing-toolbar" role="group" aria-label="Vista del catálogo">${Object.entries({revision:'Por revisar',ingredientes:'Productos',omitidos:'Omitidos',consulta:'Consulta'}).map(([key,label])=>`<button type="button" data-action="view" data-view="${key}" aria-pressed="${key===view}">${label}${counts[key]==null?'':` <span>${counts[key]}</span>`}</button>`).join('')}</div>${consultando?'':`<div class="ing-search"><label for="ingSearch">Buscar producto, SKU o proveedor</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aderezo ranch" autocomplete="off"></div>`}<div class="ing-publication"><p id="ingStatus" role="status" aria-live="polite">${e(lastStatus||'Se registra todo lo comprado, de los XML y de las facturas leídas.')}</p></div>${consultando?consultaMarkup():`<div id="ingRows">${rows||'<div class="ing-empty"><h3>No hay productos en esta vista</h3><p>Cambia de vista o limpia la búsqueda.</p></div>'}</div>${visible.length>100?`<p>Mostrando 100 de ${visible.length}. Usa la búsqueda para acotar los resultados.</p>`:''}`}</section>`;
+    return `<section class="ing-workspace" aria-label="Productos comprados"><header class="ing-heading"><div><h2>Productos comprados</h2><p>Todo lo que entra por factura, con su historial de precio y cantidad.</p></div><div class="ing-actions"><button type="button" data-action="refresh">Actualizar</button><button type="button" data-action="new" class="ing-primary">Agregar ingrediente</button></div></header><div class="ing-toolbar" role="group" aria-label="Vista del catálogo">${Object.entries({revision:'Por revisar',ingredientes:'Productos',omitidos:'Omitidos',consulta:'Consulta',fusion:'Fusionar'}).map(([key,label])=>`<button type="button" data-action="view" data-view="${key}" aria-pressed="${key===view}">${label}${counts[key]==null?'':` <span>${counts[key]}</span>`}</button>`).join('')}</div>${consultando||fusionando?'':`<div class="ing-search"><label for="ingSearch">Buscar producto, SKU o proveedor</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aderezo ranch" autocomplete="off"></div>`}<div class="ing-publication"><p id="ingStatus" role="status" aria-live="polite">${e(lastStatus||'Se registra todo lo comprado, de los XML y de las facturas leídas.')}</p></div>${fusionando?fusionMarkup():consultando?consultaMarkup():`<div id="ingRows">${rows||'<div class="ing-empty"><h3>No hay productos en esta vista</h3><p>Cambia de vista o limpia la búsqueda.</p></div>'}</div>${visible.length>100?`<p>Mostrando 100 de ${visible.length}. Usa la búsqueda para acotar los resultados.</p>`:''}`}</section>`;
   }
   async function render(force=false){
     const epoch=++renderEpoch;
@@ -361,6 +391,36 @@
     busy=true;button.disabled=true;
     try{
       if(action==='refresh'){manual=null;await render(true);return;}
+      if(action==='fusionar'||action==='fusionar-exactos'){
+        const racimos=C.duplicateClusters(_catalogoProductos);
+        // El catálogo pudo cambiar entre que se pintó la pantalla y el clic (otro usuario, otra
+        // pestaña). Se recalculan los racimos y se trabaja sobre lo que hay ahora, no sobre lo
+        // que decía el botón.
+        const elegidos=action==='fusionar'
+          ? racimos.filter(r=>r.identity===button.dataset.identity)
+          : racimos.filter(r=>r.nivel==='exacto');
+        if(!elegidos.length)throw new Error('Ese grupo ya no existe. Actualiza el catálogo.');
+        // El store rechaza más de 400 productos por operación, así que se corta antes y se dice
+        // cuántos quedaron: media fusión guardada y media perdida sería peor que no empezar.
+        const TOPE=300;
+        const cambios=new Map();let hechos=0;
+        for(const r of elegidos){
+          const destino=r.miembros.some(g=>g.id===fusionDestino.get(r.identity))?fusionDestino.get(r.identity):r.miembros[0].id;
+          const parciales=C.homologateMany(_catalogoProductos,r.miembros.map(g=>g.id),destino);
+          if(cambios.size+parciales.length>TOPE&&cambios.size)break;
+          for(const u of parciales)cambios.set(u.id,u);
+          hechos++;
+        }
+        if(!cambios.size)throw new Error('No hubo nada que fusionar. Actualiza el catálogo.');
+        await saveRows([...cambios.values()]);
+        fusionDestino=new Map();
+        const restantes=elegidos.length-hechos;
+        status(`Se ${hechos===1?'fusionó 1 grupo':'fusionaron '+hechos+' grupos'} (${cambios.size} presentaciones). Se conservaron todas sus compras.`
+          +(restantes?` Quedan ${restantes} por fusionar: vuelve a dar clic.`:''));
+        // Sale por aquí en vez de envolver el resto en un else: lo de abajo busca un producto
+        // por id y la fusión no trabaja con uno solo.
+        await render();return;
+      }
       const p=_catalogoProductos.find(x=>x.id===id);
       if(!p)throw new Error('Actualiza el catálogo para encontrar este producto.');
       if(action==='manual-open'){
@@ -457,6 +517,8 @@
   const page=$('page-catalogo-productos');
   page.addEventListener('click',event=>{const b=event.target.closest('button[data-action]');if(b)return action(b);});
   page.addEventListener('change',event=>{
+    const racimo=event.target.dataset?.destino;
+    if(racimo){fusionDestino.set(racimo,event.target.value);return;}
     const campo=event.target.id;
     if(campo==='ingProducto')consulta={...consulta,producto:event.target.value};
     else if(campo==='ingProveedor')consulta={...consulta,proveedor:event.target.value};

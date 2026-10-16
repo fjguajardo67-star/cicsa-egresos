@@ -298,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261016-unidad1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261016-fusion1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -883,4 +883,97 @@ test('las cajas y los paquetes ya no se pintan crudos',()=>{
   // unidadDesdeClaveSAT devuelve cja y paq; unit() no los conocía y salía «6 cja».
   assert.match(src,/cja:'caja',paq:'paquete'/);
   assert.match(src,/cja:'cajas',paq:'paquetes'/);
+});
+
+// ─── La pantalla de fusión ───────────────────────────────────────────────────
+test('la pantalla de fusión existe, con sus dos caminos',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/fusion:'Fusionar'/,'falta la pestaña');
+  assert.match(src,/data-action="fusionar"/,'falta fusionar un racimo');
+  assert.match(src,/data-action="fusionar-exactos"/,'falta fusionar los seguros de un golpe');
+  assert.match(src,/data-destino=/,'sin elegir qué nombre queda, la fusión decide por ti');
+  // Lo que más miedo da de una fusión es perder historial. Hay que decirlo donde se decide.
+  assert.match(src,/conserva todas las presentaciones y todo su historial/i);
+  assert.match(src,/Separar presentación/,'hay que decir cómo se deshace');
+});
+test('el botón de «todos los exactos» solo sale cuando hay más de uno',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // Con un solo racimo seguro el botón de arriba y el de la tarjeta harían lo mismo.
+  assert.match(src,/exactos\.length>1\?/);
+});
+test('fusionar recalcula los racimos en vez de confiar en el botón',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // Entre que se pintó la pantalla y el clic, otro usuario pudo cambiar el catálogo.
+  assert.match(src,/const racimos=C\.duplicateClusters\(_catalogoProductos\);[\s\S]{0,400}const elegidos=action==='fusionar'/);
+  assert.match(src,/Ese grupo ya no existe/);
+});
+test('la fusión en bloque se corta antes del límite del store',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // El store rechaza más de 400 productos por operación. Media fusión guardada y media
+  // perdida sería peor que no empezar, así que se corta antes y se dice cuántos quedan.
+  assert.match(src,/const TOPE=300;/);
+  assert.match(src,/cambios\.size\+parciales\.length>TOPE&&cambios\.size\)break/);
+  assert.match(src,/Quedan \$\{restantes\} por fusionar/);
+});
+test('integración: fusionar un racimo deja una sola identidad y conserva las compras',async()=>{
+  const m=memory();
+  const prodXml=(id,nombre,precios)=>({id,nombre_comercial:nombre,nombre_normalizado:nombre,alias_factura:[nombre],
+    ingrediente_generico:'',proveedor_nombre:'ONUS',estado:'pendiente',unidad_compra:'pz',
+    compras_forx:precios.map((x,i)=>({id:id+'-'+i,precio:x,fecha:'2026-09-1'+i,folio:'F'+id+i,proveedor:'ONUS',origen:'factura',evidencia:'xml'}))});
+  for(const p of [prodXml('a','Papa delgada europea bol 2.5 kg',[74.9,76.5]),
+                  prodXml('b','PAPA DELGADA EUROPEA BOL 2.5 KG',[74.9])]) await m.store.save([p]);
+  const {app,context,click}=integration(m);
+  await app.load();
+  const [racimo]=C.duplicateClusters(context._catalogoProductos);
+  assert.equal(racimo.nivel,'exacto');
+  await click('fusionar',null,{identity:racimo.identity});
+  const guardados=(await m.store.list()).filter(x=>!x.data._internal);
+  assert.equal(guardados.length,2,'no se borra ningún producto');
+  assert.equal(new Set(guardados.map(x=>x.data.ingrediente_id)).size,1,'quedan en un solo grupo');
+  // Las tres compras siguen ahí: 2 + 1.
+  assert.equal(guardados.reduce((n,x)=>n+C.observations({...x.data,id:x.id}).length,0),3);
+  // Y ya no hay nada que proponer.
+  assert.deepEqual(C.duplicateClusters(context._catalogoProductos),[]);
+});
+test('integración: un fallo de red al fusionar no deja el catálogo a medias',async()=>{
+  const m=memory();
+  const prodXml=(id,nombre)=>({id,nombre_comercial:nombre,nombre_normalizado:nombre,alias_factura:[nombre],
+    ingrediente_generico:'',proveedor_nombre:'ONUS',estado:'pendiente',
+    compras_forx:[{id:id+'-0',precio:50,fecha:'2026-09-11',folio:'F'+id,proveedor:'ONUS',origen:'factura',evidencia:'xml'}]});
+  for(const p of [prodXml('a','Papa Lisa'),prodXml('b','PAPA LISA')]) await m.store.save([p]);
+  const {app,context,element,click}=integration(m);
+  await app.load();
+  const [racimo]=C.duplicateClusters(context._catalogoProductos);
+  m.setFail(503);
+  await click('fusionar',null,{identity:racimo.identity});
+  m.setFail(0);   // se restablece la red para poder leer de vuelta lo que quedó guardado
+  // Y se tiene que NOTAR. Un «listo» falso sobre datos contables es peor que el fallo: el
+  // usuario se va creyendo que fusionó y el catálogo sigue duplicado.
+  const aviso=element('ingStatus').textContent;
+  assert.match(aviso,/No se pudo guardar/,'el fallo tiene que decirse');
+  assert.equal(/fusion/i.test(aviso),false,'no puede anunciar una fusión que no ocurrió');
+  // Nada se guardó, y la memoria quedó como estaba: el racimo se sigue pudiendo fusionar.
+  const guardados=(await m.store.list()).filter(x=>!x.data._internal);
+  assert.equal(guardados.every(x=>!x.data.ingrediente_id),true,'no se escribió nada a medias');
+  assert.equal(context._catalogoProductos.every(p=>!p.ingrediente_id),true,'la memoria tampoco se tocó');
+});
+test('integración: se conserva el nombre que ELIGES, no el predeterminado',async()=>{
+  // Sin esto, elegir en el desplegable sería decorativo: el código podía quedarse siempre con
+  // el de más compras y nadie se enteraría hasta ver el catálogo renombrado al revés.
+  const m=memory();
+  const prodXml=(id,nombre,n)=>({id,nombre_comercial:nombre,nombre_normalizado:nombre,alias_factura:[nombre],
+    ingrediente_generico:'',proveedor_nombre:'ONUS',estado:'pendiente',
+    compras_forx:Array.from({length:n},(_,i)=>({id:id+'-'+i,precio:50+i,fecha:'2026-09-1'+i,folio:'F'+id+i,proveedor:'ONUS',origen:'factura',evidencia:'xml'}))});
+  for(const p of [prodXml('a','Papa delgada europea bol 2.5 kg',2),
+                  prodXml('b','PAPA DELGADA EUROPEA BOL 2.5 KG',1)]) await m.store.save([p]);
+  const {app,context,element,click}=integration(m);
+  await app.load();
+  const [racimo]=C.duplicateClusters(context._catalogoProductos);
+  const [porDefecto,otro]=racimo.miembros;
+  assert.equal(porDefecto.nombre,'Papa delgada europea bol 2.5 kg','el predeterminado es el de más compras');
+  // Se elige el OTRO por el mismo camino que el usuario: el evento change del desplegable.
+  element('page-catalogo-productos').listeners.change({target:{dataset:{destino:racimo.identity},value:otro.id}});
+  await click('fusionar',null,{identity:racimo.identity});
+  const nombres=new Set((await m.store.list()).filter(x=>!x.data._internal).map(x=>x.data.ingrediente_nombre));
+  assert.deepEqual([...nombres],['PAPA DELGADA EUROPEA BOL 2.5 KG'],'quedó el nombre elegido, no el predeterminado');
 });

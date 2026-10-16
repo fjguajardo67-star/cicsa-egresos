@@ -111,3 +111,22 @@
 .ing-table-chica tfoot td{font-weight:600;color:var(--ing-green);border-top:1.5px solid #d4dfd8;}
 .ing-gasto .ing-table-wrap,.ing-gasto table{border-radius:10px;}
 .ing-gasto table{border:1px solid #e3e9e5;}
+
+/* ─── Fusionar duplicados ──────────────────────────────────────────────────── */
+.ing-fusion-todos{margin:4px 0 20px;padding:14px 16px;background:#f2f6f2;border-radius:10px;}
+.ing-fusion-todos p{margin:8px 0 0;}
+.ing-fusion{border:1px solid #d4dfd8;border-radius:12px;padding:16px;margin-bottom:14px;}
+.ing-fusion-exacto{border-left:4px solid var(--ing-green);}
+.ing-fusion-probable{border-left:4px solid #c9a227;}
+.ing-fusion header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;justify-content:space-between;margin-bottom:10px;}
+.ing-nivel{font-size:.78rem;font-weight:600;letter-spacing:.02em;color:var(--ing-green);}
+.ing-fusion-probable .ing-nivel{color:#7a6410;}
+.ing-fusion-cuenta{font-size:.8rem;color:var(--ing-muted);font-variant-numeric:tabular-nums;}
+.ing-fusion ul{list-style:none;margin:0;padding:0;}
+.ing-fusion li{display:flex;flex-wrap:wrap;gap:4px 14px;justify-content:space-between;padding:7px 0;border-top:1px solid #eef2ef;font-size:.9rem;}
+.ing-fusion li>span:first-child{overflow-wrap:anywhere;}
+.ing-fusion li .ing-sub{color:var(--ing-muted);font-size:.78rem;white-space:nowrap;}
+.ing-fusion-pie{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin-top:14px;}
+.ing-fusion-pie label{font-size:.8rem;font-weight:600;align-self:center;}
+.ing-fusion-pie select{flex:1;min-width:200px;font:inherit;padding:9px 11px;border:1px solid #afc3b7;border-radius:8px;background:#fff;color:#173a2c;}
+@media(max-width:640px){.ing-fusion-pie select,.ing-fusion-pie button{width:100%;}}
