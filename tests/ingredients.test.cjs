@@ -1080,3 +1080,32 @@ test('el bloque comparable va primero aunque llegue después en los datos',()=>{
   assert.deepEqual(bloques.map(b=>b.unidad),['kg','cja']);
   assert.deepEqual(bloques.map(b=>b.comparable),[true,false]);
 });
+
+// ─── El número de ticket no es parte del producto ────────────────────────────
+test('el número de ticket o folio no convierte cada compra en un producto nuevo',()=>{
+  // La gasolinera factura «87 Octanos (Ticket: 757265)» y cada carga trae el suyo. Sin esto,
+  // cada carga del mes es un producto distinto que nunca se junta con los demás.
+  const ids=['87 Octanos (Ticket: 757265)','87 Octanos (Ticket: 760670)','87 Octanos (TICKET 772490)',
+             '87 Octanos Ticket: 781001','87 Octanos (Folio 9912)','87 Octanos (Referencia: A-4471)']
+    .map(n=>C.ingredientIdentity({nombre_comercial:n}));
+  assert.deepEqual([...new Set(ids)],['87 octanos'],'todas las cargas son el mismo combustible');
+});
+test('87 y 91 octanos siguen siendo combustibles distintos',()=>{
+  assert.notEqual(C.ingredientIdentity({nombre_comercial:'87 Octanos (Ticket: 1)'}),
+                  C.ingredientIdentity({nombre_comercial:'91 Octanos (Ticket: 2)'}));
+});
+test('solo se quita la referencia cuando trae número, y nada más',()=>{
+  // «ticket» suelto no es una referencia, y un paréntesis que describe el producto se queda.
+  assert.equal(C.ingredientIdentity({nombre_comercial:'Ticket de pavo'}),'ticket pavo');
+  assert.equal(C.ingredientIdentity({nombre_comercial:'87 Octanos (gasolina)'}),'87 octanos gasolina');
+  // Y no se come el tamaño de la presentación ni los descriptores de siempre.
+  assert.equal(C.ingredientIdentity({nombre_comercial:'Papa Lisa Europea Bolsa 2.5 kg'}),'papa lisa europea');
+  assert.equal(C.ingredientIdentity({nombre_comercial:'Queso Americano procesado'}),'queso americano procesado');
+});
+test('las cargas de gasolina se proponen como un solo racimo',()=>{
+  const cargas=['87 Octanos (Ticket: 757265)','87 Octanos (Ticket: 760670)','87 Octanos (Ticket: 772490)']
+    .map((n,i)=>prod('g'+i,n));
+  const [racimo]=C.duplicateClusters(cargas);
+  assert.equal(racimo.miembros.length,3,'las tres cargas en un solo grupo');
+  assert.equal(racimo.nivel,'probable','los nombres sí difieren: lo confirma una persona');
+});
