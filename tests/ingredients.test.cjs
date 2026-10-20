@@ -298,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261016-proveedores1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261016-recuperar1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -1108,4 +1108,66 @@ test('las cargas de gasolina se proponen como un solo racimo',()=>{
   const [racimo]=C.duplicateClusters(cargas);
   assert.equal(racimo.miembros.length,3,'las tres cargas en un solo grupo');
   assert.equal(racimo.nivel,'probable','los nombres sí difieren: lo confirma una persona');
+});
+
+// ─── Recuperar en bloque lo que se omitió por la regla vieja de FORX ─────────
+test('la pestaña Omitidos ofrece recuperarlos en bloque, y explica por qué',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/data-action="recuperar-omitidos"/,'falta el botón');
+  // Lo que importa es que diga POR QUÉ: se omitieron bajo una regla que ya no existe.
+  assert.match(src,/recetas de FORX/,'hay que decir de dónde viene la omisión');
+  assert.match(src,/hoy se registra todo lo comprado/);
+  assert.match(src,/queda fuera del historial, del gasto y de la comparación/,'hay que decir qué cuesta dejarlo omitido');
+  assert.match(src,/vuelven con todas sus compras/,'hay que decir que no se pierde nada');
+  assert.match(src,/const TOPE=300,lote=omitidos\.slice\(0,TOPE\)/,'sin tope, el store rechaza la operación entera');
+});
+test('integración: recuperar en bloque devuelve las compras al historial',async()=>{
+  const m=memory();
+  const omitido=(id,nombre)=>({id,nombre_comercial:nombre,nombre_normalizado:nombre,alias_factura:[nombre],
+    ingrediente_generico:'',proveedor_nombre:'PEMEX',estado:'ignorado',unidad_compra:'lt',
+    compras_forx:[{id:id+'-0',precio:20.12,cantidad:40,importe:804.8,fecha:'2026-09-28',folio:'F'+id,proveedor:'PEMEX',unidad:'lt',origen:'factura',evidencia:'xml'}]});
+  for(const p of [omitido('a','87 Octanos (Ticket: 757265)'),omitido('b','87 Octanos (Ticket: 760670)')])
+    await m.store.save([p]);
+  const {app,context,click}=integration(m);
+  await app.load();
+  // Omitido = fuera del historial de compras. Ése es el costo de dejarlos así.
+  assert.deepEqual(C.purchaseRows(context._catalogoProductos),[]);
+  await click('recuperar-omitidos');
+  const guardados=(await m.store.list()).filter(x=>!x.data._internal);
+  assert.equal(guardados.every(x=>x.data.estado==='pendiente'),true,'ninguno queda omitido');
+  const filas=C.purchaseRows(context._catalogoProductos);
+  assert.equal(filas.length,2,'sus compras vuelven al historial');
+  assert.equal(filas.reduce((n,r)=>n+r.importe,0),1609.6,'y su gasto vuelve a contar');
+  // Con el ticket ya fuera de la identidad, además se proponen como un solo producto.
+  const [racimo]=C.duplicateClusters(context._catalogoProductos);
+  assert.equal(racimo.miembros.length,2);
+});
+test('integración: recuperar no pisa nada más del producto',async()=>{
+  const m=memory();
+  await m.store.save([{id:'a',nombre_comercial:'Detergente 5 L',ingrediente_generico:'Detergente',
+    proveedor_nombre:'ABARROTES',estado:'ignorado',unidad_compra:'lt',notas:'no tocar',
+    compras_forx:[{id:'a-0',precio:120,fecha:'2026-09-01',folio:'F1',proveedor:'ABARROTES',origen:'factura',evidencia:'xml'}]}]);
+  const {app,click}=integration(m);
+  await app.load();
+  await click('recuperar-omitidos');
+  const [doc]=(await m.store.list()).filter(x=>!x.data._internal);
+  assert.equal(doc.data.estado,'pendiente');
+  assert.equal(doc.data.notas,'no tocar','recuperar solo cambia el estado');
+  assert.equal(doc.data.compras_forx.length,1);
+});
+test('integración: tras recuperar, la pantalla deja de ofrecerlo',async()=>{
+  // Sin repintar, se guardan los 313 pero la lista los sigue mostrando omitidos: parece que
+  // falló y vuelves a dar clic. Guardar y no mostrarlo es, para quien lo usa, no haber hecho nada.
+  const m=memory();
+  await m.store.save([{id:'a',nombre_comercial:'87 Octanos (Ticket: 757265)',nombre_normalizado:'87 Octanos',
+    alias_factura:['87 Octanos'],ingrediente_generico:'',proveedor_nombre:'PEMEX',estado:'ignorado',
+    compras_forx:[{id:'a-0',precio:20.12,fecha:'2026-09-28',folio:'F1',proveedor:'PEMEX',origen:'factura',evidencia:'xml'}]}]);
+  const {app,element,click}=integration(m);
+  await app.load();
+  await click('view',null,{view:'omitidos'});
+  const antes=element('page-catalogo-productos').innerHTML;
+  assert.match(antes,/data-action="recuperar-omitidos"/,'la pestaña Omitidos tiene que ofrecerlo');
+  await click('recuperar-omitidos');
+  const despues=element('page-catalogo-productos').innerHTML;
+  assert.equal(/data-action="recuperar-omitidos"/.test(despues),false,'ya no queda nada que recuperar: la pantalla tiene que reflejarlo');
 });

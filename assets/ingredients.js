@@ -379,6 +379,17 @@
       +`<div id="ingRows">${racimos.slice(0,tope).map(tarjeta).join('')}</div>`
       +(racimos.length>tope?`<p>Mostrando ${tope} de ${racimos.length.toLocaleString('es-MX')} grupos. Fusiona éstos y vuelve a entrar.</p>`:'');
   }
+  // Casi todo lo omitido se marcó cuando el catálogo solo servía para alimentar recetas de
+  // FORX: ahí tenía sentido sacar la gasolina, el detergente y los desechables. Esa regla se
+  // retiró en la fase B —ahora se registra todo lo comprado— pero lo que ya estaba omitido a
+  // mano se quedó fuera, y con él su historial de compras y su gasto.
+  function omitidosBanner(total){
+    return `<div class="ing-policy ing-recuperar"><p><strong>${e(plural(total,'producto omitido','productos omitidos'))}.</strong> `
+      +`La mayoría se omitieron cuando el catálogo solo servía para las recetas de FORX, y ahí estorbaban cosas como la gasolina, el detergente o los desechables. `
+      +`Esa regla ya no existe: hoy se registra todo lo comprado, y lo que siga omitido queda fuera del historial, del gasto y de la comparación de proveedores.</p>`
+      +`<div class="ing-actions"><button type="button" class="ing-primary" data-action="recuperar-omitidos">Recuperar ${e(plural(total,'producto','productos'))}</button></div>`
+      +`<p>No se borra ni se cambia nada más: vuelven con todas sus compras. Volver a omitir uno es un clic.</p></div>`;
+  }
   function markup(){
     let grouped=analysisCache?.grouped,matches=analysisCache?.matches;
     if(!analysisCache){
@@ -400,6 +411,7 @@
     const omitted=g=>g.products.filter(p=>!C.destination(p).include);
     const counts={revision:grouped.filter(needs).length,ingredientes:grouped.filter(g=>g.result.state!=='excluido').length,omitidos:grouped.filter(g=>omitted(g).length).length};
     const consultando=view==='consulta',fusionando=view==='fusion';
+    const omitidosTotal=view==='omitidos'?grouped.reduce((n,g)=>n+omitted(g).length,0):0;
     const visible=consultando||fusionando?[]:grouped.filter(g=>view==='revision'?needs(g):view==='omitidos'?omitted(g).length:g.result.state!=='excluido')
       .map(g=>{if(view!=='omitidos')return g;const subset={...g,products:omitted(g)};return {...subset,result:C.priceForGroup(subset)};})
       .filter(g=>C.norm([g.name,...g.products.map(p=>p.nombre_comercial+' '+p.proveedor_nombre)].join(' ')).includes(C.norm(query)));
@@ -410,7 +422,7 @@
       const shortcuts=active?(g.products.length===1?quickActions(active):`<div class="ing-actions ing-quick"><button type="button" data-action="manual-open" data-id="${e(active.id)}">Homologar manualmente</button></div>`):'';
       return `<article class="ing-row"><div class="ing-row-head"><div><h3>${e(g.name)}</h3><p>${g.products.length} presentación(es) vinculada(s)</p></div><div class="ing-price">${w?`<strong>${money(w.precio)} <span>por presentación</span></strong><p>Factura: ${e(w.fecha)}</p>`:'<strong>Sin compras</strong>'}</div><span class="ing-state ${r.state==='listo'?'ing-ready':''}">${labelState(r)}</span></div>${r.reason?`<p class="ing-reason">${e(r.reason)}</p>`:''}${shortcuts}${openManual?manualPanel():''}<details ${r.state==='pendiente'?'open':''}><summary>Ver presentaciones, proveedor e historial</summary>${g.products.map(p=>productDetails(p)+`<details class="ing-history"><summary>Compras de esta presentación</summary>${C.observations(p).map(o=>`<p>${e(o.fecha||'Sin fecha')}${o.cantidad?' · '+e(String(o.cantidad))+(o.unidad?' '+e(unit(o.unidad)):''):''} · ${money(o.precio)} por presentación${o.codigo_proveedor?' · SKU '+e(o.codigo_proveedor):''} · ${e(o.folio||'Sin folio')} · ${e(o.proveedor)}</p>`).join('')||'<p>Sin compras registradas.</p>'}</details>`).join('')}</details>${openManual?'':reviews}</article>`;
     }).join('');
-    return `<section class="ing-workspace" aria-label="Productos comprados"><header class="ing-heading"><div><h2>Productos comprados</h2><p>Todo lo que entra por factura, con su historial de precio y cantidad.</p></div><div class="ing-actions"><button type="button" data-action="refresh">Actualizar</button><button type="button" data-action="new" class="ing-primary">Agregar ingrediente</button></div></header><div class="ing-toolbar" role="group" aria-label="Vista del catálogo">${Object.entries({revision:'Por revisar',ingredientes:'Productos',omitidos:'Omitidos',consulta:'Consulta',fusion:'Fusionar'}).map(([key,label])=>`<button type="button" data-action="view" data-view="${key}" aria-pressed="${key===view}">${label}${counts[key]==null?'':` <span>${counts[key]}</span>`}</button>`).join('')}</div>${consultando||fusionando?'':`<div class="ing-search"><label for="ingSearch">Buscar producto, SKU o proveedor</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aderezo ranch" autocomplete="off"></div>`}<div class="ing-publication"><p id="ingStatus" role="status" aria-live="polite">${e(lastStatus||'Se registra todo lo comprado, de los XML y de las facturas leídas.')}</p></div>${fusionando?fusionMarkup():consultando?consultaMarkup():`<div id="ingRows">${rows||'<div class="ing-empty"><h3>No hay productos en esta vista</h3><p>Cambia de vista o limpia la búsqueda.</p></div>'}</div>${visible.length>100?`<p>Mostrando 100 de ${visible.length}. Usa la búsqueda para acotar los resultados.</p>`:''}`}</section>`;
+    return `<section class="ing-workspace" aria-label="Productos comprados"><header class="ing-heading"><div><h2>Productos comprados</h2><p>Todo lo que entra por factura, con su historial de precio y cantidad.</p></div><div class="ing-actions"><button type="button" data-action="refresh">Actualizar</button><button type="button" data-action="new" class="ing-primary">Agregar ingrediente</button></div></header><div class="ing-toolbar" role="group" aria-label="Vista del catálogo">${Object.entries({revision:'Por revisar',ingredientes:'Productos',omitidos:'Omitidos',consulta:'Consulta',fusion:'Fusionar'}).map(([key,label])=>`<button type="button" data-action="view" data-view="${key}" aria-pressed="${key===view}">${label}${counts[key]==null?'':` <span>${counts[key]}</span>`}</button>`).join('')}</div>${consultando||fusionando?'':`<div class="ing-search"><label for="ingSearch">Buscar producto, SKU o proveedor</label><input id="ingSearch" type="search" value="${e(query)}" placeholder="Ej. aderezo ranch" autocomplete="off"></div>`}<div class="ing-publication"><p id="ingStatus" role="status" aria-live="polite">${e(lastStatus||'Se registra todo lo comprado, de los XML y de las facturas leídas.')}</p></div>${fusionando?fusionMarkup():consultando?consultaMarkup():`${view==='omitidos'&&omitidosTotal?omitidosBanner(omitidosTotal):''}<div id="ingRows">${rows||'<div class="ing-empty"><h3>No hay productos en esta vista</h3><p>Cambia de vista o limpia la búsqueda.</p></div>'}</div>${visible.length>100?`<p>Mostrando 100 de ${visible.length}. Usa la búsqueda para acotar los resultados.</p>`:''}`}</section>`;
   }
   async function render(force=false){
     const epoch=++renderEpoch;
@@ -428,6 +440,16 @@
     busy=true;button.disabled=true;
     try{
       if(action==='refresh'){manual=null;await render(true);return;}
+      if(action==='recuperar-omitidos'){
+        const omitidos=_catalogoProductos.filter(x=>!C.destination(x).include);
+        if(!omitidos.length)throw new Error('Ya no hay productos omitidos.');
+        // Mismo tope que la fusión: el store rechaza más de 400 por operación.
+        const TOPE=300,lote=omitidos.slice(0,TOPE),restantes=omitidos.length-lote.length;
+        await saveRows(lote.map(x=>({...x,estado:'pendiente'})));
+        status(`Se ${lote.length===1?'recuperó 1 producto':'recuperaron '+lote.length+' productos'}. Sus compras vuelven al historial.`
+          +(restantes?` Quedan ${restantes}: vuelve a dar clic.`:''));
+        await render();return;
+      }
       if(action==='fusionar'||action==='fusionar-exactos'){
         const racimos=C.duplicateClusters(_catalogoProductos);
         // El catálogo pudo cambiar entre que se pintó la pantalla y el clic (otro usuario, otra
