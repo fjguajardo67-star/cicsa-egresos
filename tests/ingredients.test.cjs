@@ -298,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261022-desborde1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261022-rellenar1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -758,7 +758,9 @@ test('sin ningún importe, la pantalla lo dice en vez de enseñar $0.00',()=>{
   // «$0.00» se lee como «no gastaste nada», y lo que pasa es que falta el dato.
   assert.match(src,/\$\{conImporte\.length\?e\(money\(importe\)\):'—'\}/,'volvió el $0.00 engañoso');
   assert.match(src,/ningún renglón trae con qué calcularlo/);
-  assert.match(src,/Vuelve a subir los XML/,'hay que decir cómo se arregla');
+  // Antes el remedio era «vuelve a subir los XML». Resultó innecesario: los CFDI ya están
+  // guardados y se reprocesan desde la propia pantalla.
+  assert.match(src,/data-action="rellenar-importes"/,'hay que ofrecer el arreglo, no solo describirlo');
 });
 test('el XML ya no tira el Importe del renglón',()=>{
   const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
@@ -1185,4 +1187,52 @@ test('las tablas de gasto no encrujan las cifras ni se salen de la tarjeta',()=>
   assert.match(src,/<div class="ing-table-wrap"><table class="ing-table ing-table-chica">/,'la tabla chica tiene que ir dentro del contenedor con scroll');
   // El bloque cede por debajo de su base para que en teléfono no empuje la página.
   assert.match(css,/\.ing-gasto\{flex:1 1 390px;min-width:0;\}/);
+});
+
+// ─── Rellenar importes desde los CFDI ya guardados ───────────────────────────
+test('el aviso sale cuando FALTAN importes, no solo cuando no hay ninguno',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // Con 1 renglón de 11 el aviso no aparecía, y un total de 1 renglón se leía como el gasto
+  // del producto. Ahora sale siempre que falte alguno, y dice cuántos de cuántos.
+  assert.match(src,/faltanImporte=rows\.length-conImporte\.length/);
+  assert.match(src,/\+\(faltanImporte\?/,'volvió el aviso que solo salía con cero importes');
+  assert.match(src,/data-action="rellenar-importes"/,'falta el botón');
+  assert.match(src,/Los CFDI ya están guardados: no hace falta volver a subir archivos/,'eso es lo que el usuario no sabía');
+  assert.match(src,/Lo que se capturó a mano, sin CFDI, se queda sin importe/,'hay que decir qué NO se puede rellenar');
+});
+test('reprocesar se acota al periodo filtrado y se niega si es demasiado',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  assert.match(src,/const TOPE=150;/);
+  assert.match(src,/Acota las fechas a un mes y vuelve a intentar/,'mejor negarse que colgar la pantalla minutos');
+  assert.match(src,/\(!desde\|\|dia\(c\)>=desde\)&&\(!hasta\|\|dia\(c\)<=hasta\)/,'tiene que respetar las fechas del filtro');
+});
+test('el lote recarga el catálogo una vez, no una por CFDI',()=>{
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // Una recarga completa por CFDI vuelve inviable reprocesar un mes: son cientos de lecturas.
+  // Es seguro porque saveRows escribe con control de concurrencia (expected), así que un
+  // cambio de otro usuario hace fallar la escritura en vez de pisarla.
+  assert.match(src,/if\(context\.recargar!==false\)await load\(true\);/);
+  assert.match(src,/evidencia:'xml',recargar:false\}\)/);
+  const xml=src.slice(src.indexOf('async function ingestXml('),src.indexOf('async function saveEditor('));
+  assert.match(xml,/await load\(true\);\s*\n\s*for\(const c of cfdis/,'el lote tiene que cargar una vez, antes del bucle');
+});
+test('integración: reprocesar rellena importes sin duplicar ni una compra',async()=>{
+  // La garantía de que esto es seguro: el identificador de cada compra sale de un hash de
+  // (proveedor, folio, nombre, unidad, posición), y esa fórmula no ha cambiado nunca. Volver a
+  // procesar el mismo CFDI cae en el mismo id y actualiza en su sitio.
+  const m=memory(),{app}=integration(m);
+  const cfdi=(conceptos)=>({uuid:'UUID-RELLENO',tipo:'I',rfcReceptor:'EMPRESA123',rfc:'PROVEEDOR',
+    proveedor:'SERGIO CUADROS GARCIA',fecha:'2026-10-08',fecha_hora:'2026-10-08T11:00:00',conceptos});
+  // Primero como se ingirió antes: sin cantidad ni importe.
+  await app.ingestXml([cfdi([{desc:'Tortilla de Maiz',precio:25,unidad:'kg'}])]);
+  let doc=(await m.store.list()).filter(x=>!x.data._internal)[0];
+  assert.equal(doc.data.compras_forx.length,1);
+  assert.equal(doc.data.compras_forx[0].importe,undefined,'así quedaron las compras viejas');
+  // Y ahora reprocesado con el CFDI completo.
+  await app.ingestXml([cfdi([{desc:'Tortilla de Maiz',precio:25,unidad:'kg',cantidad:915,importe:22875,sku:'000016'}])]);
+  doc=(await m.store.list()).filter(x=>!x.data._internal)[0];
+  assert.equal(doc.data.compras_forx.length,1,'no se duplica: mismo id de compra');
+  assert.equal(doc.data.compras_forx[0].importe,22875);
+  assert.equal(doc.data.compras_forx[0].cantidad,915);
+  assert.equal(doc.data.compras_forx[0].codigo_proveedor,'000016');
 });
