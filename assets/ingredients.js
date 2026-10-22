@@ -326,9 +326,9 @@
       const total=filas.reduce((n,x)=>n+x.importe,0),tope=10,arriba=filas.slice(0,tope);
       const faltan=filas.reduce((n,x)=>n+(x.compras-x.conImporte),0);
       return `<section class="ing-gasto"><h4>${e(titulo)}</h4>`
-        +`<table class="ing-table ing-table-chica"><thead><tr><th scope="col">${e(vacio)}</th><th scope="col" class="ing-num">Compras</th><th scope="col" class="ing-num">Gasto</th></tr></thead><tbody>`
+        +`<div class="ing-table-wrap"><table class="ing-table ing-table-chica"><thead><tr><th scope="col">${e(vacio)}</th><th scope="col" class="ing-num">Compras</th><th scope="col" class="ing-num">Gasto</th></tr></thead><tbody>`
         +arriba.map(x=>`<tr><td>${e(x.nombre)}</td><td class="ing-num">${x.compras.toLocaleString('es-MX')}${x.conImporte<x.compras?`<span class="ing-sub">${x.conImporte} con importe</span>`:''}</td><td class="ing-num">${e(money(x.importe))}</td></tr>`).join('')
-        +`</tbody><tfoot><tr><td>Total${filas.length>tope?` (${e(plural(filas.length,'renglón','renglones'))})`:''}</td><td class="ing-num">${filas.reduce((n,x)=>n+x.compras,0).toLocaleString('es-MX')}</td><td class="ing-num">${e(money(total))}</td></tr></tfoot></table>`
+        +`</tbody><tfoot><tr><td>Total${filas.length>tope?` (${e(plural(filas.length,'renglón','renglones'))})`:''}</td><td class="ing-num">${filas.reduce((n,x)=>n+x.compras,0).toLocaleString('es-MX')}</td><td class="ing-num">${e(money(total))}</td></tr></tfoot></table></div>`
         +(faltan?`<p>Sin contar ${e(plural(faltan,'compra','compras'))} que no ${faltan===1?'trae':'traen'} importe.</p>`:'')
         +`</section>`;
     };
