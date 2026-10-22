@@ -55,7 +55,7 @@
   // borrado— para que lo que todavía lo lea no se quede sin nada.
   async function hash(text){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));return [...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,'0')).join('');}
   async function ingest(items,supplier,folio,context={}){
-    await load(true);
+    if(context.recargar!==false)await load(true);
     const working=[..._catalogoProductos],changes=new Map();
     const result={nuevos:0,actualizados:0,ignorados:[],detalle:[]};
     for(let index=0;index<(items||[]).length;index++){
@@ -103,12 +103,13 @@
   async function ingestXml(cfdis){
     const own=String(rfcPropio()||'').toUpperCase();
     if(!own){status('Configura el RFC de la empresa para identificar automáticamente los productos de XML.',true);return;}
+    await load(true);
     for(const c of cfdis||[]){
       const stored=(_cfdisStore||[]).find(x=>(x.uuid||'')===(c.uuid||''));
       if(c.ignorado||stored?.ignorado||c.tipo!=='I'||String(c.rfcReceptor||'').toUpperCase()!==own||String(c.rfc||'').toUpperCase()===own)continue;
       // cantidad y sku venían en el concepto y se perdían aquí: el mapeo solo pasaba cuatro
       // campos. El XML es la fuente exacta de los dos — dato fiscal, no leído por IA.
-      await ingest((c.conceptos||[]).map(k=>({nombre:k.desc,precio:k.precio,cantidad:k.cantidad,importe:k.importe,codigo_proveedor:k.sku||'',unidad:unidadDesdeClaveSAT(k.unidad),categoria:k.categoria||''})),c.proveedor,c.uuid||c.folio,{uuid:c.uuid,fecha:c.fecha_hora||c.fecha,evidencia:'xml'});
+      await ingest((c.conceptos||[]).map(k=>({nombre:k.desc,precio:k.precio,cantidad:k.cantidad,importe:k.importe,codigo_proveedor:k.sku||'',unidad:unidadDesdeClaveSAT(k.unidad),categoria:k.categoria||''})),c.proveedor,c.uuid||c.folio,{uuid:c.uuid,fecha:c.fecha_hora||c.fecha,evidencia:'xml',recargar:false});
     }
   }
   async function saveEditor(id,data){
@@ -280,7 +281,7 @@
     const rows=elegido?base.filter(r=>r.grupoId===elegido):base;
     const proveedores=C.supplierList(todas);
     const series=C.priceSeries(rows);
-    const conImporte=rows.filter(r=>r.importe!=null);
+    const conImporte=rows.filter(r=>r.importe!=null),faltanImporte=rows.length-conImporte.length;
     const importe=conImporte.reduce((s,r)=>s+r.importe,0);
     const filtros=`<div class="ing-filters" role="group" aria-label="Filtros de la consulta">`
       +`<div><label for="ingDesde">Desde</label><input id="ingDesde" type="date" value="${e(consulta.desde)}"></div>`
@@ -303,9 +304,11 @@
         ?`gasto de ${e(plural(conImporte.length,'renglón','renglones'))}${conImporte.length<rows.length?' de '+rows.length.toLocaleString('es-MX'):''}, sin IVA`
         :'sin importe: ningún renglón trae con qué calcularlo'}</span></div>`
       +`</div>`
-      +(rows.length&&!conImporte.length?`<div class="ing-chart ing-chart-vacia"><p><strong>Estas compras no traen importe.</strong> `
-        +`El importe viene en el renglón del XML; las facturas que se procesaron antes de que se guardara ese dato no lo tienen. `
-        +`Vuelve a subir los XML de este periodo en la pestaña SAT y se rellena solo, sin duplicar nada.</p></div>`:'');
+      +(faltanImporte?`<div class="ing-chart ing-chart-vacia"><p><strong>${e(plural(faltanImporte,'compra no trae importe','compras no traen importe'))} de ${rows.length.toLocaleString('es-MX')}.</strong> `
+        +`El importe viene en el renglón del CFDI, y las facturas que se procesaron antes de que se guardara ese dato no lo tienen. `
+        +`Los CFDI ya están guardados: no hace falta volver a subir archivos.</p>`
+        +`<div class="ing-actions"><button type="button" class="ing-primary" data-action="rellenar-importes">Rellenar desde los CFDI guardados</button></div>`
+        +`<p>Rellena en su sitio, sin duplicar compras. Lo que se capturó a mano, sin CFDI, se queda sin importe: ahí no hay de dónde sacarlo.</p></div>`:'');
     // La gráfica contesta «cómo se movió el precio de ESTO». Buscar «papa» trae Papa, Papaya,
     // Puré de papa y Papa Casera revueltos: ahí no hay un «esto», y tres líneas sueltas entre
     // trece son ruido con pinta de dato. Se pide elegir producto, que es para lo que está el
@@ -440,6 +443,28 @@
     busy=true;button.disabled=true;
     try{
       if(action==='refresh'){manual=null;await render(true);return;}
+      if(action==='rellenar-importes'){
+        if(typeof cargarCfdisStore!=='function')throw new Error('No se pueden leer los CFDI guardados desde esta pantalla.');
+        await cargarCfdisStore();
+        const todos=(_cfdisStore||[]).filter(c=>c&&c.tipo==='I');
+        if(!todos.length)throw new Error('No hay CFDI guardados que reprocesar. Sube los XML en la pestaña SAT.');
+        // Se acota al periodo que el usuario está mirando: reprocesar cientos de CFDI de golpe
+        // tarda minutos, y lo que le interesa son los números de ESTA pantalla.
+        const desde=C.date(consulta.desde).slice(0,10),hasta=C.date(consulta.hasta).slice(0,10);
+        const dia=c=>String(c.fecha||c.fecha_hora||'').slice(0,10);
+        const lote=todos.filter(c=>(!desde||dia(c)>=desde)&&(!hasta||dia(c)<=hasta));
+        const TOPE=150;
+        if(lote.length>TOPE)throw new Error(`Hay ${lote.length} CFDI en este rango y reprocesarlos juntos tarda demasiado. Acota las fechas a un mes y vuelve a intentar.`);
+        if(!lote.length)throw new Error('No hay CFDI guardados dentro de las fechas filtradas.');
+        const antes=C.purchaseRows(_catalogoProductos).filter(r=>r.importe==null).length;
+        await ingestXml(lote);
+        const despues=C.purchaseRows(_catalogoProductos).filter(r=>r.importe==null).length;
+        const llenadas=antes-despues;
+        status(llenadas>0
+          ? `Se rellenaron ${llenadas} compra(s) desde ${lote.length} CFDI. Quedan ${despues} sin importe: son capturas sin CFDI guardado.`
+          : `Se revisaron ${lote.length} CFDI y no había nada que rellenar. Las ${despues} compras sin importe se capturaron a mano, sin CFDI.`);
+        await render();return;
+      }
       if(action==='recuperar-omitidos'){
         const omitidos=_catalogoProductos.filter(x=>!C.destination(x).include);
         if(!omitidos.length)throw new Error('Ya no hay productos omitidos.');
