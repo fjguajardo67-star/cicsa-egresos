@@ -101,13 +101,16 @@
 .ing-filters .ing-f-ancho{flex:1;min-width:240px;}
 @media(max-width:640px){.ing-filters>div{min-width:100%;}.ing-filters input,.ing-filters select{font-size:16px;}.ing-tiles>div{min-width:calc(50% - 6px);}}
 .ing-gastos{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:20px;}
-.ing-gasto{flex:1;min-width:320px;}
+.ing-gasto{flex:1 1 390px;min-width:0;}
 .ing-gasto h4{font:600 .95rem/1.4 system-ui,-apple-system,sans-serif;margin:0 0 8px;color:var(--ing-green);}
 .ing-gasto p{font-size:.8rem;margin-top:6px;}
-.ing-table-chica{min-width:0;font-size:.82rem;}
-.ing-table-chica th:nth-child(1),.ing-table-chica td:nth-child(1){width:56%;}
-.ing-table-chica th:nth-child(2),.ing-table-chica td:nth-child(2){width:20%;}
-.ing-table-chica th:nth-child(3),.ing-table-chica td:nth-child(3){width:24%;}
+/* Las dos columnas numéricas van en nowrap y juntas necesitan ~200px. Con min-width:0 y un
+   bloque de 320px les tocaban 145px, así que «$114,669.14» se salía de su celda y se encimaba
+   encima del nombre del proveedor. El piso de 390px es lo que mide su contenido real. */
+.ing-table-chica{min-width:390px;font-size:.82rem;}
+.ing-table-chica th:nth-child(1),.ing-table-chica td:nth-child(1){width:44%;}
+.ing-table-chica th:nth-child(2),.ing-table-chica td:nth-child(2){width:24%;}
+.ing-table-chica th:nth-child(3),.ing-table-chica td:nth-child(3){width:32%;}
 .ing-table-chica tfoot td{font-weight:600;color:var(--ing-green);border-top:1.5px solid #d4dfd8;}
 .ing-gasto .ing-table-wrap,.ing-gasto table{border-radius:10px;}
 .ing-gasto table{border:1px solid #e3e9e5;}

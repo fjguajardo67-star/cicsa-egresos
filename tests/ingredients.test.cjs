@@ -298,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261016-recuperar1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261022-desborde1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -1170,4 +1170,19 @@ test('integración: tras recuperar, la pantalla deja de ofrecerlo',async()=>{
   await click('recuperar-omitidos');
   const despues=element('page-catalogo-productos').innerHTML;
   assert.equal(/data-action="recuperar-omitidos"/.test(despues),false,'ya no queda nada que recuperar: la pantalla tiene que reflejarlo');
+});
+
+test('las tablas de gasto no encrujan las cifras ni se salen de la tarjeta',()=>{
+  const css=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.css'),'utf8');
+  const src=fs.readFileSync(require('node:path').join(__dirname,'../assets/ingredients.js'),'utf8');
+  // Las dos columnas numéricas van en nowrap y juntas miden ~200px. Con min-width:0 y un bloque
+  // de 320px les tocaban 145, así que «$114,669.14» se salía de su celda y se encimaba sobre el
+  // nombre del proveedor. El piso tiene que cubrir lo que el contenido mide de verdad.
+  const piso=css.match(/\.ing-table-chica\{min-width:(\d+)px/);
+  assert.ok(piso,'la tabla chica necesita un piso de ancho');
+  assert.ok(Number(piso[1])>=390,'390px es lo que miden sus tres columnas sin partirse; menos vuelve a encimar');
+  // Y necesita el contenedor con scroll: sin él la tabla se sale de la tarjeta en vez de rodar.
+  assert.match(src,/<div class="ing-table-wrap"><table class="ing-table ing-table-chica">/,'la tabla chica tiene que ir dentro del contenedor con scroll');
+  // El bloque cede por debajo de su base para que en teléfono no empuje la página.
+  assert.match(css,/\.ing-gasto\{flex:1 1 390px;min-width:0;\}/);
 });

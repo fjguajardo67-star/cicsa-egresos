@@ -33,3 +33,15 @@ test('ampliar el importe no altera la celda compartida ni sus cambios de valor',
   assert(amount.includes("'importe',parseFloat(this.value)||0"));
   assert(html.includes('workspace.css?v=20260926-palette2'));
 });
+
+test('los filtros de Auditoría no empujan la tarjeta a lo ancho',()=>{
+  // Un <select> no se encoge por debajo de su opción más ancha, y «1fr» en rejilla significa
+  // «mínimo el contenido». Con «SUPERSERVICIO PACIFICO AM» cargado, las cuatro columnas crecían
+  // y la rejilla se salía de la tarjeta: medido, 16 px de desborde.
+  const auditoria=html.slice(html.indexOf('Auditoría por período y proveedor'),html.indexOf('id="rKpis"'));
+  assert.match(auditoria,/grid-template-columns:repeat\(auto-fit,minmax\(190px,1fr\)\)/,'volvió la rejilla que no puede encoger');
+  assert.equal(/grid-template-columns:1fr 1fr 1fr 1fr/.test(auditoria),false);
+  assert.match(auditoria,/id="rProveedor"/,'esta prueba cuida ESTA rejilla: si el select se fue, hay que rehacerla');
+  // min-width:0 es lo que deja a un campo ceder dentro de una rejilla o un flex.
+  assert.match(html,/\.field \{[^}]*min-width:0/,'sin esto cualquier select largo vuelve a empujar su columna');
+});
