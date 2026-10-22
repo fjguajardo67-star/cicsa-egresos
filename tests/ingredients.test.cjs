@@ -451,6 +451,19 @@ test('integración: cada compra guarda su cantidad y el SKU del proveedor',async
   assert.equal(compras[0].codigo_proveedor,'000075056656001');
   assert.equal(compras[0].evidencia,'xml');
 });
+test('integración: una factura LEÍDA también guarda su cantidad e importe, no solo los XML',async()=>{
+  // El XML no es la única vía: la mayoría de las compras entran por lectura de la factura, y
+  // esas llegaban sin cantidad ni importe porque el mapeo de index.html los tiraba. Sin esto,
+  // el gasto por producto solo podía salir de los CFDI y el botón de reprocesar no las alcanza.
+  const m=memory(),{app}=integration(m);
+  await app.ingest([{nombre:'Arroz 3kg',precio:90,unidad:'kg',cantidad:40,importe:3600}],
+    'Proveedor A','F-LEIDA',{fecha:'2026-09-11'});
+  const compras=(await m.store.list()).filter(x=>!x.data._internal)[0].data.compras_forx;
+  assert.equal(compras.length,1);
+  assert.equal(compras[0].cantidad,40);
+  assert.equal(compras[0].importe,3600);
+  assert.equal(compras[0].evidencia,'lectura','sigue diciendo de dónde salió: la trazabilidad no cambia');
+});
 test('integración: el historial MUESTRA la cantidad y el SKU, no solo los guarda',async()=>{
   // Guardarlos sin pintarlos deja al usuario sin forma de comprobar que la captura sirvió: la
   // línea del historial decía solo fecha · precio · folio · proveedor.
@@ -540,6 +553,32 @@ test('lo omitido a mano no entra a la consulta',()=>{
 });
 test('una compra sin fecha o sin precio válido no entra: no se puede ni ordenar ni graficar',()=>{
   assert.equal(C.purchaseRows([conCompras([compra({fecha:''}),compra({id:'o2',precio:0}),compra({id:'o3',fecha:'2026-13-40'})])]).length,0);
+});
+test('una factura leída por IA y luego ingerida por XML es UNA compra, no dos',()=>{
+  // El identificador se calcula distinto en cada vía —posición del renglón contra precio—, así
+  // que las dos partidas conviven en el producto sin encontrarse. Enseñarlas aparte inflaba el
+  // número de compras, y en cuanto la lectura trae importe habría sumado el gasto dos veces.
+  const rows=C.purchaseRows([conCompras([
+    compra({id:'xml',folio:'W5925',evidencia:'xml',cantidad:915,importe:22875}),
+    compra({id:'ia',folio:'W5925',evidencia:'lectura'}),
+  ])]);
+  assert.equal(rows.length,1);
+  assert.equal(rows[0].evidencia,'xml','manda el dato fiscal, no la lectura');
+  assert.equal(rows[0].importe,22875);
+});
+test('la lectura sobrevive al XML del mismo folio cuando alguien la corrigió a mano',()=>{
+  const rows=C.purchaseRows([conCompras([
+    compra({id:'xml',folio:'W5925',evidencia:'xml'}),
+    compra({id:'ia',folio:'W5925',evidencia:'lectura',precio:31,correcciones:[{precio:25,fecha:'2026-09-28'}]}),
+  ])]);
+  assert.equal(rows.length,2,'alguien la revisó: no se descarta en silencio');
+});
+test('dos compras reales con folios distintos siguen siendo dos, aunque una sea lectura',()=>{
+  const rows=C.purchaseRows([conCompras([
+    compra({id:'a',folio:'W5925',evidencia:'xml'}),
+    compra({id:'b',folio:'W5926',evidencia:'lectura',fecha:'2026-09-29'}),
+  ])]);
+  assert.equal(rows.length,2,'la regla une una compra consigo misma, no dos compras distintas');
 });
 test('los filtros se acumulan: proveedor, rango de fechas y texto',()=>{
   const rows=C.purchaseRows([

@@ -217,7 +217,17 @@
     const rows = [];
     for (const p of products || []) {
       if (!destination(p).include) continue;
-      for (const o of observations(p)) {
+      const todas = observations(p);
+      // La misma factura leída por IA y luego ingerida por XML deja DOS partidas: el
+      // identificador se calcula distinto en cada vía (posición del renglón contra precio), así
+      // que no se encuentran. El historial las enseñaba como dos compras —la del XML completa y
+      // la de la lectura sin cantidad ni importe— y al sumar el gasto habría contado el doble.
+      // Es UNA compra: manda el XML, que es el dato fiscal. La lectura no se borra, solo deja de
+      // contarse aparte. Es la misma regla con la que recordPurchase ya elige el precio vigente,
+      // y como allá, una partida corregida a mano sobrevive: alguien la revisó.
+      const conXml = new Set(todas.filter(o => o.evidencia === 'xml' && o.folio).map(o => norm(o.folio)));
+      for (const o of todas) {
+        if (o.evidencia !== 'xml' && !o.correcciones?.length && conXml.has(norm(o.folio))) continue;
         const fecha = date(o.fecha);
         if (!fecha || !positive(o.precio)) continue;
         const cantidad = positive(o.cantidad) ? number(o.cantidad) : null;
