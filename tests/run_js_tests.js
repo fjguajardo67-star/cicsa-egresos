@@ -458,6 +458,23 @@ t("dedupeProductos: mismo nombre+precio se funde; precio distinto se conserva", 
   ]);
   assert.equal(out.length, 2);
 });
+t("dedupeProductos: cantidad e importe llegan al historial y se SUMAN al fundir", () => {
+  // Se tiraban aqui: el objeto salia con seis campos, asi que TODA compra leida de una factura
+  // por IA quedaba sin con que calcular su gasto. Reprocesar los CFDI no la arregla, porque una
+  // factura leida no es un CFDI.
+  const [papa] = S.dedupeProductos([
+    { nombre: "Papa", precio_unitario: 20, cantidad: 10, importe: 200 },
+    { nombre: "papa", precio_unitario: 20, cantidad: 15, importe: 300 },
+  ]);
+  assert.equal(papa.cantidad, 25, "dos entregas en una fila: la fila representa las dos");
+  assert.equal(papa.importe, 500);
+  assert.equal(papa.precio, 20, "el precio unitario no se suma, es el mismo");
+});
+t("dedupeProductos: lo que la factura no declara sale en cero, que aguas abajo es «no se sabe»", () => {
+  const [x] = S.dedupeProductos([{ nombre: "Papa", precio_unitario: 20 }]);
+  assert.equal(x.cantidad, 0);
+  assert.equal(x.importe, 0);
+});
 
 console.log("\n== fechas ==");
 t("todayStr usa la fecha LOCAL (no UTC) — regresión del bug de zona horaria", () => {
