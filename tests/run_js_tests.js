@@ -299,7 +299,49 @@ t("formaPagoLabel cubre todas las formas", () => {
   assert.ok(S.formaPagoLabel({ formaPago: "efectivo" }).includes("Efectivo"));
   assert.ok(S.formaPagoLabel({ formaPago: "transferencia" }).includes("Transferencia"));
   assert.ok(S.formaPagoLabel({ formaPago: "credito" }).includes("Crédito"));
+  assert.ok(S.formaPagoLabel({ formaPago: "debito" }).includes("Débito"));
   assert.equal(S.formaPagoLabel({}), "—");
+});
+t("la tarjeta de débito NO es efectivo: no sale de la caja, sale del banco", () => {
+  // Es lo unico que podia descuadrar la conciliacion de Caja contra el conteo fisico.
+  assert.ok(!S.esGastoEfectivo({ formaPago: "debito" }));
+  assert.ok(!S.esGastoEfectivo({ formaPago: "credito", formaPagoFinal: "debito" }));
+  assert.equal(S.claveFormaPago({ formaPago: "debito" }), "debito");
+});
+t("la tarjeta de débito se totaliza y se filtra aparte", () => {
+  const gs = [
+    { id: "a", importe: 100, formaPago: "debito" },
+    { id: "b", importe: 200, formaPago: "efectivo" },
+    { id: "c", importe: 300, formaPago: "transferencia" },
+  ];
+  const tot = S.totalesPorFormaPago(gs);
+  close(tot.debito, 100, 0.01);
+  close(tot.efectivo, 200, 0.01);
+  close(tot.transferencia, 300, 0.01);
+  close(tot.total, 600, 0.01);
+  assert.deepEqual(S.filtrarGastosPanel(gs, { formaPago: "debito" }).map(g => g.id), ["a"]);
+});
+t("una forma de pago nueva se ofrece en TODOS los selectores, no solo en captura", () => {
+  // Un selector que no ofrece el valor que el gasto trae no sale vacio: el navegador enseña la
+  // PRIMERA opcion como elegida. En los dos selectores editables —Pagos y Reporte— eso pinta un
+  // gasto con debito como «Efectivo Caja» y basta tocar el renglon para pisarlo de verdad.
+  // Cada cierre se empareja con el <select MÁS CERCANO que lo precede. Buscar de apertura a
+  // cierre no sirve: index.html menciona "<select>" dentro de un comentario y el bloque se come
+  // 46 KB hasta el siguiente cierre, con lo que la prueba pasaria por la razon equivocada.
+  const selects = [];
+  for (const cierre of [...html.matchAll(/<\/select>/g)]) {
+    const apertura = html.lastIndexOf("<select", cierre.index);
+    if (apertura >= 0) selects.push(html.slice(apertura, cierre.index));
+  }
+  const dePago = selects.filter(s => s.includes('value="transferencia"'));
+  assert.equal(dePago.length, 6, `cambió el número de selectores de forma de pago: hay ${dePago.length}, no 6`);
+  const sinDebito = dePago.filter(s => !s.includes('value="debito"'));
+  assert.deepEqual(sinDebito.map(s => (s.match(/id="([^"]+)"/) || [, "(en plantilla JS)"])[1]), [],
+    "estos selectores no ofrecen la forma de pago nueva");
+  // El desglose bajo la tabla de Gastos lista las formas a mano: si falta, su total no se enseña.
+  assert.ok(/partes\s*=\s*\[[^\]]*"debito"/.test(html), "el desglose de Gastos no suma la débito");
+  assert.ok(/FORMA_PAGO_ETIQUETA[\s\S]*?debito:\s*"[^"]*Débito/.test(html),
+    "sin etiqueta, el desglose enseña la llave cruda «debito»");
 });
 t("partidasExpandidas: divide la dividida, conserva el total, ignora partidas ≤ 0", () => {
   const gastos = [

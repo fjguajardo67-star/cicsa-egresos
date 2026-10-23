@@ -1008,6 +1008,7 @@ body.snav-min .side-theme span { display:none; }
           <option value="efectivo">💵 Efectivo Caja</option>
           <option value="transferencia">🏦 Transferencia</option>
           <option value="credito">📋 Crédito</option>
+          <option value="debito">💳 Tarjeta de Débito</option>
         </select>
       </div>
       <div class="field" id="fVencimientoWrap" style="display:none">
@@ -1085,6 +1086,7 @@ body.snav-min .side-theme span { display:none; }
             <option value="efectivo">💵 Efectivo Caja</option>
             <option value="transferencia">🏦 Transferencia</option>
             <option value="credito">📋 Crédito</option>
+            <option value="debito">💳 Tarjeta de Débito</option>
           </select>
         </div>
         <div class="field" id="mVencimientoWrap" style="display:none">
@@ -1118,6 +1120,7 @@ body.snav-min .side-theme span { display:none; }
         <option value="efectivo">💵 Efectivo Caja</option>
         <option value="transferencia">🏦 Transferencia</option>
         <option value="credito">📋 Crédito</option>
+        <option value="debito">💳 Tarjeta de Débito</option>
         <option value="cheque">📝 Cheque</option>
         <option value="sin">— Sin forma de pago</option>
       </select>
@@ -1878,6 +1881,7 @@ body.snav-min .side-theme span { display:none; }
         <select id="pagoFormaPago">
           <option value="transferencia">🏦 Transferencia</option>
           <option value="efectivo">💵 Efectivo Caja</option>
+          <option value="debito">💳 Tarjeta de Débito</option>
         </select>
       </div>
     </div>
@@ -2096,7 +2100,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-22-egresos-v40";
+const APP_BUILD = "2026-10-23-egresos-v41";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -5265,7 +5269,7 @@ function renderGastos(){
   const desgEl=document.getElementById("desgloseFormaPago");
   if(desgEl){
     const tfp=totalesPorFormaPago(filtrados);
-    const partes=["efectivo","transferencia","credito","cheque","sin"]
+    const partes=["efectivo","transferencia","debito","credito","cheque","sin"]
       .filter(k=>Math.abs(tfp[k])>0.005)
       .map(k=>`${FORMA_PAGO_ETIQUETA[k]||k} ${fmt(tfp[k])}`);
     desgEl.textContent = partes.length>1 ? partes.join("  ·  ") : "";
@@ -12129,6 +12133,7 @@ function renderPagos(){
       <option value="efectivo" ${esEfectivoSel?"selected":""}>💵 Efectivo Caja</option>
       <option value="transferencia" ${g.formaPago==="transferencia"?"selected":""}>🏦 Transferencia</option>
       <option value="credito" ${g.formaPago==="credito"?"selected":""}>📋 Crédito</option>
+      <option value="debito" ${g.formaPago==="debito"?"selected":""}>💳 Tarjeta de Débito</option>
     </select>`;
     const fpCell=`<div>${fpSelect}</div>`;
     // Estado: efectivo/transferencia se registran ya pagados; crédito arranca pendiente hasta
@@ -13475,6 +13480,7 @@ function formaPagoLabel(g){
   if(fp==="efectivo"||fp==="caja_cortes") return "💵 Efectivo Caja";
   if(fp==="transferencia") return "🏦 Transferencia";
   if(fp==="credito") return "📋 Crédito";
+  if(fp==="debito") return "💳 Tarjeta de Débito";
   if(fp==="cheque") return "📝 Cheque";
   return "—";
 }
@@ -13486,7 +13492,8 @@ function formaPagoLabel(g){
 const FORMA_PAGO_COLORES = {
   efectivo:      { bg:"#E8F5E9", border:"#66BB6A", color:"#1B5E20" },
   transferencia: { bg:"#E3F2FD", border:"#42A5F5", color:"#0D47A1" },
-  credito:       { bg:"#FFF3E0", border:"#FB8C00", color:"#8A5300" }
+  credito:       { bg:"#FFF3E0", border:"#FB8C00", color:"#8A5300" },
+  debito:        { bg:"#F3E5F5", border:"#AB47BC", color:"#4A148C" }
 };
 // ═══════════════════════════════════════════════════════════════════════════
 // LA TABLA DE DETALLE — una sola, con los permisos como DATO
@@ -13522,7 +13529,7 @@ function claveFormaPago(g){
   return fp || "sin";
 }
 const FORMA_PAGO_ETIQUETA = { efectivo:"💵 Efectivo Caja", transferencia:"🏦 Transferencia",
-                              credito:"📋 Crédito", cheque:"📝 Cheque", sin:"— Sin forma de pago" };
+                              credito:"📋 Crédito", debito:"💳 Tarjeta de Débito", cheque:"📝 Cheque", sin:"— Sin forma de pago" };
 
 // Filtro del detalle. Puro: la pantalla solo le pasa lo que el usuario eligió.
 // Una factura dividida no tiene UNA categoría — si el filtro coincide con alguna de sus partidas,
@@ -13544,7 +13551,7 @@ function filtrarGastosPanel(gastos, f){
 // comprobante. Sumar el importe fiscal en la columna de efectivo daría un total que no cuadra
 // contra el conteo físico, que es justo para lo que sirve esta cifra.
 function totalesPorFormaPago(gastos){
-  const t = { efectivo:0, transferencia:0, credito:0, cheque:0, sin:0, total:0 };
+  const t = { efectivo:0, transferencia:0, debito:0, credito:0, cheque:0, sin:0, total:0 };
   (gastos||[]).forEach(g=>{
     if(!g) return;
     const k = claveFormaPago(g);
@@ -13632,12 +13639,13 @@ function editarFolioGasto(id, valor){
 
 function formaPagoSelectHtml(g){
   const fp=g.formaPagoFinal||g.formaPago, esEfectivoSel=fp==="efectivo"||fp==="caja_cortes";
-  const key=esEfectivoSel?"efectivo":(fp==="transferencia"?"transferencia":(fp==="credito"?"credito":null));
+  const key=esEfectivoSel?"efectivo":(FORMA_PAGO_COLORES[fp]?fp:null);
   const c=FORMA_PAGO_COLORES[key]||{bg:"var(--do)",border:"var(--border)",color:"var(--vd)"};
   return `<select style="border:1.5px solid ${c.border};background:${c.bg};color:${c.color};border-radius:6px;padding:3px 6px;font-size:11px;font-weight:600;cursor:pointer;width:100%" onchange="cambiarFormaPagoReporte('${g.id.replace(/'/g,"\\'")}', this.value)" title="Corregir forma de pago">
     <option value="efectivo" ${esEfectivoSel?"selected":""}>💵 Efectivo Caja</option>
     <option value="transferencia" ${fp==="transferencia"?"selected":""}>🏦 Transferencia</option>
     <option value="credito" ${fp==="credito"?"selected":""}>📋 Crédito</option>
+    <option value="debito" ${fp==="debito"?"selected":""}>💳 Tarjeta de Débito</option>
   </select>`;
 }
 function cambiarFormaPagoReporte(id, valor){
