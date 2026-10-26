@@ -120,7 +120,7 @@ const FUNCS = [
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
   "pareceMedidaNoIngrediente", "_sepNombres",
-  "formaPagoLabel", "partidasExpandidas", "contenidoTotalGramos",
+  "formaPagoLabel", "partidasExpandidas", "renglonesAuditoria", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
   "findDuplicate", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
@@ -356,6 +356,64 @@ t("partidasExpandidas: divide la dividida, conserva el total, ignora partidas �
   assert.deepEqual(out.filter(g => g.categoria === "Cárnicos").length, 1);
   assert.ok(!out.some(g => g.categoria === "(sin desglosar)"), "si el desglose cuadra, no se inventa resto");
 });
+console.log("\n== Auditoría filtrada por categoría: se mide la PARTE, no la factura ==");
+// Caso real: con «Tortilla» la factura ICAJG477369 de Walmart entraba con sus $17,153.00
+// completos, cuando su tortilla eran $637.95. El total por proveedor salía siendo su gasto entero.
+const _walmart = { id:"w", proveedor:"NUEVA WALMART", fecha:"2026-10-13", factura:"ICAJG477369",
+  importe:17153, montoCaja:17153, formaPago:"efectivo", categoria:"Dividida", _dividida:true, _partidas:[
+    { categoria:"Abarrotes / Secos", importe:8960.95 }, { categoria:"Lácteos / Cremería", importe:2518 },
+    { categoria:"JUGOS", importe:2500.03 }, { categoria:"Artículos de limpieza", importe:1319.99 },
+    { categoria:"Congelados", importe:831.02 }, { categoria:"Tortilla", importe:637.95 },
+    { categoria:"Frutas y Verduras", importe:385.06 } ] };
+const _tortillero = { id:"s", proveedor:"SERGIO CUADROS GARCIA", fecha:"2026-10-08", importe:22875,
+  formaPago:"transferencia", categoria:"Tortilla" };
+t("con filtro, una factura dividida aporta solo su partida de esa categoría", () => {
+  const r = S.renglonesAuditoria([_walmart, _tortillero], "Tortilla");
+  assert.equal(r.length, 2);
+  const w = r.find(x => x.id === "w");
+  close(w.importe, 637.95, 0.001);
+  assert.equal(w.categoria, "Tortilla");
+  close(w._facturaTotal, 17153, 0.001, "se conserva de qué factura es parte");
+  close(r.reduce((s, x) => s + x.importe, 0), 23512.95, 0.001, "no 40,028");
+});
+t("la rebanada ya no es una dividida: no se reabre ni dice «Dividida» ni inventa descuadre de caja", () => {
+  const [w] = S.renglonesAuditoria([_walmart], "Tortilla");
+  assert.ok(!w._dividida && !w._partidas, "si conservara las marcas, partidasExpandidas la reabriría entera");
+  assert.equal(S.partidasExpandidas([w]).length, 1);
+  close(S.partidasExpandidas([w])[0].importe, 637.95, 0.001);
+  assert.ok(!S.formaPagoLabel(w).includes("Dividida"), "debe decir cómo se pagó");
+  assert.equal(S.difImporteCaja(w), 0, "el efectivo de la factura entera no se compara contra la rebanada");
+});
+t("sin filtro de categoría no cambia nada: la factura completa es el renglón", () => {
+  const gs = [_walmart, _tortillero];
+  assert.equal(S.renglonesAuditoria(gs, ""), gs);
+});
+t("una factura que repite categoría en dos partidas es UNA factura", () => {
+  const g = { id:"d", importe:300, _dividida:true, _partidas:[
+    { categoria:"Tortilla", importe:1.1 }, { categoria:"Gas", importe:296.7 }, { categoria:"Tortilla", importe:2.2 } ] };
+  const r = S.renglonesAuditoria([g], "Tortilla");
+  assert.equal(r.length, 1, "«N facturas» no se infla");
+  // 1.1 + 2.2 da 3.3000000000000003 en binario: el renglón enseña 3.3.
+  assert.equal(r[0].importe, 3.3, "y la suma va al centavo, sin arrastre binario");
+});
+t("el filtro «(sin categoría)» toma solo las partidas que se quedaron sin una", () => {
+  const g = { id:"d", importe:300, _dividida:true, _partidas:[{ categoria:"", importe:120 }, { categoria:"Gas", importe:180 }] };
+  const r = S.renglonesAuditoria([g, { id:"x", importe:50, categoria:"" }], S.CAT_SIN || "__SIN__");
+  close(r.reduce((s, x) => s + x.importe, 0), 170, 0.001);
+});
+t("la pantalla, el PDF y el Excel de Auditoría miden con la MISMA base", () => {
+  // Los tres tenían su propia copia del cálculo y los tres sumaban la factura entera. Si solo se
+  // arreglara la pantalla, el PDF exportado diría otro número que lo que se acaba de ver.
+  for (const fn of ["renderReportes", "exportarReportePDF", "exportarReporteExcel"]) {
+    const i = html.indexOf("function " + fn + "(");
+    const cuerpo = html.slice(i, html.indexOf("\nfunction ", i + 10));
+    assert.ok(/renglonesAuditoria\(gastosFiltradosReporte\(\),cat\)/.test(cuerpo), fn + " no usa la base común");
+    assert.ok(/cat\?gastos[^:]*:partidasExpandidas\(gastos\)/.test(cuerpo), fn + " vuelve a expandir las rebanadas");
+    // Un archivo filtrado que no lo dice se lee después como el gasto total del periodo.
+    if (fn !== "renderReportes") assert.ok(/Solo categoría/.test(cuerpo), fn + " no dice que está filtrado");
+  }
+});
+
 t("una factura dividida a la que le falta desglose NO pierde ese dinero", () => {
   // Caso real: el balance daba $2,292,182.34 por categoría contra $2,292,580.69 de salidas.
   // El desglose por proveedor cuadraba, el de categorías no, y el hueco no aparecía en ningún lado.
