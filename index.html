@@ -2100,7 +2100,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-23-egresos-v41";
+const APP_BUILD = "2026-10-26-egresos-v42";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -11445,6 +11445,34 @@ function gastosFiltradosReporte(){
     return true;
   });
 }
+// gastosFiltradosReporte deja pasar la factura que TOCA la categoría —es lo correcto para
+// decidir cuáles entran— pero después se sumaba COMPLETA. Buscar «Tortilla» metía los
+// $17,153.00 de una factura de Walmart cuya tortilla eran $637.95, y el total por proveedor
+// salía siendo su gasto entero. Con filtro de categoría, cada renglón es lo que ESA factura
+// gastó en ESA categoría. Sin filtro no cambia nada: la factura completa ES el renglón.
+// Si una factura repite la categoría en dos partidas sigue siendo UNA factura: se suman en un
+// solo renglón, para que «N facturas» no se infle.
+function renglonesAuditoria(gastos, cat){
+  if(!cat) return gastos;
+  const casa = p => cat===CAT_SIN ? !p.categoria : p.categoria===cat;
+  const completo = new Map((gastos||[]).map(g=>[g.id, parseFloat(g.importe)||0]));
+  const porFactura = new Map();
+  partidasExpandidas(gastos).filter(casa).forEach(p=>{
+    const prev = porFactura.get(p.id);
+    if(prev){ prev.importe += parseFloat(p.importe)||0; return; }
+    // El renglón es una REBANADA, ya no la factura: pierde las marcas de dividida y el
+    // montoCaja. Si las conservara, partidasExpandidas la volvería a abrir en todas sus
+    // categorías, formaPagoLabel diría «Dividida» en vez de cómo se pagó, y difImporteCaja
+    // compararía el efectivo de la factura entera contra la rebanada e inventaría un descuadre.
+    const { _partidas, _dividida, montoCaja, ...rebanada } = p;
+    porFactura.set(p.id, { ...rebanada, importe:parseFloat(p.importe)||0, _facturaTotal:completo.get(p.id)||0 });
+  });
+  // Sumar centavos de varias partidas arrastra binario; lo que se enseña va al centavo.
+  return [...porFactura.values()].map(r=>({ ...r, importe:Math.round(r.importe*100)/100 }));
+}
+function catReporteActual(){ return document.getElementById("rCategoria")?.value||""; }
+// Para que un PDF o un Excel filtrado no se lea después como el gasto total del periodo.
+function etiquetaCatReporte(cat){ return !cat ? "" : (cat===CAT_SIN ? "(sin categoría)" : cat); }
 // Select de categoría editable para el detalle de Auditoría — permite reclasificar un gasto
 // (ej. las facturas que quedaron en Desechables por la migración de "sin categoría") a su
 // categoría real sin salir de la hoja. Los gastos divididos no se tocan aquí: su categoría vive
@@ -11504,7 +11532,9 @@ function renderReportes(){
   guardarFiltrosReportes();
   poblarCategoriasReporte();
   poblarProveedores();
-  const gastos=gastosFiltradosReporte(),total=gastos.reduce((s,g)=>s+g.importe,0),gastosExp=partidasExpandidas(gastos);
+  // Con filtro de categoría cada renglón ya ES una rebanada: volver a expandirlo lo reabriría.
+  const cat=catReporteActual(),gastos=renglonesAuditoria(gastosFiltradosReporte(),cat);
+  const total=gastos.reduce((s,g)=>s+(parseFloat(g.importe)||0),0),gastosExp=cat?gastos:partidasExpandidas(gastos);
   const porCat={};gastosExp.forEach(g=>{porCat[g.categoria]=(porCat[g.categoria]||0)+g.importe;});
   const maxCat=Object.entries(porCat).sort((a,b)=>b[1]-a[1])[0],provs=[...new Set(gastos.map(g=>g.proveedor))].length;
   document.getElementById("rKpis").innerHTML=`<div class="scard"><div class="scard-label">Total del período</div><div class="scard-val">${fmt(total)}</div><div class="scard-sub">${gastos.length} facturas</div></div><div class="scard"><div class="scard-label">Proveedores</div><div class="scard-val">${provs}</div></div><div class="scard"><div class="scard-label">Categorías</div><div class="scard-val">${Object.keys(porCat).length}</div></div><div class="scard"><div class="scard-label">Mayor categoría</div><div class="scard-val" style="font-size:18px">${maxCat?esc(maxCat[0]):"—"}</div><div class="scard-sub">${maxCat?fmt(maxCat[1]):""}</div></div>`;
@@ -11528,7 +11558,7 @@ function renderReportes(){
     const tr=document.createElement("tr");
     tr.innerHTML=`<td>${fmtDate(g.fecha)}</td>`+
       `<td>${celdaProveedor(g, PA)}</td>`+
-      `<td>${celdaCategoria(g, PA)}</td>`+
+      `<td>${celdaCategoria(g, PA)}${g._facturaTotal>g.importe+0.005?`<div style="font-size:10px;color:var(--txt2)">parte de ${fmt(g._facturaTotal)}</div>`:""}</td>`+
       `<td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2)">${celdaFolio(g, PA)}</td>`+
       `<td>${celdaFormaPago(g, PA)}</td>`+
       `<td class="amount-cell">${celdaImporte(g, PA)}</td>`+
@@ -11592,18 +11622,18 @@ function exportarReportePDF(){
   // Reporte de AUDITORÍA: rango libre y filtros propios, con el desglose por proveedor. Comparte
   // la forma con el del periodo (lienzoPDF) pero no el contenido: responden preguntas distintas y
   // fundirlos obligaría a perder el presupuesto de uno o el ranking del otro.
-  const gastos=gastosFiltradosReporte();
+  const cat=catReporteActual(),gastos=renglonesAuditoria(gastosFiltradosReporte(),cat);
   const ini=document.getElementById("rFechaIni")?.value||"", fin=document.getElementById("rFechaFin")?.value||"";
-  const total=gastos.reduce((s,g)=>s+g.importe,0);
+  const total=gastos.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
 
   const L=lienzoPDF({ margen:14 });
   const {C}=L;
   L.cabecera("CICSA — Reporte de Egresos",
-    `Período: ${fmtDate(ini)} al ${fmtDate(fin)}  |  Generado: ${new Date().toLocaleDateString("es-MX")}`);
+    `Período: ${fmtDate(ini)} al ${fmtDate(fin)}${cat?"  |  Solo categoría: "+etiquetaCatReporte(cat):""}  |  Generado: ${new Date().toLocaleDateString("es-MX")}`);
   L.tarjetas([["Total",fmt(total)],["Facturas",String(gastos.length)],
               ["Proveedores",String(new Set(gastos.map(g=>g.proveedor)).size)]]);
 
-  const porCat={}; partidasExpandidas(gastos).forEach(g=>{ porCat[g.categoria]=(porCat[g.categoria]||0)+g.importe; });
+  const porCat={}; (cat?gastos:partidasExpandidas(gastos)).forEach(g=>{ porCat[g.categoria]=(porCat[g.categoria]||0)+g.importe; });
   L.seccion("POR CATEGORÍA");
   Object.entries(porCat).sort((a,b)=>b[1]-a[1]).forEach(([cat,val],i)=>{
     L.salto(6);
@@ -11651,9 +11681,9 @@ function exportarReportePDF(){
 }
 
 function exportarReporteExcel(){
-  const gastos=gastosFiltradosReporte(),ini=document.getElementById("rFechaIni")?.value||"",fin=document.getElementById("rFechaFin")?.value||"",total=gastos.reduce((s,g)=>s+g.importe,0),wb=XLSX.utils.book_new();
-  hojaDetalleGastos(wb, gastos, "CICSA — Reporte de Egresos", `Período: ${fmtDate(ini)} al ${fmtDate(fin)}`);
-  const gastosExpXls=partidasExpandidas(gastos);
+  const cat=catReporteActual(),gastos=renglonesAuditoria(gastosFiltradosReporte(),cat),ini=document.getElementById("rFechaIni")?.value||"",fin=document.getElementById("rFechaFin")?.value||"",total=gastos.reduce((s,g)=>s+(parseFloat(g.importe)||0),0),wb=XLSX.utils.book_new();
+  hojaDetalleGastos(wb, gastos, "CICSA — Reporte de Egresos", `Período: ${fmtDate(ini)} al ${fmtDate(fin)}${cat?"  |  Solo categoría: "+etiquetaCatReporte(cat):""}`);
+  const gastosExpXls=cat?gastos:partidasExpandidas(gastos);
   const porProv={};gastos.forEach(g=>{if(!porProv[g.proveedor])porProv[g.proveedor]={total:0,count:0,cats:{}};porProv[g.proveedor].total+=g.importe;porProv[g.proveedor].count++;});
   gastosExpXls.forEach(g=>{if(!porProv[g.proveedor])porProv[g.proveedor]={total:0,count:0,cats:{}};porProv[g.proveedor].cats[g.categoria]=(porProv[g.proveedor].cats[g.categoria]||0)+g.importe;});
   const ws2=XLSX.utils.aoa_to_sheet([["CICSA — Por Proveedor"],[`Período: ${ini} al ${fin}`],[],["#","Proveedor","Facturas","Categoría principal","Total"],...Object.entries(porProv).sort((a,b)=>b[1].total-a[1].total).map(([prov,d],i)=>[i+1,prov,d.count,Object.entries(d.cats).sort((a,b)=>b[1]-a[1])[0]?.[0]||"—",d.total]),[],[" ","","","TOTAL",total]]);
