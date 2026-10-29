@@ -4846,6 +4846,77 @@ t("una factura repartida no sale como diferencia en la conciliación", () => {
   assert.equal(r.diferencias.length, 0, "la suma de los renglones cuadra con el CFDI");
   assert.equal(r.conciliadas.length, 1);
 });
+console.log("\n== conciliación SAT: el folio liga solo con el comprobante de SU emisor ==");
+const _cfdiSat = (uuid, serie, folio, proveedor, total, fecha="2026-09-29") =>
+  ({ uuid, folio:uuid, serie, folioComp:folio, proveedor, total, fecha, tipo:"I", rfc:"XAXX010101000" });
+const _U1 = "A1111111-2222-3333-4444-555555555555", _U2 = "B1111111-2222-3333-4444-555555555555";
+t("la factura de un proveedor NO se da por capturada con el gasto de otro con el mismo folio", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"ana", factura:"292", importe:39269, fecha:"2026-09-29", proveedor:"ANA KAREM HUERTA DÍAZ" } ]}];
+  const r = S.conciliarSAT([_cfdiSat(_U1, "", "292", "CONSTRUCTORA DEL NORTE SA DE CV", 266800)], "", "", "");
+  assert.equal(r.conciliadas.length + r.diferencias.length, 0, "antes salía como diferencia de −$227,531");
+  assert.equal(r.faltantes.length, 1, "la factura que de verdad falta ya se ve");
+  assert.ok(r.sinRespaldo.some(x => x.gasto.id === "ana"), "y el gasto de Ana sigue sin comprobante, que es lo cierto");
+});
+t("con los dos CFDI, cada gasto concilia con el suyo", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"ana", factura:"292", importe:39269, fecha:"2026-09-29", proveedor:"ANA KAREM HUERTA DÍAZ" },
+    { id:"otro", factura:"292", importe:266800, fecha:"2026-09-20", proveedor:"CONSTRUCTORA DEL NORTE" } ]}];
+  const r = S.conciliarSAT([_cfdiSat(_U1, "", "292", "CONSTRUCTORA DEL NORTE SA DE CV", 266800, "2026-09-20"),
+                            _cfdiSat(_U2, "", "292", "ANA KAREM HUERTA DIAZ", 39269)], "", "", "");
+  assert.equal(r.conciliadas.length, 2);
+  assert.equal(r.diferencias.length + r.faltantes.length, 0);
+});
+t("los «pedazos» de una factura son de su proveedor, no cualquiera con el mismo folio", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"t", factura:"0001", importe:100, fecha:"2026-08-01", proveedor:"TELCEL" },
+    { id:"c", factura:"0001", importe:2500, fecha:"2026-08-01", proveedor:"CAJA CHICA" } ]}];
+  const r = S.conciliarSAT([_cfdiSat(_U1, "", "0001", "TELCEL SA DE CV", 100, "2026-08-01")], "", "", "");
+  assert.equal(r.conciliadas.length, 1, "antes sumaba 2,600 contra 100 y salía diferencia");
+  assert.equal(r.diferencias.length, 0);
+  assert.ok(r.sinRespaldo.some(x => x.gasto.id === "c"), "CAJA CHICA no se queda absorbida en una factura ajena");
+});
+t("el UUID sigue ligando aunque el nombre capturado no se parezca al fiscal", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"t", factura:"A77", importe:1160, fecha:"2026-08-01", proveedor:"TELCEL", cfdiUuid:_U1 } ]}];
+  const r = S.conciliarSAT([_cfdiSat(_U1, "A", "77", "RADIOMOVIL DIPSA SA DE CV", 1160, "2026-08-01")], "", "", "");
+  assert.equal(r.conciliadas.length, 1);
+});
+t("el UUID tecleado como folio también liga", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"t", factura:_U1, importe:1160, fecha:"2026-08-01", proveedor:"TELCEL" } ]}];
+  const r = S.conciliarSAT([_cfdiSat(_U1, "A", "77", "RADIOMOVIL DIPSA SA DE CV", 1160, "2026-08-01")], "", "", "");
+  assert.equal(r.conciliadas.length, 1);
+});
+t("un faltante con un gasto suelto del mismo folio lo dice, para no capturarlo dos veces", () => {
+  // Ser estricto cuesta: la misma factura capturada como «TELCEL» ya no liga con RADIOMOVIL DIPSA.
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"t", factura:"A-77", importe:1160, fecha:"2026-08-01", proveedor:"TELCEL" } ]}];
+  const cf = _cfdiSat(_U1, "A", "77", "RADIOMOVIL DIPSA SA DE CV", 1160, "2026-08-01");
+  const r = S.conciliarSAT([cf], "", "", "");
+  assert.equal(r.faltantes.length, 1);
+  assert.deepEqual(r.faltantes[0]._casiGasto, { id:"t", proveedor:"TELCEL", importe:1160, fecha:"2026-08-01" });
+  // Si después ese gasto queda ligado, el aviso no se queda pegado al comprobante.
+  S.state.weeks[0].gastos[0].cfdiUuid = _U1;
+  const r2 = S.conciliarSAT([cf], "", "", "");
+  assert.equal(r2.conciliadas.length, 1);
+  assert.ok(!("_casiGasto" in cf), "un aviso viejo no sobrevive a la siguiente conciliación");
+});
+t("el aviso no señala un gasto que ya está ligado a su propia factura", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"ana", factura:"292", importe:39269, fecha:"2026-09-29", proveedor:"ANA KAREM HUERTA DÍAZ" } ]}];
+  const r = S.conciliarSAT([_cfdiSat(_U1, "", "292", "CONSTRUCTORA DEL NORTE SA DE CV", 266800, "2026-09-20"),
+                            _cfdiSat(_U2, "", "292", "ANA KAREM HUERTA DIAZ", 39269)], "", "", "");
+  assert.equal(r.faltantes.length, 1);
+  assert.ok(!r.faltantes[0]._casiGasto, "el gasto de Ana ya es de su factura: no es pista de la de otro");
+});
+t("la fila del faltante enseña el aviso y deja abrir ese gasto", () => {
+  const i = html.indexOf('getElementById("satFaltantesBody").innerHTML');
+  const fila = html.slice(i, html.indexOf(".join(\"\")", i));
+  assert.ok(/\$\{c\._casiGasto\?`<div[^`]*corrige el proveedor/.test(fila), "sin el aviso, «Capturar» invita a duplicar");
+  assert.ok(/verEnGastos\('\$\{escAttrJs\(c\._casiGasto\.id\)\}'\)/.test(fila));
+});
+
 t("la conciliación también junta folios equivalentes, no solo idénticos", () => {
   S.state.weeks = [{ id: "1", gastos: [
     { id: "1", factura: "PBAL-31598", importe: 1000, fecha: "2026-07-06", proveedor: "POLLO BAL" },
