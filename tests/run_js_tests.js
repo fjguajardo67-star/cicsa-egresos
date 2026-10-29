@@ -137,7 +137,7 @@ const FUNCS = [
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
-  "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
+  "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos", "_indiceCfdis", "cfdiDelGasto", "fechasDelXmlPorAplicar", "aplicarFechaDelXml", "regresarFechaAntesDelXml",
   "clasificarDiferenciaSAT", "folioCapturableCfdi",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -4481,7 +4481,8 @@ t("un gasto sin fecha no entra a la lista", () => {
   assert.deepEqual(S.gastosConFechaDudosa([{ id: "1", fecha: "" }], REV, HOY), []);
 });
 const CFDIS = [
-  { folioComp: "12668", fecha: "2026-07-24" },
+  // Un CFDI guardado siempre trae al emisor; sin él, el folio solo ya no basta para ligarlo.
+  { folioComp: "12668", fecha: "2026-07-24", proveedor: "EVA MOTA HERNANDEZ" },
   { folioComp: "PBAL31832", fecha: "2026-07-28" },
   { folioComp: "EAR181665", fecha: "2026-07-08" },
 ];
@@ -4520,6 +4521,74 @@ t("sin CFDI que casar, siguen valiendo las señales de antes", () => {
     [{ id: "1", fecha: "2026-09-01", factura: "NO-EXISTE" }], [], HOY, CFDIS);
   assert.equal(r.length, 1);
   assert.ok(/futuro/.test(r[0].motivo));
+});
+
+console.log("\n== la fecha del XML manda, y se pone sola ==");
+// Pedido (oct 2026): «elige la fecha del xml como la correcta siempre».
+const _XML_EAR = { uuid:"EEEE1816-0000-4000-8000-000000000005", serie:"EAR", folioComp:"181665", tipo:"I",
+                   fecha:"2026-07-08", total:6538.88, proveedor:"GAS EXPRESS NIETO SA DE CV" };
+const _G_EAR = () => ({ id:"ear", fecha:"2026-07-15", factura:"EAR-181665", importe:6538.88, proveedor:"Gas Express Nieto" });
+t("un gasto ligado a su XML con otra fecha se corrige a la del XML", () => {
+  const r = S.fechasDelXmlPorAplicar([_G_EAR()], [_XML_EAR]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].fecha, "2026-07-08");
+  assert.equal(r[0].ref, _XML_EAR.uuid, "queda dicho de qué comprobante salió");
+});
+t("si ya trae la fecha del XML no hay nada que mover", () => {
+  assert.deepEqual(S.fechasDelXmlPorAplicar([{ ..._G_EAR(), fecha:"2026-07-08" }], [_XML_EAR]), []);
+});
+t("los seis «0001» de proveedores distintos NO se mueven al CFDI del 02 oct de otro emisor", () => {
+  const gs = ["TELCEL", "CAJA CHICA", "XAVIER MINJAREZ", "PEGADO DE BOLETOS"].map((p, i) =>
+    ({ id:"z" + i, fecha:"2026-08-01", factura:"0001", importe:100, proveedor:p }));
+  const ajeno = { uuid:"FFFF0001-0000-4000-8000-000000000006", serie:"BE2026", folioComp:"100001", tipo:"I",
+                  fecha:"2026-10-02", total:1, proveedor:"BEBIDAS PURIFICADAS" };
+  assert.deepEqual(S.fechasDelXmlPorAplicar(gs, [ajeno]), []);
+});
+t("un gasto ligado a un corte de caja no se mueve solo: descuadraría la caja de esa semana", () => {
+  const g = { ..._G_EAR(), _folioEgreso:"E-118" };
+  assert.deepEqual(S.fechasDelXmlPorAplicar([g], [_XML_EAR]), []);
+  const r = S.gastosConFechaDudosa([g], [], "2026-10-29", [_XML_EAR]);
+  assert.equal(r.length, 1, "sigue en la tarjeta para decidirlo a mano");
+  assert.ok(/corte de caja/.test(r[0].motivo));
+});
+t("la fecha de un complemento (tipo P) es la del pago: no se usa", () => {
+  const p = { ..._XML_EAR, tipo:"P", fecha:"2026-08-20" };
+  assert.deepEqual(S.fechasDelXmlPorAplicar([_G_EAR()], [p]), []);
+  assert.ok(!S.gastosConFechaDudosa([_G_EAR()], [], "2026-10-29", [p]).some(x => x.fuente === "CFDI"));
+});
+t("aplicar deja rastro, y la fecha de ANTES es la del primer cambio", () => {
+  const g = _G_EAR();
+  assert.equal(S.aplicarFechaDelXml(g, "2026-07-08", "U1"), true);
+  assert.equal(g.fecha, "2026-07-08");
+  assert.equal(g.fechaAntesDelXml, "2026-07-15");
+  assert.equal(g.fechaDelXml, "U1");
+  assert.ok(g.fechaDelXmlTs);
+  S.aplicarFechaDelXml(g, "2026-07-09", "U2");
+  assert.equal(g.fechaAntesDelXml, "2026-07-15", "un segundo cambio no borra la fecha original");
+  assert.equal(S.aplicarFechaDelXml(g, "2026-07-09", "U2"), false, "sin cambio no se reescribe nada");
+  assert.equal(S.aplicarFechaDelXml(g, "09/07/2026", "U3"), false, "una fecha mal formada no entra");
+});
+t("deshacer regresa la fecha y ese XML ya no se la vuelve a cambiar", () => {
+  const g = _G_EAR();
+  S.aplicarFechaDelXml(g, "2026-07-08", _XML_EAR.uuid);
+  assert.equal(S.regresarFechaAntesDelXml(g), true);
+  assert.equal(g.fecha, "2026-07-15");
+  assert.ok(!g.fechaAntesDelXml && !g.fechaDelXml, "sin rastro de un cambio que ya no está");
+  assert.deepEqual(S.fechasDelXmlPorAplicar([g], [_XML_EAR]), [], "la siguiente vuelta no insiste");
+  assert.ok(!S.gastosConFechaDudosa([g], [], "2026-10-29", [_XML_EAR]).some(x => x.fuente === "CFDI"),
+    "ni la tarjeta vuelve a pedirlo: una persona ya decidió");
+});
+t("después de aplicar, la tarjeta ya no lo marca", () => {
+  const g = _G_EAR();
+  S.fechasDelXmlPorAplicar([g], [_XML_EAR]).forEach(x => S.aplicarFechaDelXml(x.gasto, x.fecha, x.ref));
+  assert.deepEqual(S.gastosConFechaDudosa([g], [], "2026-10-29", [_XML_EAR]), []);
+});
+t("la corrección automática solo corre con un administrador y el acceso verificado", () => {
+  const i = html.indexOf("async function renderFechasDudosas(");
+  const cuerpo = html.slice(i, html.indexOf("\nfunction ", i + 10));
+  assert.ok(/if\(currentRole==="admin" && _financialReady && currentUser\)\{[\s\S]*?fechasDelXmlPorAplicar/.test(cuerpo),
+    "es un cambio a datos contables que nadie aprieta");
+  assert.ok(/aplicarFechaDelXml\(/.test(cuerpo), "y pasa por la función que deja rastro");
 });
 
 console.log("\n== el folio de un CFDI es serie+folio, no el UUID ==");
@@ -4691,6 +4760,77 @@ t("los renglones se juntan aunque el folio se haya tecleado distinto", () => {
     { id: "2", factura: "pbal31598",  importe: 2000 },
     { id: "3", factura: "31598",      importe: 500  },
   ], [{ folioComp: "PBAL31598", tipo: "I", total: 3500, subtotal: 3017.24 }]), []);
+});
+
+console.log("\n== el comprobante de un gasto es el de SU emisor, no cualquiera con el mismo folio ==");
+// Caso real (Auditoría, oct 2026): tres «importes que no cuadran» sumaban un efecto estimado de
+// +$311,912.92, y ninguno era de su factura. El folio lo numera cada emisor por su cuenta.
+const _OTRO_292  = { uuid:"AAAA0292-0000-4000-8000-000000000001", folioComp:"292", tipo:"I", total:266800, subtotal:230000,
+                     fecha:"2026-09-20", proveedor:"CONSTRUCTORA DEL NORTE SA DE CV", rfc:"CNO010101AAA" };
+const _ANA_292   = { uuid:"BBBB0292-0000-4000-8000-000000000002", folioComp:"292", tipo:"I", total:39269, subtotal:33852.59,
+                     fecha:"2026-09-29", proveedor:"ANA KAREM HUERTA DIAZ", rfc:"HUDA900101AAA" };
+const _ANA_GASTO = { id:"ana", factura:"292", importe:39269, fecha:"2026-09-29", proveedor:"ANA KAREM HUERTA DÍAZ" };
+t("un folio corto de OTRO emisor no es la factura del gasto", () => {
+  assert.deepEqual(S.gastosConImporteDistinto([_ANA_GASTO], [_OTRO_292]), [],
+    "antes salía −$227,531.00 y el botón le habría puesto $266,800.00");
+});
+t("con los dos CFDI guardados, se liga al de su emisor", () => {
+  assert.deepEqual(S.gastosConImporteDistinto([_ANA_GASTO], [_OTRO_292, _ANA_292]), [], "cuadra contra el suyo");
+  assert.equal(S.cfdiDelGasto(_ANA_GASTO, S._indiceCfdis([_OTRO_292, _ANA_292])), _ANA_292);
+  const r = S.gastosConImporteDistinto([{ ..._ANA_GASTO, importe:33852.59 }], [_ANA_292, _OTRO_292]);
+  assert.equal(r.length, 1, "una diferencia REAL contra su propio CFDI sí se sigue marcando");
+  assert.equal(r[0].esSubtotal, true);
+});
+t("renglones de proveedores distintos con el mismo folio no se suman como una factura", () => {
+  // TELCEL salía con «6 renglones con este folio (factura repartida)»: eran de varios emisores.
+  const gs = [
+    { id:"t", factura:"0001", importe:100, proveedor:"TELCEL" },
+    { id:"g", factura:"0001", importe:2500, proveedor:"GASOLINERA LA PAZ" },
+  ];
+  const cfdis = [{ uuid:"CCCC0001-0000-4000-8000-000000000003", serie:"BE2026", folioComp:"070001", tipo:"I",
+                   total:133016.20, subtotal:114669.14, proveedor:"BEBIDAS PURIFICADAS" }];
+  assert.deepEqual(S.gastosConImporteDistinto(gs, cfdis), [], "«0001» casaba por terminación con BE2026070001");
+});
+t("dos facturas con el mismo folio y distinto emisor se comparan cada una contra la suya", () => {
+  // Agrupando por folio, los dos gastos se sumaban ($306,069) contra UN CFDI y salía diferencia.
+  const otroGasto = { id:"o", factura:"292", importe:266800, proveedor:"CONSTRUCTORA DEL NORTE" };
+  assert.deepEqual(S.gastosConImporteDistinto([_ANA_GASTO, otroGasto], [_OTRO_292, _ANA_292]), []);
+});
+t("el UUID manda aunque el nombre capturado no se parezca al fiscal", () => {
+  const u = "DDDD0001-0000-4000-8000-000000000004";
+  const g = { id:"t", factura:"A-77", importe:1000, proveedor:"TELCEL", cfdiUuid:u };
+  const r = S.gastosConImporteDistinto([g], [{ uuid:u, folioComp:"A77", tipo:"I", total:1160, subtotal:1000,
+                                              proveedor:"RADIOMOVIL DIPSA SA DE CV" }]);
+  assert.equal(r.length, 1, "capturado desde el XML: el UUID no depende de cómo se tecleó el nombre");
+  assert.equal(r[0].esSubtotal, true);
+});
+t("sin UUID y con un nombre que no se parece, no se liga: mejor sin aviso que con el de otro", () => {
+  const g = { id:"t", factura:"A77", importe:1000, proveedor:"TELCEL" };
+  assert.equal(S.cfdiDelGasto(g, S._indiceCfdis([{ folioComp:"A77", proveedor:"RADIOMOVIL DIPSA SA DE CV" }])), null);
+});
+t("un CFDI sin total no sirve de referencia: no dice cuánto debió ser el gasto", () => {
+  assert.deepEqual(S.gastosConImporteDistinto([_ANA_GASTO], [{ ..._ANA_292, total:0 }]), [],
+    "si entrara, marcaría el importe completo como diferencia");
+});
+t("con dos candidatos del mismo emisor no se escoge al azar", () => {
+  const g = { id:"x", factura:"0001", proveedor:"ANA KAREM HUERTA" };
+  const idx = S._indiceCfdis([{ serie:"A", folioComp:"0001", proveedor:"ANA KAREM HUERTA DIAZ" },
+                              { serie:"B", folioComp:"0001", proveedor:"ANA KAREM HUERTA DIAZ" }]);
+  assert.equal(S.cfdiDelGasto(g, idx), null);
+});
+t("la fecha «buena» que se ofrece es la del CFDI del MISMO emisor", () => {
+  const r = S.gastosConFechaDudosa([{ ..._ANA_GASTO, fecha:"2026-09-29" }], [], "2026-10-29", [_OTRO_292]);
+  assert.ok(!r.some(x => x.fuente === "CFDI"), "no se ofrece mover el gasto a la fecha de la factura de otro");
+});
+t("un complemento de OTRO emisor con el mismo folio no manda a quitar el gasto", () => {
+  assert.deepEqual(S.gastosQueSonComplemento([_ANA_GASTO],
+    [{ folioComp:"292", tipo:"P", fecha:"2026-09-30", proveedor:"CONSTRUCTORA DEL NORTE SA DE CV" }]), []);
+});
+t("el seguro del botón «Usar el del CFDI» solo cuenta pedazos del mismo proveedor", () => {
+  const i = html.indexOf("function usarImporteCfdi(");
+  const cuerpo = html.slice(i, html.indexOf("\nfunction ", i + 10));
+  assert.ok(/_dupFoliosEquivalentes\(xf, f\) && _dupProvParecidos\(x\.proveedor, g\.proveedor\)/.test(cuerpo),
+    "otro proveedor con el mismo folio bloqueaba el botón con un aviso falso");
 });
 
 t("una factura repartida no sale como diferencia en la conciliación", () => {

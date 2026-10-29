@@ -2100,7 +2100,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-26-egresos-v42";
+const APP_BUILD = "2026-10-29-egresos-v44";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -7227,15 +7227,9 @@ function renderAll(){
 // Solo se comparan facturas (tipo I): un complemento va en cero y se atiende en su propia lista.
 function gastosConImporteDistinto(gastos, cfdis, tolerancia){
   const tol = (tolerancia==null) ? 1 : tolerancia;
-  const porFolio = [];
-  (cfdis||[]).forEach(c=>{
-    if(!c || c.ignorado) return;
-    if(String(c.tipo||"I").toUpperCase().slice(0,1) !== "I") return;
-    const f = _folioDeCfdi(c);
-    const t = parseFloat(c.total)||0;
-    if(f && t>0) porFolio.push({ folio:f, total:t, subtotal:parseFloat(c.subtotal)||0 });
-  });
-  if(!porFolio.length) return [];
+  const indice = _indiceCfdis(cfdis, c=>
+    String(c.tipo||"I").toUpperCase().slice(0,1)==="I" && (parseFloat(c.total)||0)>0);
+  if(!indice.length) return [];
   // Una factura con dos categorías (abarrotes y cárnicos, por ejemplo) se captura DIVIDIDA. Hoy
   // eso es un solo gasto con _partidas, pero lo capturado antes de ese cambio quedó como VARIOS
   // renglones con el MISMO folio, cada uno con su pedazo del total.
@@ -7244,13 +7238,14 @@ function gastosConImporteDistinto(gastos, cfdis, tolerancia){
   // botón "Usar el del CFDI" le habría puesto el TOTAL COMPLETO a cada pedazo, multiplicando el
   // gasto por seis. Lo que tiene que cuadrar con el comprobante es la SUMA del folio.
   const grupos = new Map();
+  // Se agrupa por COMPROBANTE, no por folio: dos emisores pueden traer el mismo folio, y
+  // agrupar por folio sumaba gastos de proveedores distintos como si fueran una factura repartida.
   (gastos||[]).forEach(g=>{
-    const f = _dupFolioCanon(g && g.factura);
-    if(!f) return;
-    const hit = porFolio.find(c=>_dupFoliosEquivalentes(f, c.folio));
-    if(!hit) return;
-    if(!grupos.has(hit.folio)) grupos.set(hit.folio, { cfdi:hit, gastos:[] });
-    grupos.get(hit.folio).gastos.push(g);
+    const c = cfdiDelGasto(g, indice);
+    if(!c) return;
+    const k = String(c.uuid||"") || (_folioDeCfdi(c)+"|"+String(c.rfc||c.proveedor||""));
+    if(!grupos.has(k)) grupos.set(k, { cfdi:{ total:parseFloat(c.total)||0, subtotal:parseFloat(c.subtotal)||0 }, gastos:[] });
+    grupos.get(k).gastos.push(g);
   });
   const out = [];
   grupos.forEach(gr=>{
@@ -7309,7 +7304,9 @@ function usarImporteCfdi(id, total){
   const hermanos = f ? allGastosAllWeeks().filter(x=>{
     if(!x || x.id===g.id) return false;
     const xf = _dupFolioCanon(x.factura);
-    return !!xf && _dupFoliosEquivalentes(xf, f);
+    // Otro proveedor con el mismo folio no es un pedazo de esta factura: sin esta condición el
+    // botón se negaba con un aviso falso.
+    return !!xf && _dupFoliosEquivalentes(xf, f) && _dupProvParecidos(x.proveedor, g.proveedor);
   }) : [];
   if(hermanos.length){
     alert(`Esta factura está repartida en ${hermanos.length+1} renglones (una por categoría).\n\n`+
@@ -7387,21 +7384,14 @@ async function renderLimpieza(){
 // cero y el dinero que muestra el PDF ("Monto de pago") no es un egreso nuevo. Registrarlo
 // duplica el gasto. Solo en un mes real esos comprobantes sumaban $576,501.62.
 function gastosQueSonComplemento(gastos, cfdis){
-  const pagos = [];
-  (cfdis||[]).forEach(c=>{
-    if(!c || c.ignorado) return;
-    if(String(c.tipo||"").toUpperCase().slice(0,1) !== "P") return;
-    const f = _folioDeCfdi(c);
-    if(f) pagos.push({ folio:f, fecha:String(c.fecha||"").slice(0,10), proveedor:c.proveedor||"" });
-  });
-  if(!pagos.length) return [];
+  // Esta tarjeta recomienda QUITAR el gasto: ligarlo al complemento de otro emisor que comparte
+  // folio llevaría a borrar una factura buena.
+  const indice = _indiceCfdis(cfdis, c=>String(c.tipo||"").toUpperCase().slice(0,1)==="P");
+  if(!indice.length) return [];
   const out = [];
   (gastos||[]).forEach(g=>{
-    if(!g) return;
-    const f = _dupFolioCanon(g.factura);
-    if(!f) return;
-    const hit = pagos.find(p=>_dupFoliosEquivalentes(f, p.folio));
-    if(hit) out.push({ gasto:g, cfdi:hit });
+    const c = cfdiDelGasto(g, indice);
+    if(c) out.push({ gasto:g, cfdi:{ folio:_folioDeCfdi(c), fecha:String(c.fecha||"").slice(0,10), proveedor:c.proveedor||"" } });
   });
   return out.sort((a,b)=> (parseFloat(b.gasto.importe)||0) - (parseFloat(a.gasto.importe)||0));
 }
@@ -7468,27 +7458,28 @@ function gastosConFechaDudosa(gastos, revisados, hoy, cfdis){
   // ya no hacen falta indicios. Esto además quita falsos positivos — probando contra un mes real,
   // 5 de 9 "posibles" tenían la fecha CORRECTA y solo coincidían con el día de captura porque la
   // factura se capturó el mismo día que llegó, que es lo normal.
-  const porFolio = [];
-  (cfdis||[]).forEach(c=>{
-    if(!c || c.ignorado || !c.fecha) return;
-    const f = _folioDeCfdi(c);
-    if(f) porFolio.push({ folio:f, fecha:String(c.fecha).slice(0,10) });
-  });
-  const buscarCfdi = (factura)=>{
-    const f = _dupFolioCanon(factura);
-    if(!f) return null;
-    return porFolio.find(c=>_dupFoliosEquivalentes(f, c.folio)) || null;
+  // Con el CFDI de otro emisor, la «fecha buena» que se ofrecía también era la de otro.
+  // Un complemento (tipo P) trae la fecha del PAGO, no la de la factura: no sirve aquí, y ese gasto
+  // ya lo atiende su propia tarjeta.
+  const indice = _indiceCfdis(cfdis, c=>/^\d{4}-\d{2}-\d{2}/.test(String(c.fecha||"")) && String(c.tipo||"I").toUpperCase().slice(0,1)!=="P");
+  const buscarCfdi = g=>{
+    const c = cfdiDelGasto(g, indice);
+    return c ? { fecha:String(c.fecha).slice(0,10), ref:String(c.uuid||"")||_folioDeCfdi(c) } : null;
   };
   const out = [];
   (gastos||[]).forEach(g=>{
     if(!g || !g.fecha) return;
     const rev = g._gmailMsgId ? porMsg[g._gmailMsgId] : null;
     const fCorreo = rev ? _fechaCorreoISO(rev.fechaCorreo) : "";
-    const cf = buscarCfdi(g.factura);
+    const cf = buscarCfdi(g);
     if(cf){
+      // Alguien regresó a mano la fecha que puso este XML: dijo que aquí no manda. No se insiste.
+      if(g.fechaXmlRechazada && g.fechaXmlRechazada === cf.ref) return;
       // Hay comprobante: su fecha manda, y si coincide el gasto está bien — no se marca nada más.
       if(cf.fecha !== g.fecha){
-        out.push({ gasto:g, motivo:"la fecha del CFDI es otra", fechaCorreo:cf.fecha,
+        out.push({ gasto:g, motivo: g._folioEgreso
+                     ? "la fecha del CFDI es otra (va ligado a un corte de caja: decídelo a mano)"
+                     : "la fecha del CFDI es otra", fechaCorreo:cf.fecha,
                    fuente:"CFDI", nivel:"seguro" });
       }
       return;
@@ -7515,17 +7506,95 @@ function gastosConFechaDudosa(gastos, revisados, hoy, cfdis){
   return out.sort((a,b)=> (a.nivel===b.nivel) ? (a.gasto.fecha < b.gasto.fecha ? -1 : 1) : (a.nivel==="seguro" ? -1 : 1));
 }
 
+// «Elige la fecha del XML como la correcta siempre» (oct 2026). Si el gasto está ligado SIN DUDA a
+// su comprobante —el mismo cfdiDelGasto: UUID, o folio y emisor, y un solo candidato—, la fecha
+// del timbrado gana y se pone sola, en vez de ir renglón por renglón apretando Guardar.
+// Tres casos NO se mueven solos:
+//  · Los ligados a un egreso de Manejo de Cortes: su fecha es la del día en que salió el efectivo, y
+//    moverla descuadraría la caja de esa semana contra el conteo físico. Se quedan en la tarjeta.
+//  · Los complementos de pago (tipo P): su fecha es la del pago, no la de la factura; además ese
+//    gasto sobra, y lo atiende su propia tarjeta.
+//  · Los que alguien regresó a mano: si se deshizo, una persona dijo que ese XML no manda ahí.
+function fechasDelXmlPorAplicar(gastos, cfdis){
+  const indice = _indiceCfdis(cfdis, c=>/^\d{4}-\d{2}-\d{2}/.test(String(c.fecha||"")) && String(c.tipo||"I").toUpperCase().slice(0,1)!=="P");
+  const out = [];
+  (gastos||[]).forEach(g=>{
+    if(!g || !g.fecha || g._folioEgreso) return;
+    const c = cfdiDelGasto(g, indice);
+    if(!c) return;
+    const ref = String(c.uuid||"") || _folioDeCfdi(c);
+    if(g.fechaXmlRechazada && g.fechaXmlRechazada === ref) return;
+    const fecha = String(c.fecha).slice(0,10);
+    if(fecha !== g.fecha) out.push({ gasto:g, fecha, ref });
+  });
+  return out;
+}
+// Deja rastro en el gasto: la fecha que tenía antes del PRIMER cambio y de qué comprobante salió la
+// nueva. Sin eso, un cambio que nadie apretó es indistinguible de un error, y no se podría deshacer.
+function aplicarFechaDelXml(g, fecha, ref){
+  if(!g || !/^\d{4}-\d{2}-\d{2}$/.test(String(fecha||"")) || g.fecha === fecha) return false;
+  if(!g.fechaAntesDelXml) g.fechaAntesDelXml = g.fecha;
+  g.fecha = fecha;
+  g.fechaDelXml = String(ref||"");
+  g.fechaDelXmlTs = new Date().toISOString();
+  return true;
+}
+// Regresa la fecha que tenía y anota que ESE comprobante no manda en este gasto, para que la
+// siguiente vuelta no se la vuelva a cambiar.
+function regresarFechaAntesDelXml(g){
+  if(!g || !g.fechaAntesDelXml) return false;
+  g.fechaXmlRechazada = g.fechaDelXml || "";
+  g.fecha = g.fechaAntesDelXml;
+  delete g.fechaAntesDelXml; delete g.fechaDelXml; delete g.fechaDelXmlTs;
+  return true;
+}
+let _fechasDelXmlRecientes = [];   // lo que se movió en esta sesión, para enseñarlo y poder deshacerlo
+function avisoFechasDelXml(){
+  const vivos = _fechasDelXmlRecientes.map(m=>({ ...m, g:encontrarGastoPorId(m.id) })).filter(m=>m.g && m.g.fechaAntesDelXml);
+  if(!vivos.length) return "";
+  return `<div style="font-size:12.5px;background:#E8F5E9;border:1px solid var(--vm);border-radius:8px;padding:10px 12px;margin-bottom:12px;color:#1B5E20">
+    ✅ <strong>${vivos.length} gasto(s) tomaron la fecha de su XML</strong>, que es la que manda. Si alguno no era su factura, deshazlo y ya no se le vuelve a cambiar.
+    ${vivos.map(m=>`<div style="margin-top:6px">${esc(m.g.proveedor||"—")} · <span style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(m.g.factura||"—")}</span>: ${esc(fmtDate(m.de))} → <strong>${esc(fmtDate(m.g.fecha))}</strong>
+      <button class="btn btn-light" style="padding:2px 8px;font-size:11px;margin-left:6px" onclick="deshacerFechaDelXml('${escAttrJs(m.id)}')">Deshacer</button></div>`).join("")}
+  </div>`;
+}
+function deshacerFechaDelXml(id){
+  const g = encontrarGastoPorId(id);
+  if(!g || !g.fechaAntesDelXml) return;
+  if(!confirm(`¿Regresar ${g.proveedor||"este gasto"} a ${fmtDate(g.fechaAntesDelXml)}?\n\nYa no se le volverá a poner la fecha de ese XML.`)) return;
+  regresarFechaAntesDelXml(g);
+  save();
+  _fechasDelXmlRecientes = _fechasDelXmlRecientes.filter(m=>m.id!==id);
+  renderFechasDudosas();
+  try{ renderAll(); }catch(_){}
+}
+
 async function renderFechasDudosas(){
   const card = document.getElementById("cardFechasDudosas");
   const body = document.getElementById("fdBody");
   if(!card || !body) return;
   try{ await cargarGmailRevisados(); }catch(_){}
   try{ await cargarCfdisStore(); }catch(_){}
+  // La fecha del XML se pone sola (ver fechasDelXmlPorAplicar). Solo con sesión de administrador y
+  // con el acceso ya verificado: es un cambio a datos contables que nadie aprieta, y save() lo
+  // sincroniza a todos los dispositivos con lee-fusiona-escribe.
+  if(currentRole==="admin" && _financialReady && currentUser){
+    let n = 0;
+    fechasDelXmlPorAplicar(allGastosAllWeeks(), _cfdisStore||[]).forEach(x=>{
+      const de = x.gasto.fecha;
+      if(aplicarFechaDelXml(x.gasto, x.fecha, x.ref)){
+        n++;
+        if(!_fechasDelXmlRecientes.some(m=>m.id===x.gasto.id)) _fechasDelXmlRecientes.push({ id:x.gasto.id, de });
+      }
+    });
+    if(n){ save(); try{ renderAll(); }catch(_){} }
+  }
+  const aviso = avisoFechasDelXml();
   const lista = gastosConFechaDudosa(allGastosAllWeeks(), _gmailRevisados||[], todayStr(), _cfdisStore||[]);
   document.getElementById("fdCount").textContent = lista.length;
-  card.style.display = lista.length ? "block" : "none";
-  if(!lista.length) return;
-  body.innerHTML = `<div class="tbl-wrap"><table><thead><tr>
+  card.style.display = (lista.length || aviso) ? "block" : "none";
+  if(!lista.length){ body.innerHTML = aviso; return; }
+  body.innerHTML = aviso + `<div class="tbl-wrap"><table><thead><tr>
       <th>Fecha actual</th><th>Proveedor</th><th>Factura</th><th style="text-align:right">Importe</th>
       <th>Por qué</th><th>Corregir a</th></tr></thead><tbody>` +
     lista.map(x=>{
@@ -9738,6 +9807,37 @@ function _dupProvParecidos(a,b){
   if(na===nb||na.includes(nb)||nb.includes(na)) return true;
   const pa=na.split(" ").filter(w=>w.length>=5), pb=new Set(nb.split(" ").filter(w=>w.length>=5));
   return pa.some(w=>pb.has(w));
+}
+// ¿Cuál es EL comprobante de este gasto? El folio solo no basta: cada emisor numera sus
+// facturas por su cuenta, así que «292» o «0001» los tienen decenas de proveedores. Emparejando
+// solo por folio, Auditoría le asignó a un gasto de ANA KAREM HUERTA DÍAZ de $39,269.00 el CFDI
+// 292 de otro emisor por $266,800.00, y el botón «Usar el del CFDI» se lo habría escrito encima.
+// Las tres diferencias de esa pantalla eran de este tipo y sumaban el «efecto estimado» entero.
+//   1. UUID: el gasto capturado desde el XML lo trae, y no depende de nada tecleado.
+//   2. El UUID tecleado en el campo Factura.
+//   3. Folio equivalente Y proveedor parecido al emisor.
+// Si el nombre del gasto no se parece al fiscal (TELCEL contra RADIOMOVIL DIPSA) no se liga: un
+// aviso que falta se nota y se busca; uno contra la factura de otro se corrige mal. Y si quedan
+// dos candidatos tampoco se escoge: elegir el primero es justo el error que esto quita.
+function _indiceCfdis(cfdis, acepta){
+  const out = [];
+  (cfdis||[]).forEach(c=>{
+    if(!c || c.ignorado || (acepta && !acepta(c))) return;
+    const uuid = String(c.uuid||"").trim().toUpperCase();
+    out.push({ c, uuid, uuidCanon:_dupFolioCanon(uuid), folio:_folioDeCfdi(c) });
+  });
+  return out;
+}
+function cfdiDelGasto(g, indice){
+  if(!g || !indice || !indice.length) return null;
+  const gu = String(g.cfdiUuid||"").trim().toUpperCase();
+  if(gu){ const x = indice.find(x=>x.uuid && x.uuid===gu); if(x) return x.c; }
+  const f = _dupFolioCanon(g.factura);
+  if(!f) return null;
+  const hits = indice.filter(x=>
+    (x.uuidCanon && f===x.uuidCanon) ||
+    (x.folio && _dupFoliosEquivalentes(f, x.folio) && _dupProvParecidos(g.proveedor, x.c.proveedor)));
+  return hits.length===1 ? hits[0].c : null;
 }
 // ¿Esta "diferencia de monto" es de verdad una diferencia contra el SAT, o es el MISMO
 // comprobante capturado más de una vez?
