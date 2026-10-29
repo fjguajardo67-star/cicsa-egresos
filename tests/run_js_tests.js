@@ -137,7 +137,7 @@ const FUNCS = [
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
-  "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos",
+  "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos", "_indiceCfdis", "cfdiDelGasto",
   "clasificarDiferenciaSAT", "folioCapturableCfdi",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -4481,7 +4481,8 @@ t("un gasto sin fecha no entra a la lista", () => {
   assert.deepEqual(S.gastosConFechaDudosa([{ id: "1", fecha: "" }], REV, HOY), []);
 });
 const CFDIS = [
-  { folioComp: "12668", fecha: "2026-07-24" },
+  // Un CFDI guardado siempre trae al emisor; sin él, el folio solo ya no basta para ligarlo.
+  { folioComp: "12668", fecha: "2026-07-24", proveedor: "EVA MOTA HERNANDEZ" },
   { folioComp: "PBAL31832", fecha: "2026-07-28" },
   { folioComp: "EAR181665", fecha: "2026-07-08" },
 ];
@@ -4691,6 +4692,77 @@ t("los renglones se juntan aunque el folio se haya tecleado distinto", () => {
     { id: "2", factura: "pbal31598",  importe: 2000 },
     { id: "3", factura: "31598",      importe: 500  },
   ], [{ folioComp: "PBAL31598", tipo: "I", total: 3500, subtotal: 3017.24 }]), []);
+});
+
+console.log("\n== el comprobante de un gasto es el de SU emisor, no cualquiera con el mismo folio ==");
+// Caso real (Auditoría, oct 2026): tres «importes que no cuadran» sumaban un efecto estimado de
+// +$311,912.92, y ninguno era de su factura. El folio lo numera cada emisor por su cuenta.
+const _OTRO_292  = { uuid:"AAAA0292-0000-4000-8000-000000000001", folioComp:"292", tipo:"I", total:266800, subtotal:230000,
+                     fecha:"2026-09-20", proveedor:"CONSTRUCTORA DEL NORTE SA DE CV", rfc:"CNO010101AAA" };
+const _ANA_292   = { uuid:"BBBB0292-0000-4000-8000-000000000002", folioComp:"292", tipo:"I", total:39269, subtotal:33852.59,
+                     fecha:"2026-09-29", proveedor:"ANA KAREM HUERTA DIAZ", rfc:"HUDA900101AAA" };
+const _ANA_GASTO = { id:"ana", factura:"292", importe:39269, fecha:"2026-09-29", proveedor:"ANA KAREM HUERTA DÍAZ" };
+t("un folio corto de OTRO emisor no es la factura del gasto", () => {
+  assert.deepEqual(S.gastosConImporteDistinto([_ANA_GASTO], [_OTRO_292]), [],
+    "antes salía −$227,531.00 y el botón le habría puesto $266,800.00");
+});
+t("con los dos CFDI guardados, se liga al de su emisor", () => {
+  assert.deepEqual(S.gastosConImporteDistinto([_ANA_GASTO], [_OTRO_292, _ANA_292]), [], "cuadra contra el suyo");
+  assert.equal(S.cfdiDelGasto(_ANA_GASTO, S._indiceCfdis([_OTRO_292, _ANA_292])), _ANA_292);
+  const r = S.gastosConImporteDistinto([{ ..._ANA_GASTO, importe:33852.59 }], [_ANA_292, _OTRO_292]);
+  assert.equal(r.length, 1, "una diferencia REAL contra su propio CFDI sí se sigue marcando");
+  assert.equal(r[0].esSubtotal, true);
+});
+t("renglones de proveedores distintos con el mismo folio no se suman como una factura", () => {
+  // TELCEL salía con «6 renglones con este folio (factura repartida)»: eran de varios emisores.
+  const gs = [
+    { id:"t", factura:"0001", importe:100, proveedor:"TELCEL" },
+    { id:"g", factura:"0001", importe:2500, proveedor:"GASOLINERA LA PAZ" },
+  ];
+  const cfdis = [{ uuid:"CCCC0001-0000-4000-8000-000000000003", serie:"BE2026", folioComp:"070001", tipo:"I",
+                   total:133016.20, subtotal:114669.14, proveedor:"BEBIDAS PURIFICADAS" }];
+  assert.deepEqual(S.gastosConImporteDistinto(gs, cfdis), [], "«0001» casaba por terminación con BE2026070001");
+});
+t("dos facturas con el mismo folio y distinto emisor se comparan cada una contra la suya", () => {
+  // Agrupando por folio, los dos gastos se sumaban ($306,069) contra UN CFDI y salía diferencia.
+  const otroGasto = { id:"o", factura:"292", importe:266800, proveedor:"CONSTRUCTORA DEL NORTE" };
+  assert.deepEqual(S.gastosConImporteDistinto([_ANA_GASTO, otroGasto], [_OTRO_292, _ANA_292]), []);
+});
+t("el UUID manda aunque el nombre capturado no se parezca al fiscal", () => {
+  const u = "DDDD0001-0000-4000-8000-000000000004";
+  const g = { id:"t", factura:"A-77", importe:1000, proveedor:"TELCEL", cfdiUuid:u };
+  const r = S.gastosConImporteDistinto([g], [{ uuid:u, folioComp:"A77", tipo:"I", total:1160, subtotal:1000,
+                                              proveedor:"RADIOMOVIL DIPSA SA DE CV" }]);
+  assert.equal(r.length, 1, "capturado desde el XML: el UUID no depende de cómo se tecleó el nombre");
+  assert.equal(r[0].esSubtotal, true);
+});
+t("sin UUID y con un nombre que no se parece, no se liga: mejor sin aviso que con el de otro", () => {
+  const g = { id:"t", factura:"A77", importe:1000, proveedor:"TELCEL" };
+  assert.equal(S.cfdiDelGasto(g, S._indiceCfdis([{ folioComp:"A77", proveedor:"RADIOMOVIL DIPSA SA DE CV" }])), null);
+});
+t("un CFDI sin total no sirve de referencia: no dice cuánto debió ser el gasto", () => {
+  assert.deepEqual(S.gastosConImporteDistinto([_ANA_GASTO], [{ ..._ANA_292, total:0 }]), [],
+    "si entrara, marcaría el importe completo como diferencia");
+});
+t("con dos candidatos del mismo emisor no se escoge al azar", () => {
+  const g = { id:"x", factura:"0001", proveedor:"ANA KAREM HUERTA" };
+  const idx = S._indiceCfdis([{ serie:"A", folioComp:"0001", proveedor:"ANA KAREM HUERTA DIAZ" },
+                              { serie:"B", folioComp:"0001", proveedor:"ANA KAREM HUERTA DIAZ" }]);
+  assert.equal(S.cfdiDelGasto(g, idx), null);
+});
+t("la fecha «buena» que se ofrece es la del CFDI del MISMO emisor", () => {
+  const r = S.gastosConFechaDudosa([{ ..._ANA_GASTO, fecha:"2026-09-29" }], [], "2026-10-29", [_OTRO_292]);
+  assert.ok(!r.some(x => x.fuente === "CFDI"), "no se ofrece mover el gasto a la fecha de la factura de otro");
+});
+t("un complemento de OTRO emisor con el mismo folio no manda a quitar el gasto", () => {
+  assert.deepEqual(S.gastosQueSonComplemento([_ANA_GASTO],
+    [{ folioComp:"292", tipo:"P", fecha:"2026-09-30", proveedor:"CONSTRUCTORA DEL NORTE SA DE CV" }]), []);
+});
+t("el seguro del botón «Usar el del CFDI» solo cuenta pedazos del mismo proveedor", () => {
+  const i = html.indexOf("function usarImporteCfdi(");
+  const cuerpo = html.slice(i, html.indexOf("\nfunction ", i + 10));
+  assert.ok(/_dupFoliosEquivalentes\(xf, f\) && _dupProvParecidos\(x\.proveedor, g\.proveedor\)/.test(cuerpo),
+    "otro proveedor con el mismo folio bloqueaba el botón con un aviso falso");
 });
 
 t("una factura repartida no sale como diferencia en la conciliación", () => {
