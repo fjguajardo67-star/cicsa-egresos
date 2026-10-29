@@ -2100,7 +2100,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-29-egresos-v44";
+const APP_BUILD = "2026-10-29-egresos-v45";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -9209,6 +9209,17 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
     if(!f && !/^[0-9A-F]{8}-[0-9A-F]{4}-/i.test(String(cfdi.folio||""))) f = _dupFolioCanon(cfdi.folio);
     return { cfdi, u: cfdi.uuid||cfdi.folio, folio: f, match:null, via:"", mismos:[] };
   });
+  // El folio solo no liga: cada emisor numera sus facturas por su cuenta, y «0001» o «292» los
+  // tienen muchos. Daba por capturada la factura de un proveedor con el gasto de OTRO que traía
+  // el mismo folio —y el comprobante que de verdad faltaba no salía nunca en la lista—. Ahora
+  // liga solo si ESTE es el comprobante del gasto: mismo emisor y sin otro candidato. Es la misma
+  // regla de Auditoría (cfdiDelGasto), para que las dos pantallas digan lo mismo.
+  const _indice = _indiceCfdis(utiles);
+  const _deGasto = new Map();
+  const _cfdiDe = g => {
+    if(!_deGasto.has(g.id)) _deGasto.set(g.id, cfdiDelGasto(g, _indice));
+    return _deGasto.get(g.id);
+  };
 
   // ── Un gasto le pertenece a UN comprobante ───────────────────────────────
   // Antes los tres criterios se probaban por CFDI, en el orden en que venían los documentos, y
@@ -9224,12 +9235,9 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
   const _criterios = [
     // 1. El gasto capturado desde este CFDI trae su UUID: no depende de cómo se tecleó nada.
     x => x.u ? gastosCICSA.find(g=>_libre(g) && g.cfdiUuid && g.cfdiUuid===x.u) : null,
-    // 2. El folio de la factura, con equivalencia por sufijo.
-    x => x.folio ? gastosCICSA.find(g=>{
-      if(!_libre(g)) return false;
-      const f = _dupFolioCanon(g.factura);
-      return !!f && _dupFoliosEquivalentes(f, x.folio);
-    }) : null,
+    // 2. El folio de la factura (con equivalencia por sufijo), pero solo si este comprobante es
+    //    el del gasto: mismo emisor y sin otro candidato.
+    x => gastosCICSA.find(g=> _libre(g) && _cfdiDe(g) === x.cfdi) || null,
     // 3. Importe y fecha parecidos — Y EL MISMO PROVEEDOR. Sin esa última condición, una factura
     //    de gasolina se daba por capturada contra un gasto de pollo de otro proveedor porque
     //    coincidían en $1 y en tres días. Con cientos de movimientos al mes, que dos importes
@@ -9254,16 +9262,29 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
         if(!g) return false;
         if(g.id === m.id) return true;
         if(x.u && g.cfdiUuid && g.cfdiUuid === x.u) return true;
-        if(!x.folio) return false;
-        const gf = _dupFolioCanon(g.factura);
-        return !!gf && _dupFoliosEquivalentes(gf, x.folio);
+        // Un gasto de otro proveedor con el mismo folio no es un pedazo de esta factura: sumarlo
+        // inventaba diferencias y lo sacaba de «sin comprobante», donde sí tenía que salir.
+        return _cfdiDe(g) === x.cfdi;
       });
       x.mismos.forEach(g=>_usados.add(g.id));
     });
   });
 
   _pend.forEach(x=>{
-    if(!x.match){ faltantes.push(x.cfdi); return; }
+    delete x.cfdi._casiGasto;
+    if(!x.match){
+      // Ser estricto tiene un costo: la misma factura capturada con un nombre que no se parece
+      // al fiscal (TELCEL contra RADIOMOVIL DIPSA) ya no liga y sale aquí, junto a «Capturar».
+      // Capturarla otra vez la contaría doble. Si hay un gasto SUELTO con el mismo folio se
+      // dice, pero no se liga solo: también puede ser la factura de otro con el mismo número.
+      const casi = x.folio ? gastosCICSA.find(g=>{
+        if(!g || _usados.has(g.id)) return false;
+        const gf = _dupFolioCanon(g.factura);
+        return !!gf && _dupFoliosEquivalentes(gf, x.folio);
+      }) : null;
+      if(casi) x.cfdi._casiGasto = { id:casi.id, proveedor:casi.proveedor||"", importe:parseFloat(casi.importe)||0, fecha:casi.fecha||"" };
+      faltantes.push(x.cfdi); return;
+    }
     const _cap = Math.round(x.mismos.reduce((a,g)=>a+(parseFloat(g.importe)||0),0)*100)/100;
     if(Math.abs(_cap-x.cfdi.total)>1){
       const _d = {cfdi:x.cfdi,gastoCICSA:x.match,capturado:_cap,gastos:x.mismos,via:x.via,diferencia:Math.round((x.cfdi.total-_cap)*100)/100};
@@ -9331,9 +9352,9 @@ function renderConciliacion(r){
   document.getElementById("satFaltantesCount").textContent=r.faltantes.length;
   document.getElementById("satFaltantesBody").innerHTML=r.faltantes.map(c=>`<tr style="background:#FFF8F6">
     <td style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--txt2)">${c.folio?.slice(0,18)||"—"}…</td>
-    <td><strong>${esc(c.proveedor||"—")}</strong></td><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.rfc||"—")}</td>
+    <td><strong>${esc(c.proveedor||"—")}</strong>${c._casiGasto?`<div style="font-size:10.5px;color:var(--naranja);margin-top:3px">⚠ Hay un gasto con este folio capturado como «${esc(c._casiGasto.proveedor||"sin proveedor")}» (${fmt(c._casiGasto.importe)}, ${esc(fmtDate(c._casiGasto.fecha)||"—")}). Si es esta factura, corrige el proveedor de ese gasto en vez de capturarla otra vez.</div>`:""}</td><td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.rfc||"—")}</td>
     <td>${fmtDate(c.fecha)||"—"}</td><td class="amount-cell" style="color:var(--red)">${fmt(c.total)}</td>
-    <td style="white-space:nowrap"><button class="btn btn-light" style="padding:4px 10px;font-size:11px" onclick="preLlenarCaptura('${escAttrJs(c.proveedor||"")}','${escAttrJs(c.fecha||"")}','${escAttrJs(folioCapturableCfdi(c))}',${c.total||0},'${escAttrJs(c.uuid||c.folio||"")}')">➕ Capturar</button>
+    <td style="white-space:nowrap">${c._casiGasto?`<button class="btn btn-light" style="padding:4px 10px;font-size:11px;margin-right:4px" onclick="verEnGastos('${escAttrJs(c._casiGasto.id)}')">✏️ Abrir ese gasto</button>`:""}<button class="btn btn-light" style="padding:4px 10px;font-size:11px" onclick="preLlenarCaptura('${escAttrJs(c.proveedor||"")}','${escAttrJs(c.fecha||"")}','${escAttrJs(folioCapturableCfdi(c))}',${c.total||0},'${escAttrJs(c.uuid||c.folio||"")}')">➕ Capturar</button>
     <button class="btn btn-light" style="padding:4px 8px;font-size:11px;margin-left:4px;color:var(--red)" title="No es un gasto: quítalo de la conciliación para siempre" onclick="descartarCfdi('${escAttrJs(c.uuid||c.folio||"")}','${escAttrJs(c.rfc||"")}','${escAttrJs(c.proveedor||"")}')">🚫 No es gasto</button></td></tr>`).join("");
   // Contados de más: van aparte y CON el folio. Sin el folio a la vista, "Monto CICSA al doble"
   // se lee como un problema del comprobante y manda a revisar lo que está bien.
