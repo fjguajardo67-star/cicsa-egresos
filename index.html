@@ -2100,7 +2100,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-29-egresos-v45";
+const APP_BUILD = "2026-10-29-egresos-v46";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -7548,6 +7548,22 @@ function regresarFechaAntesDelXml(g){
   delete g.fechaAntesDelXml; delete g.fechaDelXml; delete g.fechaDelXmlTs;
   return true;
 }
+// allGastosAllWeeks() devuelve COPIAS ({...g, _weekLabel}). La primera versión cambiaba la copia:
+// la fecha no se corregía de verdad, el aviso no salía, y cada visita a Auditoría volvía a
+// «aplicar» lo mismo y a guardar. Aquí se elige con lo visible —respeta la fecha de corte— y se
+// cambia el gasto que vive en el estado. Devuelve lo que se movió, con la fecha que tenía.
+function aplicarFechasDelXmlEnEstado(st, visibles, cfdis){
+  const reales = new Map();
+  ((st && st.weeks) || []).forEach(w=>(w.gastos||[]).forEach(g=>{ if(g) reales.set(String(g.id), g); }));
+  const movidas = [];
+  fechasDelXmlPorAplicar(visibles, cfdis).forEach(x=>{
+    const g = reales.get(String(x.gasto.id));
+    if(!g) return;
+    const de = g.fecha;
+    if(aplicarFechaDelXml(g, x.fecha, x.ref)) movidas.push({ id:g.id, de });
+  });
+  return movidas;
+}
 let _fechasDelXmlRecientes = [];   // lo que se movió en esta sesión, para enseñarlo y poder deshacerlo
 function avisoFechasDelXml(){
   const vivos = _fechasDelXmlRecientes.map(m=>({ ...m, g:encontrarGastoPorId(m.id) })).filter(m=>m.g && m.g.fechaAntesDelXml);
@@ -7579,15 +7595,9 @@ async function renderFechasDudosas(){
   // con el acceso ya verificado: es un cambio a datos contables que nadie aprieta, y save() lo
   // sincroniza a todos los dispositivos con lee-fusiona-escribe.
   if(currentRole==="admin" && _financialReady && currentUser){
-    let n = 0;
-    fechasDelXmlPorAplicar(allGastosAllWeeks(), _cfdisStore||[]).forEach(x=>{
-      const de = x.gasto.fecha;
-      if(aplicarFechaDelXml(x.gasto, x.fecha, x.ref)){
-        n++;
-        if(!_fechasDelXmlRecientes.some(m=>m.id===x.gasto.id)) _fechasDelXmlRecientes.push({ id:x.gasto.id, de });
-      }
-    });
-    if(n){ save(); try{ renderAll(); }catch(_){} }
+    const movidas = aplicarFechasDelXmlEnEstado(state, allGastosAllWeeks(), _cfdisStore||[]);
+    movidas.forEach(m=>{ if(!_fechasDelXmlRecientes.some(r=>r.id===m.id)) _fechasDelXmlRecientes.push(m); });
+    if(movidas.length){ save(); try{ renderAll(); }catch(_){} }
   }
   const aviso = avisoFechasDelXml();
   const lista = gastosConFechaDudosa(allGastosAllWeeks(), _gmailRevisados||[], todayStr(), _cfdisStore||[]);
@@ -9220,6 +9230,12 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
     if(!_deGasto.has(g.id)) _deGasto.set(g.id, cfdiDelGasto(g, _indice));
     return _deGasto.get(g.id);
   };
+  // El folio canónico de cada gasto, una sola vez: el aviso de faltantes lo pedía por cada faltante.
+  const _folioG = new Map();
+  const _folioDe = g => {
+    if(!_folioG.has(g.id)) _folioG.set(g.id, _dupFolioCanon(g.factura));
+    return _folioG.get(g.id);
+  };
 
   // ── Un gasto le pertenece a UN comprobante ───────────────────────────────
   // Antes los tres criterios se probaban por CFDI, en el orden en que venían los documentos, y
@@ -9279,7 +9295,7 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
       // dice, pero no se liga solo: también puede ser la factura de otro con el mismo número.
       const casi = x.folio ? gastosCICSA.find(g=>{
         if(!g || _usados.has(g.id)) return false;
-        const gf = _dupFolioCanon(g.factura);
+        const gf = _folioDe(g);
         return !!gf && _dupFoliosEquivalentes(gf, x.folio);
       }) : null;
       if(casi) x.cfdi._casiGasto = { id:casi.id, proveedor:casi.proveedor||"", importe:parseFloat(casi.importe)||0, fecha:casi.fecha||"" };
