@@ -137,7 +137,7 @@ const FUNCS = [
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
-  "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos", "_indiceCfdis", "cfdiDelGasto",
+  "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos", "_indiceCfdis", "cfdiDelGasto", "fechasDelXmlPorAplicar", "aplicarFechaDelXml", "regresarFechaAntesDelXml",
   "clasificarDiferenciaSAT", "folioCapturableCfdi",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -4521,6 +4521,74 @@ t("sin CFDI que casar, siguen valiendo las señales de antes", () => {
     [{ id: "1", fecha: "2026-09-01", factura: "NO-EXISTE" }], [], HOY, CFDIS);
   assert.equal(r.length, 1);
   assert.ok(/futuro/.test(r[0].motivo));
+});
+
+console.log("\n== la fecha del XML manda, y se pone sola ==");
+// Pedido (oct 2026): «elige la fecha del xml como la correcta siempre».
+const _XML_EAR = { uuid:"EEEE1816-0000-4000-8000-000000000005", serie:"EAR", folioComp:"181665", tipo:"I",
+                   fecha:"2026-07-08", total:6538.88, proveedor:"GAS EXPRESS NIETO SA DE CV" };
+const _G_EAR = () => ({ id:"ear", fecha:"2026-07-15", factura:"EAR-181665", importe:6538.88, proveedor:"Gas Express Nieto" });
+t("un gasto ligado a su XML con otra fecha se corrige a la del XML", () => {
+  const r = S.fechasDelXmlPorAplicar([_G_EAR()], [_XML_EAR]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].fecha, "2026-07-08");
+  assert.equal(r[0].ref, _XML_EAR.uuid, "queda dicho de qué comprobante salió");
+});
+t("si ya trae la fecha del XML no hay nada que mover", () => {
+  assert.deepEqual(S.fechasDelXmlPorAplicar([{ ..._G_EAR(), fecha:"2026-07-08" }], [_XML_EAR]), []);
+});
+t("los seis «0001» de proveedores distintos NO se mueven al CFDI del 02 oct de otro emisor", () => {
+  const gs = ["TELCEL", "CAJA CHICA", "XAVIER MINJAREZ", "PEGADO DE BOLETOS"].map((p, i) =>
+    ({ id:"z" + i, fecha:"2026-08-01", factura:"0001", importe:100, proveedor:p }));
+  const ajeno = { uuid:"FFFF0001-0000-4000-8000-000000000006", serie:"BE2026", folioComp:"100001", tipo:"I",
+                  fecha:"2026-10-02", total:1, proveedor:"BEBIDAS PURIFICADAS" };
+  assert.deepEqual(S.fechasDelXmlPorAplicar(gs, [ajeno]), []);
+});
+t("un gasto ligado a un corte de caja no se mueve solo: descuadraría la caja de esa semana", () => {
+  const g = { ..._G_EAR(), _folioEgreso:"E-118" };
+  assert.deepEqual(S.fechasDelXmlPorAplicar([g], [_XML_EAR]), []);
+  const r = S.gastosConFechaDudosa([g], [], "2026-10-29", [_XML_EAR]);
+  assert.equal(r.length, 1, "sigue en la tarjeta para decidirlo a mano");
+  assert.ok(/corte de caja/.test(r[0].motivo));
+});
+t("la fecha de un complemento (tipo P) es la del pago: no se usa", () => {
+  const p = { ..._XML_EAR, tipo:"P", fecha:"2026-08-20" };
+  assert.deepEqual(S.fechasDelXmlPorAplicar([_G_EAR()], [p]), []);
+  assert.ok(!S.gastosConFechaDudosa([_G_EAR()], [], "2026-10-29", [p]).some(x => x.fuente === "CFDI"));
+});
+t("aplicar deja rastro, y la fecha de ANTES es la del primer cambio", () => {
+  const g = _G_EAR();
+  assert.equal(S.aplicarFechaDelXml(g, "2026-07-08", "U1"), true);
+  assert.equal(g.fecha, "2026-07-08");
+  assert.equal(g.fechaAntesDelXml, "2026-07-15");
+  assert.equal(g.fechaDelXml, "U1");
+  assert.ok(g.fechaDelXmlTs);
+  S.aplicarFechaDelXml(g, "2026-07-09", "U2");
+  assert.equal(g.fechaAntesDelXml, "2026-07-15", "un segundo cambio no borra la fecha original");
+  assert.equal(S.aplicarFechaDelXml(g, "2026-07-09", "U2"), false, "sin cambio no se reescribe nada");
+  assert.equal(S.aplicarFechaDelXml(g, "09/07/2026", "U3"), false, "una fecha mal formada no entra");
+});
+t("deshacer regresa la fecha y ese XML ya no se la vuelve a cambiar", () => {
+  const g = _G_EAR();
+  S.aplicarFechaDelXml(g, "2026-07-08", _XML_EAR.uuid);
+  assert.equal(S.regresarFechaAntesDelXml(g), true);
+  assert.equal(g.fecha, "2026-07-15");
+  assert.ok(!g.fechaAntesDelXml && !g.fechaDelXml, "sin rastro de un cambio que ya no está");
+  assert.deepEqual(S.fechasDelXmlPorAplicar([g], [_XML_EAR]), [], "la siguiente vuelta no insiste");
+  assert.ok(!S.gastosConFechaDudosa([g], [], "2026-10-29", [_XML_EAR]).some(x => x.fuente === "CFDI"),
+    "ni la tarjeta vuelve a pedirlo: una persona ya decidió");
+});
+t("después de aplicar, la tarjeta ya no lo marca", () => {
+  const g = _G_EAR();
+  S.fechasDelXmlPorAplicar([g], [_XML_EAR]).forEach(x => S.aplicarFechaDelXml(x.gasto, x.fecha, x.ref));
+  assert.deepEqual(S.gastosConFechaDudosa([g], [], "2026-10-29", [_XML_EAR]), []);
+});
+t("la corrección automática solo corre con un administrador y el acceso verificado", () => {
+  const i = html.indexOf("async function renderFechasDudosas(");
+  const cuerpo = html.slice(i, html.indexOf("\nfunction ", i + 10));
+  assert.ok(/if\(currentRole==="admin" && _financialReady && currentUser\)\{[\s\S]*?fechasDelXmlPorAplicar/.test(cuerpo),
+    "es un cambio a datos contables que nadie aprieta");
+  assert.ok(/aplicarFechaDelXml\(/.test(cuerpo), "y pasa por la función que deja rastro");
 });
 
 console.log("\n== el folio de un CFDI es serie+folio, no el UUID ==");
