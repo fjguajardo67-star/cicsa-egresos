@@ -3102,6 +3102,33 @@ t("el PDF de la miniatura se cierra al terminar", () => {
   }
   assert.ok(/\.destroy\(\)/.test(b), "sin destroy() el PDF entero se queda en memoria");
 });
+console.log("\n== miniaturas de las tablas: nunca la foto completa ==");
+// Medido en Chromium: 60 gastos con foto de celular de 12 MP subían el navegador de 185 MB a
+// 1.1 GB, y 30 respaldos viejos incrustados a 729 MB. Safari, sin memoria, congela la página y la
+// deja en negro. Con la miniatura de ~8 KB, una a la vez: 247 y 250 MB.
+t("cargarThumbReal guarda la MINIATURA, no un enlace a la foto entera", () => {
+  const c = _cuerpoDe("cargarThumbReal");
+  assert.ok(!/createObjectURL/.test(c), "un blob URL de la foto completa la deja decodificada en memoria");
+  assert.ok(/_miniaturaDeBlob\(/.test(c), "se reduce antes de pintarla");
+  assert.ok(/_encolarMiniatura\(/.test(c), "de una en una: nunca dos fotos completas decodificadas a la vez");
+});
+t("ninguna tabla mete el respaldo o el comprobante COMPLETO a un <img>", () => {
+  assert.ok(!/<img src="\$\{g\.respaldo\}"/.test(html), "respaldo viejo incrustado: va a su miniatura");
+  assert.ok(!/<img src="\$\{g\.comprobantePago\}" class="comp-thumb/.test(html), "comprobante de pago: va a su miniatura");
+  assert.equal((html.match(/p\.dataUrl \? cargarThumbInline\(p\.id, p\.dataUrl, p\.elId\) : cargarThumbReal\(/g) || []).length, 2,
+    "Gastos y Pagos reparten a la función que toca");
+});
+t("un PDF incrustado se queda como ícono: Safari lo dibujaría completo", () => {
+  const c = _cuerpoDe("cargarThumbInline");
+  assert.ok(/if\(!m \|\| !\/\^image\\\/\/i\.test\(m\[1\]\)\) return;/.test(c), "solo las imágenes tienen miniatura");
+  assert.ok(/_encolarMiniatura\(/.test(c) && /_miniaturaImagen\(/.test(c));
+});
+t("la reducción vive en UN lugar: Gmail y las tablas usan la misma", () => {
+  assert.ok(/async function _miniaturaImagen\(b64, mime\)\{\s*return _miniaturaDeBlob\(/.test(html));
+  const c = _cuerpoDe("_miniaturaDeBlob");
+  assert.ok(/resizeWidth/.test(c) && /bmp\.close\(\)/.test(c), "se decodifica reducida y se suelta el bitmap");
+});
+
 tAsyncQ("las miniaturas no arrancan todas a la vez", async () => {
   // Con 80 adjuntos se abrian 80 documentos de pdf.js en el mismo instante. La prueba mira el
   // COMPORTAMIENTO: la segunda no puede empezar antes de que termine la primera.

@@ -2100,7 +2100,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-29-egresos-v46";
+const APP_BUILD = "2026-10-29-egresos-v47";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -2508,29 +2508,51 @@ function esImagenRespaldo(url){
 // por default — si la miniatura carga bien, se reemplaza su contenido por la imagen real; si
 // falla (red, CORS, lo que sea), el ícono se queda tal cual y el clic para abrir sigue
 // funcionando igual. Así nunca queda un hueco invisible/no-clicable en la tabla.
-const _thumbBlobCache = new Map(); // gastoId -> object URL
-async function cargarThumbReal(gastoId, url, wrapElId){
-  if(_thumbBlobCache.has(gastoId)){
-    const el = document.getElementById(wrapElId);
-    if(el) el.innerHTML = `<img src="${_thumbBlobCache.get(gastoId)}" alt="factura" style="width:100%;height:100%;object-fit:cover;display:block;pointer-events:none">`;
-    return;
-  }
-  try {
-    const r = await fetchStorage(url+"?alt=media");
-    if(!r.ok){ console.warn("cargarThumbReal: Storage respondió", r.status); return; }
-    const blob = await r.blob();
-    const objUrl = URL.createObjectURL(blob);
-    // Tope de memoria: los blob URLs no se liberan solos. Al pasar de 80, suelta el más viejo
-    // (se re-descarga si vuelve a hacer falta) para no acumular imágenes en RAM sin límite.
-    if(_thumbBlobCache.size >= 80){
-      const viejo = _thumbBlobCache.keys().next().value;
-      try{ URL.revokeObjectURL(_thumbBlobCache.get(viejo)); }catch(_){}
-      _thumbBlobCache.delete(viejo);
-    }
-    _thumbBlobCache.set(gastoId, objUrl);
-    const el = document.getElementById(wrapElId);
-    if(el) el.innerHTML = `<img src="${objUrl}" alt="factura" style="width:100%;height:100%;object-fit:cover;display:block;pointer-events:none">`;
-  } catch(e){ console.warn("cargarThumbReal error:", e); }
+// Las miniaturas de las tablas de Gastos y Pagos metían la foto COMPLETA en un <img> de 60 px, y
+// el navegador la decodifica a su tamaño real y la conserva mientras se vea. Medido en Chromium: 60
+// gastos con foto de celular de 12 MP subían el navegador de 185 MB a 1.1 GB. Safari, sin memoria,
+// congela la página y la deja en negro. Ahora se guarda la miniatura de ~8 KB (_miniaturaDeBlob) y se
+// hacen de una en una (_encolarMiniatura): nunca hay más de una foto completa decodificada a la vez.
+// El clic sigue abriendo el documento completo; eso no pasa por aquí.
+const _thumbBlobCache = new Map(); // clave -> miniatura (data: JPEG de ~8 KB)
+function _guardarMiniatura(clave, src){
+  if(_thumbBlobCache.size >= 400) _thumbBlobCache.delete(_thumbBlobCache.keys().next().value);
+  _thumbBlobCache.set(clave, src);
+}
+function _pintarMiniatura(wrapElId, src){
+  const el = document.getElementById(wrapElId);
+  if(!el) return;
+  const img = `<img src="${src}" alt="factura" style="width:100%;height:100%;object-fit:cover;display:block;pointer-events:none">`;
+  const icono = el.querySelector(".thumb-none");
+  if(icono) icono.outerHTML = img; else el.innerHTML = img;
+}
+function cargarThumbReal(gastoId, url, wrapElId){
+  if(_thumbBlobCache.has(gastoId)){ _pintarMiniatura(wrapElId, _thumbBlobCache.get(gastoId)); return; }
+  return _encolarMiniatura(async ()=>{
+    if(_thumbBlobCache.has(gastoId)){ _pintarMiniatura(wrapElId, _thumbBlobCache.get(gastoId)); return; }
+    try {
+      const r = await fetchStorage(url+"?alt=media");
+      if(!r.ok){ console.warn("cargarThumbReal: Storage respondió", r.status); return; }
+      const mini = await _miniaturaDeBlob(await r.blob());
+      _guardarMiniatura(gastoId, mini);
+      _pintarMiniatura(wrapElId, mini);
+    } catch(e){ console.warn("cargarThumbReal error:", e); }
+  });
+}
+// Respaldo VIEJO incrustado en el gasto (data:) o comprobante de pago: iban enteros al <img>, y un
+// PDF incrustado Safari lo dibuja completo. Si es imagen, su miniatura; si no, se queda el ícono.
+function cargarThumbInline(clave, dataUrl, wrapElId){
+  const m = String(dataUrl||"").match(/^data:([^;,]+);base64,([\s\S]*)$/);
+  if(!m || !/^image\//i.test(m[1])) return;
+  if(_thumbBlobCache.has(clave)){ _pintarMiniatura(wrapElId, _thumbBlobCache.get(clave)); return; }
+  return _encolarMiniatura(async ()=>{
+    if(_thumbBlobCache.has(clave)){ _pintarMiniatura(wrapElId, _thumbBlobCache.get(clave)); return; }
+    try{
+      const mini = await _miniaturaImagen(m[2], m[1]);
+      _guardarMiniatura(clave, mini);
+      _pintarMiniatura(wrapElId, mini);
+    }catch(e){ console.warn("cargarThumbInline:", e); }
+  });
 }
 
 let _syncBase = null;
@@ -5292,8 +5314,9 @@ function renderGastos(){
     const esImg=g._respaldoUrl && esImagenRespaldo(g._respaldoUrl);
     const thumbId=`thumb-g-${g.id}`;
     if(esImg) pendientesThumb.push({id:g.id, url:g._respaldoUrl, elId:thumbId});
+    if(g.respaldo) pendientesThumb.push({id:"r:"+g.id, dataUrl:g.respaldo, elId:`thumb-r-${g.id}`});
     const thumbHtml=g.respaldo
-      ?`<div class="thumb-wrap" style="cursor:pointer;position:relative" title="🔍 Clic para ver factura" onclick="window._openThumb('${safeId}')"><img src="${g.respaldo}" alt="factura" style="width:100%;height:100%;object-fit:cover;display:block;pointer-events:none"><div style="position:absolute;inset:0;background:rgba(45,94,30,0);display:flex;align-items:center;justify-content:center;transition:.2s;pointer-events:none" class="thumb-hover-overlay"><span style="font-size:18px;opacity:0">🔍</span></div></div>`
+      ?`<div class="thumb-wrap" id="thumb-r-${g.id}" style="cursor:pointer;position:relative" title="🔍 Clic para ver factura" onclick="window._openThumb('${safeId}')"><span class="thumb-none">📄</span><div style="position:absolute;inset:0;background:rgba(45,94,30,0);display:flex;align-items:center;justify-content:center;transition:.2s;pointer-events:none" class="thumb-hover-overlay"><span style="font-size:18px;opacity:0">🔍</span></div></div>`
       :esImg
       ?`<div class="thumb-wrap" id="${thumbId}" style="cursor:pointer" title="🔍 Clic para ver factura" onclick="verFactura('${safeId}')"><span class="thumb-none">📄</span></div>`
       :g._respaldoUrl
@@ -5316,7 +5339,7 @@ function renderGastos(){
       <td class="gastos-actions-cell"><div class="gastos-row-actions">${celdaAcciones(g, P)}</div></td>`;
     tbody.appendChild(tr);
   });
-  pendientesThumb.forEach(p=>cargarThumbReal(p.id, p.url, p.elId));
+  pendientesThumb.forEach(p=> p.dataUrl ? cargarThumbInline(p.id, p.dataUrl, p.elId) : cargarThumbReal(p.id, p.url, p.elId));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -11873,7 +11896,9 @@ function _encolarMiniatura(fn){ _colaMiniaturas = _colaMiniaturas.then(fn).catch
 // reducida, se recorta al cuadro y se cierra el bitmap: quedan unos 8 KB por miniatura.
 const GMAIL_THUMB_PX = 120;   // el doble de los 60 de pantalla, para que no se vea borrosa
 async function _miniaturaImagen(b64, mime){
-  const blob = new Blob([_b64ABytes(b64)], { type: mime || "image/jpeg" });
+  return _miniaturaDeBlob(new Blob([_b64ABytes(b64)], { type: mime || "image/jpeg" }));
+}
+async function _miniaturaDeBlob(blob){
   let bmp;
   // resizeWidth solo (sin alto) conserva la proporción al decodificar.
   try{ bmp = await createImageBitmap(blob, { resizeWidth: GMAIL_THUMB_PX*2, resizeQuality:"low" }); }
@@ -12316,8 +12341,9 @@ function renderPagos(){
     const esImg=g._respaldoUrl && esImagenRespaldo(g._respaldoUrl);
     const thumbId=`thumb-p-${g.id}`;
     if(esImg) pendientesThumb.push({id:g.id, url:g._respaldoUrl, elId:thumbId});
+    if(g.comprobantePago) pendientesThumb.push({id:"c:"+g.id, dataUrl:g.comprobantePago, elId:`thumb-c-${g.id}`});
     const compCell=g.comprobantePago
-      ?`<img src="${g.comprobantePago}" class="comp-thumb thumb-click-direct" data-gastoid="${g.id}" style="cursor:pointer" title="Ver comprobante">`
+      ?`<span id="thumb-c-${g.id}" class="comp-thumb thumb-click-direct" data-gastoid="${g.id}" style="cursor:pointer;font-size:18px;display:inline-flex;align-items:center;justify-content:center;overflow:hidden" title="Ver comprobante">🧾</span>`
       :esImg
       ?`<span id="${thumbId}" class="comp-thumb" style="cursor:pointer;font-size:18px;display:inline-flex;align-items:center;justify-content:center" title="Ver factura" onclick="verFactura('${g.id.replace(/'/g,"\\'")}')">📄</span>`
       :g._respaldoUrl
@@ -12330,7 +12356,7 @@ function renderPagos(){
     tr.innerHTML=`<td>${fmtDate(g.fecha)}</td><td><strong>${esc(g.proveedor)}</strong><br><span style="font-size:11px;color:var(--txt2)">${esc(g._weekLabel||"")}</span></td><td>${fpCell}</td><td>${estadoCell}</td><td>${vencCell}</td><td class="amount-cell">${fmt(g.importe)}</td><td>${compCell}</td><td>${actions}</td>`;
     tbody.appendChild(tr);
   });
-  pendientesThumb.forEach(p=>cargarThumbReal(p.id, p.url, p.elId));
+  pendientesThumb.forEach(p=> p.dataUrl ? cargarThumbInline(p.id, p.dataUrl, p.elId) : cargarThumbReal(p.id, p.url, p.elId));
 }
 
 function cambiarFormaPagoPagos(id, valor){
