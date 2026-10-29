@@ -137,7 +137,7 @@ const FUNCS = [
   "registrarFallo", "resumenFallos", "pistaFallo", "_anotarFallo", "fbUpdateDoc", "fbDeleteDoc",
   "origenDeMovimiento", "etiquetaOrigen", "desglosarPorOrigen", "construirImportacionCortes",
   "gastosConFechaDudosa", "_fechaCorreoISO", "gastosQueSonComplemento", "bloqueoComplementoPago", "gastosConImporteDistinto",
-  "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos", "_indiceCfdis", "cfdiDelGasto", "fechasDelXmlPorAplicar", "aplicarFechaDelXml", "regresarFechaAntesDelXml",
+  "_dupFolioCanon", "_dupFoliosEquivalentes", "_folioDeCfdi", "_dupNormProv", "_dupProvParecidos", "_indiceCfdis", "cfdiDelGasto", "fechasDelXmlPorAplicar", "aplicarFechaDelXml", "regresarFechaAntesDelXml", "aplicarFechasDelXmlEnEstado",
   "clasificarDiferenciaSAT", "folioCapturableCfdi",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
@@ -4586,9 +4586,26 @@ t("después de aplicar, la tarjeta ya no lo marca", () => {
 t("la corrección automática solo corre con un administrador y el acceso verificado", () => {
   const i = html.indexOf("async function renderFechasDudosas(");
   const cuerpo = html.slice(i, html.indexOf("\nfunction ", i + 10));
-  assert.ok(/if\(currentRole==="admin" && _financialReady && currentUser\)\{[\s\S]*?fechasDelXmlPorAplicar/.test(cuerpo),
-    "es un cambio a datos contables que nadie aprieta");
-  assert.ok(/aplicarFechaDelXml\(/.test(cuerpo), "y pasa por la función que deja rastro");
+  assert.ok(/if\(currentRole==="admin" && _financialReady && currentUser\)\{[\s\S]*?aplicarFechasDelXmlEnEstado\(state, allGastosAllWeeks\(\)/.test(cuerpo),
+    "es un cambio a datos contables que nadie aprieta, y se aplica al ESTADO, no a una copia");
+});
+t("la fecha del XML se aplica al gasto REAL aunque la lista que llega sean copias", () => {
+  // allGastosAllWeeks() devuelve {...g, _weekLabel}. La primera versión cambiaba la copia: la fecha
+  // no se corregía, el aviso no salía, y cada visita a Auditoría volvía a guardar lo mismo.
+  const real = _G_EAR();
+  const st = { weeks:[{ id:"w", label:"semana", gastos:[real] }] };
+  const copias = st.weeks[0].gastos.map(g => ({ ...g, _weekLabel:"semana" }));
+  const m = S.aplicarFechasDelXmlEnEstado(st, copias, [_XML_EAR]);
+  assert.deepEqual(m, [{ id:"ear", de:"2026-07-15" }]);
+  assert.equal(real.fecha, "2026-07-08", "el que cambia es el del estado");
+  assert.equal(real.fechaAntesDelXml, "2026-07-15");
+  assert.equal(copias[0].fecha, "2026-07-15", "la copia no importa");
+  const copias2 = st.weeks[0].gastos.map(g => ({ ...g, _weekLabel:"semana" }));
+  assert.deepEqual(S.aplicarFechasDelXmlEnEstado(st, copias2, [_XML_EAR]), [],
+    "la siguiente visita ya no tiene nada que mover, así que no vuelve a guardar");
+});
+t("un gasto que no está en el estado no se inventa", () => {
+  assert.deepEqual(S.aplicarFechasDelXmlEnEstado({ weeks:[] }, [_G_EAR()], [_XML_EAR]), []);
 });
 
 console.log("\n== el folio de un CFDI es serie+folio, no el UUID ==");
