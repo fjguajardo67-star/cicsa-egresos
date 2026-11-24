@@ -1010,6 +1010,7 @@ body.snav-min .side-theme span { display:none; }
           <option value="credito">📋 Crédito</option>
           <option value="debito">💳 Tarjeta de Débito</option>
         </select>
+        <div id="fFormaPagoOrigen" style="display:none;font-size:11px;margin-top:4px"></div>
       </div>
       <div class="field" id="fVencimientoWrap" style="display:none">
         <label>Fecha de vencimiento</label>
@@ -2100,7 +2101,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-10-29-egresos-v47";
+const APP_BUILD = "2026-11-24-egresos-v48";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -4612,6 +4613,7 @@ async function handleFile(file){
   const revision=_capturaRevision;
   capturedFile=file;
   _productosPreleidos=null;
+  aplicarFormaPagoDeCfdi(null);
   _cfdiGmail=null;          // archivo suelto: no hay CFDI del correo que mande sobre la fecha
   _esComplementoIA=false;
   const preview=document.getElementById("imgPreview");
@@ -5231,6 +5233,7 @@ function limpiarCaptura(){
   });
   document.getElementById("fCategoria").selectedIndex=0;
   document.getElementById("fFormaPago").selectedIndex=0;
+  aplicarFormaPagoDeCfdi(null);
   ["otroField","fVencimientoWrap","fCreditoInfo","statusGuardar","dupWarning"].forEach(id=>{
     const el=document.getElementById(id); if(el) el.style.display="none";
   });
@@ -5567,6 +5570,7 @@ function resetCaptura(){
   document.getElementById("fCategoria").selectedIndex=0;
   document.getElementById("fFecha").value=todayStr();
   if(document.getElementById("fFormaPago")) document.getElementById("fFormaPago").selectedIndex=0;
+  aplicarFormaPagoDeCfdi(null);
   if(document.getElementById("fVencimientoWrap")) document.getElementById("fVencimientoWrap").style.display="none";
   if(document.getElementById("fCreditoInfo")) document.getElementById("fCreditoInfo").style.display="none";
 }
@@ -12186,6 +12190,7 @@ async function gmailProcessItem(idx){
     if(_cfdiGmail.total>0 && _cfdiGmail.tipo!=="P") document.getElementById("fImporte").value = _cfdiGmail.total;
     _fechaAsumida = false;
   }
+  aplicarFormaPagoDeCfdi(_cfdiGmail);
   setTimeout(async()=>{
     if(revision!==_capturaRevision) return;
     if(_cfdiGmail && _cfdiGmail.tipo==="P"){
@@ -12226,6 +12231,34 @@ function gmailSkipItem(idx){
 // ═══════════════════════════════════════════════════════════════════════════
 // FORMA DE PAGO
 // ═══════════════════════════════════════════════════════════════════════════
+// La forma de pago que trae el CFDI (c_FormaPago del SAT). Se preselecciona SOLO lo que se pidió:
+// 01 efectivo, 03 transferencia, 28 tarjeta de débito. Lo demás no se adivina, se dice:
+//  · PPD (pago en parcialidades o diferido) es a crédito, y su FormaPago es 99 «por definir».
+//  · 04 es tarjeta de CRÉDITO, que no es el «Crédito» de esta app (deuda con el proveedor).
+// Devuelve el valor del selector (o "") y el aviso que explica de dónde salió.
+const FORMA_PAGO_SAT = { "01":"efectivo", "03":"transferencia", "28":"debito" };
+const FORMA_PAGO_SAT_NOMBRE = { "01":"Efectivo", "02":"Cheque nominativo", "03":"Transferencia electrónica",
+  "04":"Tarjeta de crédito", "05":"Monedero electrónico", "06":"Dinero electrónico", "08":"Vales de despensa",
+  "17":"Compensación", "28":"Tarjeta de débito", "29":"Tarjeta de servicios", "30":"Aplicación de anticipos",
+  "99":"Por definir" };
+function formaPagoDesdeCfdi(c){
+  const fp = String((c && c.formaPago) || "").trim(), mp = String((c && c.metodoPago) || "").trim().toUpperCase();
+  if(!fp && !mp) return { valor:"", aviso:"" };
+  const dice = fp ? `${fp} · ${FORMA_PAGO_SAT_NOMBRE[fp] || "código del SAT"}` : "sin forma de pago";
+  if(mp === "PPD")
+    return { valor:"", aviso:`El CFDI dice PPD (pago en parcialidades o diferido), ${dice}: normalmente es a crédito. Elige la forma de pago.` };
+  const valor = FORMA_PAGO_SAT[fp] || "";
+  return { valor, aviso: valor ? `Tomada del CFDI: ${dice}.` : `El CFDI dice ${dice}. Elige la forma de pago.` };
+}
+function aplicarFormaPagoDeCfdi(c){
+  const r = formaPagoDesdeCfdi(c), nota = document.getElementById("fFormaPagoOrigen"), sel = document.getElementById("fFormaPago");
+  if(r.valor && sel){ sel.value = r.valor; try{ checkFormaPago(); }catch(_){} }
+  if(nota){
+    nota.textContent = r.aviso;
+    nota.style.display = r.aviso ? "block" : "none";
+    nota.style.color = r.valor ? "var(--vd)" : "var(--naranja)";
+  }
+}
 function checkFormaPago(){
   const fp=document.getElementById("fFormaPago")?.value,vWrap=document.getElementById("fVencimientoWrap"),info=document.getElementById("fCreditoInfo");
   if(fp==="credito"){vWrap.style.display="block";info.style.display="block";if(!document.getElementById("fVencimiento").value){const d=new Date();d.setDate(d.getDate()+30);document.getElementById("fVencimiento").value=fechaLocalStr(d);}}

@@ -236,6 +236,11 @@ def leer_cfdi_xml(data: bytes):
         "proveedor": _cfdi_attr(txt, "Emisor", "Nombre") or _cfdi_attr(txt, "Emisor", "Rfc"),
         "rfc":       _cfdi_attr(txt, "Emisor", "Rfc"),
         "rfcReceptor": _cfdi_attr(txt, "Receptor", "Rfc"),
+        # Cómo se pagó, según el SAT: c_FormaPago (01 efectivo, 03 transferencia, 28 débito…) y
+        # MetodoPago (PUE, pagada en una exhibición; PPD, a crédito o en parcialidades). Aquí solo
+        # se leen: qué hacer con ellos lo decide la captura.
+        "formaPago":  _cfdi_attr(txt, "Comprobante", "FormaPago").strip(),
+        "metodoPago": _cfdi_attr(txt, "Comprobante", "MetodoPago").strip().upper(),
     }
 
 
