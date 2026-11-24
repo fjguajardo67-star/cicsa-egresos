@@ -37,7 +37,7 @@ function fixture(){
   });
   for(const name of ['limpiarCaptura','preLlenarCaptura','guardarGasto','bloqueoComplementoPago',
     '_cfdiUuidDeEsteFormulario','leerDocumento','datosDeCaptura','analizarDivision','gmailProcessItem',
-    'handleFile','_optimizarCaptura','checkFormaPago','categoriasCaptura','prepararRevisionProductos',
+    'handleFile','_optimizarCaptura','checkFormaPago','aplicarFormaPagoDeCfdi','categoriasCaptura','prepararRevisionProductos',
     'incorporarCongelados','splitGuardar','openSplitModal','closeSplitModal','renderSplitRows','updateSplitDiff',
     'splitGuardarUno','cambiarClasificacionSplit']) vm.runInContext(extractFunction(name),S);
   function installUI(){
@@ -155,6 +155,21 @@ test('una lectura vigente conserva los datos de su XML y los productos extraído
   assert.equal(f.field('fImporte').value,120);
   assert.equal(f.S._productosPreleidos[0].nombre,'Arroz');
   assert.equal(f.field('btnLeer').disabled,false);
+});
+test('Gmail toma la forma de pago del CFDI, y la siguiente factura no la hereda',async()=>{
+  // Pedido: del CFDI del correo, solo efectivo (01), transferencia (03) y débito (28).
+  const f=fixture();
+  f.S.gmailItems=[
+    {mime_type:'application/xml',filename:'a.xml',msg_id:'a',cfdi:{tipo:'I',folio:'ICAJG479880',total:957,formaPago:'03',metodoPago:'PUE'}},
+    {mime_type:'application/xml',filename:'b.xml',msg_id:'b',cfdi:{tipo:'I',folio:'PPD100',total:5000,formaPago:'99',metodoPago:'PPD'}}];
+  await f.S.gmailProcessItem(0);
+  assert.equal(f.field('fFormaPago').value,'transferencia');
+  assert.match(f.field('fFormaPagoOrigen').textContent,/Tomada del CFDI: 03/);
+  f.field('fFormaPago').selectedIndex=1;          // lo que el navegador deja tras elegir Transferencia
+  await f.S.gmailProcessItem(1);
+  assert.equal(f.field('fFormaPago').selectedIndex,0,'la PPD arranca de cero, no con la transferencia anterior');
+  assert.match(f.field('fFormaPagoOrigen').textContent,/PPD.*Elige la forma de pago/);
+  assert.equal(f.field('fFormaPagoOrigen').style.display,'block');
 });
 test('Gmail tipo P vigente continúa bloqueando el guardado',async()=>{
   const f=fixture();

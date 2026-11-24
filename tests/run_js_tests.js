@@ -89,7 +89,7 @@ function extractConst(name) {
 // el harness también, y el archivo v3 que la app de cortes exporta hoy se rechazaba sin que
 // ninguna prueba lo notara.
 const CONSTS = ["RITMO_VENTANA_SEMANAS", "ARCHIVO_VERSION", "ARCHIVO_PREFIJO", "ARCHIVO_VENTANA_MESES", "STORAGE_BUCKET", "LIBERADOS_VERSION", "VENTANA_TRAER_DIAS", "CATS", "_FALLOS_MAX", "ADMIN_UID", "FIRESTORE_TOPE_DOC", "_COBERTURA_MAX_DIAS", "VIGENCIA_DIAS", "RFC_PROPIO_KEY"];
-const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE"];
+const CONSTS_OBJ = ["ORIGEN_ETIQUETA", "PERMISOS_DETALLE", "FORMA_PAGO_SAT", "FORMA_PAGO_SAT_NOMBRE"];
 const CONSTS_ARR = ["_TIPOS_MOV", "COLS_DETALLE_GASTOS", "MEDIDAS_PURAS", "MARCA_DESCARTE", "CORTES_VERSIONES_OK", "MARCA_PERIODO"];
 
 
@@ -120,7 +120,7 @@ const FUNCS = [
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
   "pareceMedidaNoIngrediente", "_sepNombres",
-  "formaPagoLabel", "partidasExpandidas", "renglonesAuditoria", "contenidoTotalGramos",
+  "formaPagoLabel", "formaPagoDesdeCfdi", "partidasExpandidas", "renglonesAuditoria", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
   "findDuplicate", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
@@ -301,6 +301,44 @@ t("formaPagoLabel cubre todas las formas", () => {
   assert.ok(S.formaPagoLabel({ formaPago: "credito" }).includes("Crédito"));
   assert.ok(S.formaPagoLabel({ formaPago: "debito" }).includes("Débito"));
   assert.equal(S.formaPagoLabel({}), "—");
+});
+t("del CFDI se toman SOLO efectivo (01), transferencia (03) y débito (28)", () => {
+  // Pedido: «únicamente contado o efectivo, tarjeta de débito y transferencia».
+  assert.equal(S.formaPagoDesdeCfdi({ formaPago:"01", metodoPago:"PUE" }).valor, "efectivo");
+  assert.equal(S.formaPagoDesdeCfdi({ formaPago:"03", metodoPago:"PUE" }).valor, "transferencia");
+  assert.equal(S.formaPagoDesdeCfdi({ formaPago:"28", metodoPago:"PUE" }).valor, "debito");
+  assert.ok(/Tomada del CFDI: 03 · Transferencia/.test(S.formaPagoDesdeCfdi({ formaPago:"03" }).aviso), "dice de dónde salió");
+});
+t("lo demás no se adivina: se dice lo que trae el CFDI y se deja elegir", () => {
+  const ppd = S.formaPagoDesdeCfdi({ formaPago:"99", metodoPago:"ppd" });
+  assert.equal(ppd.valor, "", "PPD es a crédito o en parcialidades: no se elige solo");
+  assert.ok(/PPD/.test(ppd.aviso) && /crédito/.test(ppd.aviso));
+  assert.equal(S.formaPagoDesdeCfdi({ formaPago:"03", metodoPago:"PPD" }).valor, "", "con PPD manda el método, no la forma");
+  const tc = S.formaPagoDesdeCfdi({ formaPago:"04", metodoPago:"PUE" });
+  assert.equal(tc.valor, "", "tarjeta de CRÉDITO no es el «Crédito» de la app (deuda con el proveedor)");
+  assert.ok(/04 · Tarjeta de crédito/.test(tc.aviso));
+  assert.ok(/código del SAT/.test(S.formaPagoDesdeCfdi({ formaPago:"31" }).aviso), "un código raro se enseña tal cual");
+});
+t("sin forma ni método de pago no hay aviso", () => {
+  assert.deepEqual(S.formaPagoDesdeCfdi(null), { valor:"", aviso:"" });
+  assert.deepEqual(S.formaPagoDesdeCfdi({ fecha:"2026-11-02" }), { valor:"", aviso:"" });
+});
+t("Gmail aplica la forma de pago del CFDI, y el formulario borra el aviso al limpiarse", () => {
+  assert.ok(/_cfdiGmail = item\.cfdi \|\| null;[\s\S]{0,1500}aplicarFormaPagoDeCfdi\(_cfdiGmail\);/.test(html),
+    "la factura del correo trae el dato: hay que usarlo");
+  assert.equal((html.match(/aplicarFormaPagoDeCfdi\(null\);/g) || []).length, 3,
+    "al limpiar (2 veces) y con un archivo suelto: el aviso de la factura anterior no se queda");
+  const c = _cuerpoDe("aplicarFormaPagoDeCfdi");
+  assert.ok(/nota\.textContent = r\.aviso/.test(c) && !/innerHTML/.test(c), "el aviso es texto: trae datos del XML");
+});
+t("cada factura de Gmail arranca la forma de pago de cero: no hereda la de la anterior", () => {
+  // Ahora que se precarga del CFDI, la de una factura no puede quedarse puesta en la siguiente.
+  // Lo garantiza limpiarCaptura, que Gmail llama antes de aplicar el CFDI del correo.
+  const g = _cuerpoDe("gmailProcessItem"), l = _cuerpoDe("limpiarCaptura");
+  const limpia = g.indexOf("limpiarCaptura()"), aplica = g.indexOf("aplicarFormaPagoDeCfdi(_cfdiGmail)");
+  assert.ok(limpia > -1 && aplica > limpia, "se limpia ANTES de aplicar la del CFDI");
+  assert.ok(/getElementById\("fFormaPago"\)\.selectedIndex=0;\s*aplicarFormaPagoDeCfdi\(null\);/.test(l),
+    "y limpiar regresa el selector al inicio y borra el aviso");
 });
 t("la tarjeta de débito NO es efectivo: no sale de la caja, sale del banco", () => {
   // Es lo unico que podia descuadrar la conciliacion de Caja contra el conteo fisico.

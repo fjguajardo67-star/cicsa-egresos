@@ -183,6 +183,30 @@ sys.path.insert(0, str(RAIZ))
 import generar_token_gmail as gt
 
 
+class TestFormaPagoDelCfdi(unittest.TestCase):
+    """Del XML del correo se lee también cómo se pagó; qué hacer con ello lo decide la captura."""
+    XML = ('<?xml version="1.0" encoding="UTF-8"?>'
+           '<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" Serie="ICAJG" '
+           'Folio="479880" Fecha="2026-11-02T10:15:00" SubTotal="825.00" Total="957.00" '
+           'TipoDeComprobante="I" FormaPago="03" MetodoPago="pue">'
+           '<cfdi:Emisor Rfc="NWM9709244W4" Nombre="NUEVA WAL MART DE MEXICO"/>'
+           '<cfdi:Receptor Rfc="CIC190426SD4"/>'
+           '<cfdi:Complemento><tfd:TimbreFiscalDigital UUID="AAAA1111-2222-3333-4444-555566667777"/></cfdi:Complemento>'
+           '</cfdi:Comprobante>')
+
+    def test_lee_forma_y_metodo_de_pago(self):
+        c = gc.leer_cfdi_xml(self.XML.encode())
+        self.assertEqual(c["formaPago"], "03")
+        self.assertEqual(c["metodoPago"], "PUE", "se normaliza a mayúsculas")
+        self.assertEqual(c["total"], 957.0, "lo de antes sigue igual")
+        self.assertEqual(c["folio"], "ICAJG479880")
+
+    def test_sin_atributos_quedan_vacios(self):
+        c = gc.leer_cfdi_xml(self.XML.replace(' FormaPago="03" MetodoPago="pue"', '').encode())
+        self.assertEqual(c["formaPago"], "")
+        self.assertEqual(c["metodoPago"], "")
+
+
 class TestTokenNoSeVersiona(unittest.TestCase):
     def test_gmail_token_no_esta_en_el_arbol_de_git(self):
         import subprocess
