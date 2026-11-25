@@ -2101,7 +2101,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-11-24-egresos-v48";
+const APP_BUILD = "2026-11-25-egresos-v49";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -11961,6 +11961,12 @@ async function idbGet(key){
 // A IndexedDB va SOLO lo pendiente. Los ya procesados no hacen falta al recargar —fetchGmail
 // los descarta de todos modos— y arrastrarlos significaba clonar sus archivos completos en cada
 // clic, con el pico de memoria que eso implica.
+function refrescarCfdiPendientes(previos, frescos){
+  const porNombre = new Map(frescos.filter(i=>i && i.cfdi).map(i=>[i.filename, i.cfdi]));
+  let n = 0;
+  previos.forEach(p=>{ const c = porNombre.get(p.filename); if(c){ p.cfdi = c; n++; } });
+  return n;
+}
 function guardarGmailItemsLocal(){ idbSet(GMAIL_PENDING_KEY, gmailItems.filter(i=>!i._done)); }
 async function restaurarGmailItemsLocal(){
   try{
@@ -12025,6 +12031,10 @@ async function fetchGmail(includeSeen=false, continuar=false){
     // acumulaba las tres tandas completas en memoria.
     gmailItems.forEach(i=>{ if(i._done) _liberarAdjunto(i); });
     const previos=gmailItems.filter(i=>!i._done), vistos=new Set(previos.map(i=>i.filename));
+    // Lo pendiente se queda (con su archivo y su estado), pero los datos del CFDI se toman de la
+    // respuesta nueva: el servidor puede leer hoy más del XML que cuando se descargó (la forma de
+    // pago, por ejemplo). Sin esto, una factura pendiente se quedaba para siempre con lo viejo.
+    refrescarCfdiPendientes(previos, data.items||[]);
     const nuevos=(data.items||[]).filter(i=>!vistos.has(i.filename));
     gmailItems=[...previos, ...nuevos];
     gmailNextPage=data.next_page_token || null;
@@ -12242,6 +12252,10 @@ const FORMA_PAGO_SAT_NOMBRE = { "01":"Efectivo", "02":"Cheque nominativo", "03":
   "17":"Compensación", "28":"Tarjeta de débito", "29":"Tarjeta de servicios", "30":"Aplicación de anticipos",
   "99":"Por definir" };
 function formaPagoDesdeCfdi(c){
+  // Un CFDI que llegó SIN estas claves se descargó de Gmail antes de que el servidor las leyera:
+  // la lista pendiente se guarda en el navegador. No es que la factura no diga cómo se pagó.
+  if(c && typeof c === "object" && !("formaPago" in c) && !("metodoPago" in c))
+    return { valor:"", aviso:"Esta factura se descargó de Gmail antes de que la app leyera la forma de pago del XML. Pulsa «Revisar Gmail» otra vez para traerla, o elígela." };
   const fp = String((c && c.formaPago) || "").trim(), mp = String((c && c.metodoPago) || "").trim().toUpperCase();
   if(!fp && !mp) return { valor:"", aviso:"" };
   const dice = fp ? `${fp} · ${FORMA_PAGO_SAT_NOMBRE[fp] || "código del SAT"}` : "sin forma de pago";

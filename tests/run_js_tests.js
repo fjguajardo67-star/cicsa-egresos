@@ -120,7 +120,7 @@ const FUNCS = [
   "parsearFaltantesCsv", "_esPalabraCompleta", "riesgoAlias", "candidatosAlias",
   "planAlias", "resumenPlanAlias", "conSinonimoAgregado", "productoDesdeFaltante",
   "pareceMedidaNoIngrediente", "_sepNombres",
-  "formaPagoLabel", "formaPagoDesdeCfdi", "partidasExpandidas", "renglonesAuditoria", "contenidoTotalGramos",
+  "formaPagoLabel", "formaPagoDesdeCfdi", "refrescarCfdiPendientes", "partidasExpandidas", "renglonesAuditoria", "contenidoTotalGramos",
   "precioPorUnidadBase", "diaSemanaLabel", "fechaLocalStr", "todayStr", "diasRestantes",
   "allGastosAllWeeks", "_cortesCrudos", "esCorteContable", "todosLosCortes", "todosLosCortesNoContables", "todosLosRetiros", "todasLasAportaciones",
   "findDuplicate", "calcularSaldoAntesDe", "calcularSaldoCajaPeriodo",
@@ -321,7 +321,26 @@ t("lo demás no se adivina: se dice lo que trae el CFDI y se deja elegir", () =>
 });
 t("sin forma ni método de pago no hay aviso", () => {
   assert.deepEqual(S.formaPagoDesdeCfdi(null), { valor:"", aviso:"" });
-  assert.deepEqual(S.formaPagoDesdeCfdi({ fecha:"2026-11-02" }), { valor:"", aviso:"" });
+  assert.deepEqual(S.formaPagoDesdeCfdi({ fecha:"2026-11-02", formaPago:"", metodoPago:"" }), { valor:"", aviso:"" });
+});
+t("una factura descargada de Gmail antes de leer la forma de pago lo dice, en vez de callar", () => {
+  // La lista pendiente se guarda en el navegador: lo que se bajó antes no trae las claves.
+  const r = S.formaPagoDesdeCfdi({ fecha:"2026-10-31", total:27120.02, folio:"X1" });
+  assert.equal(r.valor, "", "no se adivina");
+  assert.match(r.aviso, /antes de que la app leyera la forma de pago[\s\S]*Revisar Gmail/);
+});
+t("revisar Gmail otra vez refresca el CFDI de lo pendiente y conserva lo demás", () => {
+  const viejo = { filename:"a.pdf", data_b64:"AAA", _visto:true, cfdi:{ fecha:"2026-10-31" } };
+  const otro  = { filename:"b.pdf", cfdi:{ fecha:"2026-10-30" } };
+  const n = S.refrescarCfdiPendientes([viejo, otro], [
+    { filename:"a.pdf", data_b64:"BBB", cfdi:{ fecha:"2026-10-31", formaPago:"03", metodoPago:"PUE" } },
+    { filename:"b.pdf", cfdi:null } ]);
+  assert.equal(n, 1);
+  assert.equal(viejo.cfdi.formaPago, "03");
+  assert.equal(viejo.data_b64, "AAA", "el archivo y el estado locales no se tocan");
+  assert.equal(viejo._visto, true);
+  assert.equal(otro.cfdi.fecha, "2026-10-30", "sin CFDI en la respuesta, se queda el que había");
+  assert.ok(/refrescarCfdiPendientes\(previos, data\.items\|\|\[\]\)/.test(_cuerpoDe("fetchGmail")), "fetchGmail lo usa");
 });
 t("Gmail aplica la forma de pago del CFDI, y el formulario borra el aviso al limpiarse", () => {
   assert.ok(/_cfdiGmail = item\.cfdi \|\| null;[\s\S]{0,1500}aplicarFormaPagoDeCfdi\(_cfdiGmail\);/.test(html),
