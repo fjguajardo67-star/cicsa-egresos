@@ -1651,6 +1651,23 @@ t("un archivo ilegible no se da por bueno", () => {
   assert.equal(S.verificarArchivo({}, [{ id:"x", _tipo:"gasto", importe:1 }]).ok, false);
 });
 
+t("Espacio y archivo tiene su propia entrada y ya no vive dentro de Usuarios", () => {
+  // Al fondo de «Usuarios» nadie lo encontraba, y el índice no lo mencionaba.
+  const modal = id => { const i = html.indexOf(`id="${id}"`); const j = html.indexOf('<div class="modal-overlay"', i + 10); return html.slice(i, j < 0 ? undefined : j); };
+  const usuarios = modal("adminModal"), archivo = modal("archivoModal");
+  ["medidorEstado", "archivoBody", "archivoNubeBody", "liberarBody", "respaldosLista", "btnMigrarRespaldos"].forEach(id => {
+    assert.ok(archivo.includes(`id="${id}"`), `${id} está en Espacio y archivo`);
+    assert.ok(!usuarios.includes(`id="${id}"`), `${id} ya no está en Usuarios`);
+  });
+  assert.ok(usuarios.includes('id="adminUserList"'), "Usuarios sigue con sus cuentas");
+  const abrir = _cuerpoDe("abrirArchivoModal");
+  assert.ok(/currentRole !== "admin"\) return/.test(abrir), "solo admin");
+  ["pintarMedidorEstado()", "renderRespaldos()", "renderArchivoMeses()", "renderArchivosEnNube()"].forEach(f => assert.ok(abrir.includes(f), f));
+  assert.ok(!/renderArchivoMeses|pintarMedidorEstado/.test(_cuerpoDe("abrirAdminModal")), "Usuarios ya no lo pinta");
+  assert.ok(/btnArch\.onclick = \(\) => abrirArchivoModal\(\);/.test(html), "entrada en el índice lateral");
+  assert.ok(/label: "📦 Espacio y archivo", action: abrirArchivoModal/.test(html), "y en el menú del usuario");
+  assert.ok(/id="rsEspacioCard"[\s\S]{0,900}onclick="abrirArchivoModal\(\)"/.test(html), "la tarjeta del Resumen lleva directo");
+});
 t("la ventana protege el mes actual y los 2 anteriores; lo de antes se puede liberar", () => {
   // Con 4, en noviembre quedaba protegido todo desde julio —toda la historia— y el documento
   // llegó al 82 % sin un mes liberable. Bajarla no salta ningún resguardo: liberar sigue pidiendo

@@ -432,7 +432,7 @@ body.snav-min .user-chip span { display:none; }
    encimado sobre la página. Mismo lienzo blanco que .modal + encabezado y botón de cierre. */
 .modal-box { background:white; border-radius:14px; padding:24px 28px; min-width:360px; width:100%;
              box-shadow:0 20px 60px rgba(0,0,0,.25); max-height:92vh; overflow-y:auto; margin:auto; }
-#adminModal .modal-box { max-width:600px; }
+#adminModal .modal-box, #archivoModal .modal-box { max-width:600px; }
 .modal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;
                 font-family:'DM Serif Display',serif; font-size:18px; color:var(--vd); }
 .modal-close { border:none; background:var(--claro); color:var(--txt2); border-radius:8px;
@@ -684,19 +684,30 @@ body.snav-min .side-theme span { display:none; }
     <h4 style="margin:0 0 6px;color:var(--vd)">👁 Actividad de usuarios operativos</h4>
     <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Quién está operando ahora y cuánto tiempo llevan trabajando hoy. Solo lo ves tú.</div>
     <button class="btn btn-light" onclick="abrirActividadModal()">👁 Ver actividad</button>
+  </div>
+</div>
 
-    <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
+<!-- ── Espacio y archivo (solo admin) ──────────────────────────────────────────
+     Vivía al fondo de «Usuarios», debajo de la lista de cuentas: quien lo necesitaba no daba con
+     él, y el índice no lo mencionaba. Nada aquí tiene que ver con usuarios: es el tope del
+     documento, el archivo de meses viejos, los respaldos y el mantenimiento. -->
+<div class="modal-overlay" id="archivoModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>📦 Espacio y archivo</span>
+      <button class="modal-close" onclick="cerrarArchivoModal()">✕</button>
+    </div>
     <h4 style="margin:0 0 6px;color:var(--vd)">📦 Espacio del archivo</h4>
     <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Toda la información vive en un solo archivo en la nube, y ese archivo tiene un tope. Aquí ves cuánto llevas.</div>
     <div id="medidorEstado"></div>
 
     <hr style="border:none;border-top:1px solid var(--border);margin:20px 0 16px">
-    <h4 style="margin:0 0 6px;color:var(--vd)">📦 Archivar meses viejos <span style="font-weight:400;font-size:11px;color:var(--txt2)">— fase 1: escribir y verificar</span></h4>
+    <h4 style="margin:0 0 6px;color:var(--vd)">📦 Archivar meses viejos <span style="font-weight:400;font-size:11px;color:var(--txt2)">— paso 1: escribir y verificar</span></h4>
     <div style="font-size:12px;color:var(--txt2);margin-bottom:10px;line-height:1.5">
       Escribe un mes completo en la nube (Storage) y lo <strong>vuelve a leer para comprobar</strong> que
       coincide con el documento: mismos movimientos y mismas sumas al centavo.
-      <strong>Esta fase no quita nada.</strong> Sirve para verificar que el archivo se puede escribir y
-      leer bien antes de que, más adelante, se use para aligerar el documento.
+      <strong>Este paso no quita nada.</strong> Es el requisito para liberar: un mes solo sale del
+      documento (paso 2, más abajo) si su archivo está escrito y vuelve a cuadrar.
     </div>
     <div id="archivoBody"></div>
     <div class="status" id="archivoStatus" style="margin-top:8px"></div>
@@ -917,6 +928,7 @@ body.snav-min .side-theme span { display:none; }
     <div class="card-title">📦 Espacio del archivo</div>
     <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Toda la información vive en un solo archivo en la nube, y ese archivo tiene un tope. Cuando se llene, la app deja de poder guardar.</div>
     <div id="medidorEstadoResumen"></div>
+    <button class="btn btn-light" style="margin-top:10px;padding:5px 12px;font-size:12px" onclick="abrirArchivoModal()">📦 Abrir Espacio y archivo — liberar meses viejos</button>
   </div>
 </div>
 
@@ -12893,6 +12905,14 @@ auth.onAuthStateChanged(async user => {
         btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style="width:17px;height:17px;flex:0 0 auto;stroke-width:1.7"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.5 2.7-5.5 6-5.5s6 2 6 5.5M16 4.6a3.5 3.5 0 010 6.8M17.5 14.7c2.1.6 3.5 2.3 3.5 5.3"/></svg><span class="nb-lbl">Usuarios</span>';
         btn.onclick = () => abrirAdminModal();
         grp.appendChild(btn);
+        // El espacio del documento tiene su propia entrada: escondido dentro de Usuarios, nadie
+        // daba con él justo cuando hacía falta liberar.
+        const btnArch = document.createElement("button");
+        btnArch.id = "btnArchivo";
+        btnArch.className = "nav-btn";
+        btnArch.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style="width:17px;height:17px;flex:0 0 auto;stroke-width:1.7"><path d="M3 7h18v4H3zM5 11v8h14v-8M10 15h4"/></svg><span class="nb-lbl">Espacio y archivo</span>';
+        btnArch.onclick = () => abrirArchivoModal();
+        grp.appendChild(btnArch);
       }
     }
 
@@ -12937,6 +12957,7 @@ function toggleUserMenu() {
     { label: "🏷 Versión " + APP_BUILD, action: recargarSinCache },
     { label: "🔑 Cambiar contraseña", action: cambiarPassword },
     currentRole === "admin" ? { label: "👥 Gestión de usuarios", action: abrirAdminModal } : null,
+    currentRole === "admin" ? { label: "📦 Espacio y archivo", action: abrirArchivoModal } : null,
     { label: "🚪 Cerrar sesión", action: cerrarSesionSegura },
   ].filter(Boolean);
 
@@ -13159,10 +13180,17 @@ async function abrirAdminModal() {
   if(currentRole !== "admin") return;
   document.getElementById("adminModal").classList.add("open");
   cargarUsuarios();
-  renderRespaldos();
+}
+async function abrirArchivoModal() {
+  if(currentRole !== "admin") return;
+  document.getElementById("archivoModal").classList.add("open");
   pintarMedidorEstado();
+  renderRespaldos();
   try{ renderArchivoMeses(); }catch(_){}
   try{ renderArchivosEnNube(); }catch(_){}
+}
+function cerrarArchivoModal() {
+  document.getElementById("archivoModal").classList.remove("open");
 }
 
 // Traduce la medición a algo accionable: no "812 KB" sino "te caben ~900 gastos más".
