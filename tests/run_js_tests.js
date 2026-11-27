@@ -141,6 +141,7 @@ const FUNCS = [
   "clasificarDiferenciaSAT", "folioCapturableCfdi",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
+  "_zipEntradas", "_satXmlsDeZip", "reporteLecturaSat", "mesDominante",
   "_cfdiTipoDesdeTexto", "filtrarCfdisConciliables", "autodetectarRfcPropio",
   "rfcPropio", "guardarRfcPropio",
   "_gmailHuella", "filterGmailDuplicates",
@@ -170,6 +171,8 @@ const sandbox = {
   _gmailRevisados: null,
   // _b64ABytes decodifica base64: en el navegador atob es global, en un contexto de vm no.
   atob, Uint8Array,
+  // El lector del ZIP del SAT decodifica los nombres y los XML: en el navegador es global.
+  TextDecoder,
   // La cola de miniaturas vive en una variable de modulo; el sandbox se la presta.
   _colaMiniaturas: Promise.resolve(),
   // Los reintentos de fbAuthHeader esperan entre intento e intento.
@@ -1648,6 +1651,32 @@ t("un archivo ilegible no se da por bueno", () => {
   assert.equal(S.verificarArchivo({}, [{ id:"x", _tipo:"gasto", importe:1 }]).ok, false);
 });
 
+t("Espacio y archivo tiene su propia entrada y ya no vive dentro de Usuarios", () => {
+  // Al fondo de «Usuarios» nadie lo encontraba, y el índice no lo mencionaba.
+  const modal = id => { const i = html.indexOf(`id="${id}"`); const j = html.indexOf('<div class="modal-overlay"', i + 10); return html.slice(i, j < 0 ? undefined : j); };
+  const usuarios = modal("adminModal"), archivo = modal("archivoModal");
+  ["medidorEstado", "archivoBody", "archivoNubeBody", "liberarBody", "respaldosLista", "btnMigrarRespaldos"].forEach(id => {
+    assert.ok(archivo.includes(`id="${id}"`), `${id} está en Espacio y archivo`);
+    assert.ok(!usuarios.includes(`id="${id}"`), `${id} ya no está en Usuarios`);
+  });
+  assert.ok(usuarios.includes('id="adminUserList"'), "Usuarios sigue con sus cuentas");
+  const abrir = _cuerpoDe("abrirArchivoModal");
+  assert.ok(/currentRole !== "admin"\) return/.test(abrir), "solo admin");
+  ["pintarMedidorEstado()", "renderRespaldos()", "renderArchivoMeses()", "renderArchivosEnNube()"].forEach(f => assert.ok(abrir.includes(f), f));
+  assert.ok(!/renderArchivoMeses|pintarMedidorEstado/.test(_cuerpoDe("abrirAdminModal")), "Usuarios ya no lo pinta");
+  assert.ok(/btnArch\.onclick = \(\) => abrirArchivoModal\(\);/.test(html), "entrada en el índice lateral");
+  assert.ok(/label: "📦 Espacio y archivo", action: abrirArchivoModal/.test(html), "y en el menú del usuario");
+  assert.ok(/id="rsEspacioCard"[\s\S]{0,900}onclick="abrirArchivoModal\(\)"/.test(html), "la tarjeta del Resumen lleva directo");
+});
+t("la ventana protege el mes actual y los 2 anteriores; lo de antes se puede liberar", () => {
+  // Con 4, en noviembre quedaba protegido todo desde julio —toda la historia— y el documento
+  // llegó al 82 % sin un mes liberable. Bajarla no salta ningún resguardo: liberar sigue pidiendo
+  // archivo en la nube, revisión que cuadre en ese momento, respaldo comprobado y teclear el mes.
+  const V = vm.runInContext("ARCHIVO_VENTANA_MESES", sandbox);
+  assert.equal(V, 2);
+  const st = { weeks:[{ id:"w", gastos:["2026-07","2026-08","2026-09","2026-10","2026-11"].map((m,i) => ({ id:"g"+i, fecha:m+"-10", importe:1 })) }] };
+  assert.deepEqual(S.mesesArchivables(st, "2026-11-27", V), ["2026-07", "2026-08"]);
+});
 t("los meses archivables son los de FUERA de la ventana", () => {
   const st = _stArch();
   // Ventana de 3 meses desde el 30 de septiembre: entran julio, agosto y septiembre.
@@ -1949,18 +1978,22 @@ tAsyncQ("si el archivo YA NO cuadra, no se quita nada", async () => {
 });
 
 tAsyncQ("un mes dentro de la ventana no se libera aunque todo lo demas este bien", async () => {
-  const st = { budget:{}, weeks:[{ id:"w1", gastos:[{ id:"g1", fecha:"2026-09-05", importe:100 }],
+  // El mes ANTERIOR al de hoy: siempre queda dentro de la ventana, sea cual sea la fecha en que
+  // corra la prueba. Con un mes fijo, la prueba caducaba sola cuando ese mes salía de la ventana.
+  const _d = new Date(); _d.setDate(1); _d.setMonth(_d.getMonth() - 1);
+  const MES = `${_d.getFullYear()}-${String(_d.getMonth() + 1).padStart(2, "0")}`;
+  const st = { budget:{}, weeks:[{ id:"w1", gastos:[{ id:"g1", fecha:`${MES}-05`, importe:100 }],
     cortes:[], retiros:[], aportaciones:[] }] };
   S.state = st;
   const realFetch = S.fetch;
   S.fetch = async (u) => (/\/o\?/.test(u) && !/alt=media/.test(u)
-    ? { ok:true, status:200, json: async () => ({ items:[{ name:"archivo/2026-09.json" }] }) }
-    : { ok:true, status:200, json: async () => S.construirArchivoMes(st, "2026-09", "Prueba") });
+    ? { ok:true, status:200, json: async () => ({ items:[{ name:`archivo/${MES}.json` }] }) }
+    : { ok:true, status:200, json: async () => S.construirArchivoMes(st, MES, "Prueba") });
   vm.runInContext("_archivosEnStorage = null; _archivosError = ''; _archivosParciales = '';", sandbox);
   try {
-    const r = await S.liberarMes("2026-09");
+    const r = await S.liberarMes(MES);
     assert.equal(r.ok, false);
-    assert.ok(/ltimos 4 meses/.test(r.motivo), `motivo: ${r.motivo}`);
+    assert.ok(/Mes reciente \(el actual y los \d+ anteriores\)/.test(r.motivo), `motivo: ${r.motivo}`);
     assert.equal(st.weeks[0].gastos.length, 1);
   } finally { S.fetch = realFetch; }
 });
@@ -2024,7 +2057,7 @@ t("un mes reciente no se libera ni archivado ni verificado", () => {
   // salido bien. Si cediera ante "ya esta archivado y verificado", no seria una ventana.
   const r = S.estadoLiberacion("2026-09", ["2026-04","2026-05"], ["2026-09"], true);
   assert.equal(r.puede, false);
-  assert.ok(/ltimos 4 meses/.test(r.motivo), "y hay que decir POR QUE: un no sin motivo se salta a mano");
+  assert.ok(/Mes reciente \(el actual y los \d+ anteriores\)/.test(r.motivo), "y hay que decir POR QUE: un no sin motivo se salta a mano");
 });
 t("un mes viejo pero sin archivo tampoco", () => {
   const r = S.estadoLiberacion("2026-04", ["2026-04","2026-05"], [], true);
@@ -6928,6 +6961,103 @@ t("CFDI 3.2 (atributos en minúscula) también se lee", () => {
   assert.equal(c.rfc, "AAA010101AAA");
   assert.equal(c.proveedor, "PROV UNO");
   assert.equal(c.uuid, "U-2");
+});
+// ── El ZIP del SAT se abre en el navegador ─────────────────────────────────────────
+// Se arma un ZIP de verdad (cabeceras locales, directorio central y fin) con zlib de Node: lo que
+// se prueba es el lector, no un ZIP de juguete. El CRC no se valida, así que va en cero.
+function _zipDePrueba(entradas){
+  const zlib = require("zlib"), locales = [], central = []; let off = 0;
+  for(const e of entradas){
+    const nombre = Buffer.from(e.nombre, "utf8"), crudo = Buffer.from(e.texto||"", "utf8");
+    const metodo = e.carpeta ? 0 : (e.metodo == null ? 8 : e.metodo);
+    const datos = metodo === 8 ? zlib.deflateRawSync(crudo) : crudo;
+    const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50,0); lh.writeUInt16LE(20,4); lh.writeUInt16LE(0x800,6); lh.writeUInt16LE(metodo,8);
+    lh.writeUInt32LE(datos.length,18); lh.writeUInt32LE(crudo.length,22); lh.writeUInt16LE(nombre.length,26); lh.writeUInt16LE(0,28);
+    const ch = Buffer.alloc(46); ch.writeUInt32LE(0x02014b50,0); ch.writeUInt16LE(20,4); ch.writeUInt16LE(20,6); ch.writeUInt16LE(0x800,8); ch.writeUInt16LE(metodo,10);
+    ch.writeUInt32LE(datos.length,20); ch.writeUInt32LE(crudo.length,24); ch.writeUInt16LE(nombre.length,28); ch.writeUInt32LE(off,42);
+    locales.push(lh, nombre, datos); central.push(ch, nombre); off += 30 + nombre.length + datos.length;
+  }
+  const cd = Buffer.concat(central), fin = Buffer.alloc(22);
+  fin.writeUInt32LE(0x06054b50,0); fin.writeUInt16LE(entradas.length,8); fin.writeUInt16LE(entradas.length,10);
+  fin.writeUInt32LE(cd.length,12); fin.writeUInt32LE(off,16);
+  const b = Buffer.concat([...locales, cd, fin]);
+  return new Uint8Array(b.buffer, b.byteOffset, b.length);
+}
+const _inflarNode = async (d) => new Uint8Array(require("zlib").inflateRawSync(Buffer.from(d)));
+const _xmlZ = (uuid, extra) => `<cfdi:Comprobante Version="4.0" Fecha="2026-11-08T10:00:00" Total="100" SubTotal="86.21" TipoDeComprobante="I" ${extra||""}><cfdi:Emisor Rfc="AAA010101AAA" Nombre="PROV ÑANDÚ"/><cfdi:Receptor Rfc="CIC190426SD4"/><tfd:TimbreFiscalDigital UUID="${uuid}"/></cfdi:Comprobante>`;
+tAsyncQ("ZIP del SAT: saca los XML (comprimidos o no, en subcarpetas) y nada más", async () => {
+  const zip = _zipDePrueba([
+    { nombre:"11 NOVIEMBRE 2026/", carpeta:true },
+    { nombre:"11 NOVIEMBRE 2026/RECIBIDAS/U-1.xml", texto:_xmlZ("U-1") },
+    { nombre:"11 NOVIEMBRE 2026/RECIBIDAS/U-2.XML", texto:_xmlZ("U-2"), metodo:0 },
+    { nombre:"11 NOVIEMBRE 2026/RECIBIDAS/factura.pdf", texto:"%PDF-1.4" },
+    { nombre:"__MACOSX/11 NOVIEMBRE 2026/._U-1.xml", texto:"basura" },
+  ]);
+  assert.ok(!S._zipEntradas(zip).some(e => e.nombre.endsWith("/")), "las carpetas no son archivos");
+  const xs = await S._satXmlsDeZip(zip, _inflarNode);
+  assert.deepEqual(xs.map(x => x.nombre), ["11 NOVIEMBRE 2026/RECIBIDAS/U-1.xml", "11 NOVIEMBRE 2026/RECIBIDAS/U-2.XML"]);
+  const c = S.parseCFDIXML(xs[0].texto);
+  assert.equal(c.uuid, "U-1");
+  assert.equal(c.proveedor, "PROV ÑANDÚ", "los acentos sobreviven a la descompresión");
+  assert.equal(S.parseCFDIXML(xs[1].texto).uuid, "U-2", "y el guardado sin comprimir también se lee");
+});
+t("un archivo que no es ZIP lo dice, en vez de fallar callado", () => {
+  assert.throws(() => S._zipEntradas(new Uint8Array(100)), /no es un ZIP válido/);
+});
+t("el ZIP del SAT entra por la misma puerta que los XML: botón, arrastre y lectura", () => {
+  assert.ok(/id="satXmlFiles" accept="[^"]*\.zip/.test(html), "el botón deja elegir el ZIP");
+  const soltar = _cuerpoDe("_satSoltarArchivos");
+  assert.ok(!/descomprímelo/.test(soltar), "soltar el ZIP ya no se rechaza");
+  assert.ok(/\[\.\.\.c\.xml, \.\.\.c\.zip\]/.test(soltar), "va a la caja de los XML");
+  assert.ok(/if\(\(f\.name\|\|""\)\.toLowerCase\(\)\.endsWith\("\.zip"\)\)\{[\s\S]{0,120}_satXmlsDeZip\(await f\.arrayBuffer\(\)\)/.test(_cuerpoDe("procesarSATXml")),
+    "y procesarSATXml abre lo que termina en .zip");
+});
+t("detalle de la lectura: cada archivo dice si se leyó, si estaba, si se repite y qué es", () => {
+  const c = (uuid, tipo, extra) => Object.assign({ uuid, folio:uuid, tipo, fecha:"2026-11-08", rfc:"AAA010101AAA", proveedor:"P", total:10 }, extra||{});
+  const filas = [
+    { archivo:"sat.zip › 11 NOV/RECIBIDAS/a.xml", cfdi:c("U-1","I") },
+    { archivo:"a (1).xml", cfdi:c("u-1","I") },                                   // mismo UUID
+    { archivo:"roto.xml", cfdi:null },
+    { archivo:"n.xml", cfdi:c("U-N","N",{ rfc:"CIC190426SD4" }) },
+    { archivo:"p.xml", cfdi:c("U-P","P") },
+    { archivo:"e.xml", cfdi:c("U-E","E") },
+    { archivo:"venta.xml", cfdi:c("U-V","I",{ rfc:"CIC190426SD4" }) },
+    { archivo:"viejo.xml", cfdi:c("U-D","I") },
+    { archivo:"oct.xml", cfdi:c("U-O","I",{ fecha:"2026-10-31" }) },
+  ];
+  const guardados = new Map([["U-D", { uuid:"U-D", ignorado:true }], ["U-P", { uuid:"U-P" }]]);
+  const r = S.reporteLecturaSat(filas, "cic190426sd4", "2026-11-01", "2026-11-30", guardados);
+  const de = n => r.filas.find(f => f.archivo === n || f.archivo.endsWith("/" + n));
+  assert.equal(de("a.xml").lectura, "nuevo");
+  assert.equal(de("a.xml").destino, "Gasto por conciliar");
+  assert.equal(de("a (1).xml").lectura, "repetido");
+  assert.equal(de("a (1).xml").destino, "Repetido: mismo UUID que a.xml", "dice con cuál se repite, sin la ruta del ZIP");
+  assert.equal(de("roto.xml").lectura, "error");
+  assert.match(de("n.xml").destino, /^Nómina/, "la nómina la emite la empresa, pero se dice que es nómina");
+  assert.equal(de("p.xml").lectura, "ya_estaba");
+  assert.match(de("p.xml").destino, /^Complemento de pago/);
+  assert.equal(de("e.xml").destino, "Nota de crédito");
+  assert.match(de("venta.xml").destino, /emitió tu empresa/);
+  assert.match(de("viejo.xml").destino, /^Descartado antes/, "lo descartado a mano se respeta");
+  assert.equal(de("oct.xml").enPeriodo, false);
+  assert.equal(r.cuenta["Gasto por conciliar"], 2);
+  assert.equal(r.cuenta.gastoFuera, 1);
+  assert.equal(r.cuenta.repetido, 1);
+  assert.equal(r.cuenta.error, 1);
+  assert.equal(r.filas.length, filas.length, "ningún archivo se queda sin fila");
+});
+t("si ningún XML cae en el periodo, se concilia el mes que traen (y se dice)", () => {
+  assert.equal(S.mesDominante([{ fecha:"2026-11-02" }, { fecha:"2026-11-30" }, { fecha:"2026-10-31" }]), "2026-11");
+  assert.equal(S.mesDominante([]), "");
+  const p = _cuerpoDe("procesarSATXml");
+  assert.ok(/if\(!enRango\.length\)\{[\s\S]{0,400}mesDominante\(unicos\)[\s\S]{0,120}if\(mes && sel && \[\.\.\.sel\.options\]\.some\(o=>o\.value===mes\)\)\{[\s\S]{0,300}onMesGuardadoChange\(\)/.test(p),
+    "sin esto: subir noviembre con septiembre puesto concilia una pantalla vacía");
+  assert.ok(/periodoCambiado/.test(p.slice(p.indexOf('setStatus("satStatus",`✅'))), "y el aviso lo cuenta");
+  assert.ok(/renderReporteLecturaSat\(reporteLecturaSat\(filas/.test(p), "el detalle se muestra");
+});
+t("el detalle de la lectura escapa lo que viene del XML", () => {
+  const r = _cuerpoDe("renderReporteLecturaSat");
+  ["esc(x.proveedor", "esc(f.destino)", "esc(String(f.archivo)"].forEach(s => assert.ok(r.includes(s), s));
 });
 t("un XML que no es CFDI regresa null", () => {
   assert.equal(S.parseCFDIXML(`<root><foo bar="1"/></root>`), null);
