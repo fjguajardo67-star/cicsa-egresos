@@ -21,7 +21,12 @@
 .ing-publication p{flex:1;min-width:220px;}
 .ing-workspace .ing-error{color:#a12622;font-weight:600;}
 .ing-workspace .ing-policy{margin:14px 0 22px;max-width:78ch;}
-.ing-row{padding:20px 0;border-top:1px solid #d4dfd8;}
+.ing-row{padding:12px 0;border-top:1px solid #d4dfd8;}
+.ing-row h3{margin:0 0 2px;font-size:15px;}
+.ing-row-head p{margin:0;}
+.ing-vista-ayuda{margin:-8px 0 18px;font-size:13px;color:#4f6158;}
+.ing-row>details{margin-top:6px;}
+.ing-row>details>summary{font-size:12.5px;}
 .ing-row-head>div:first-child{flex:1;min-width:200px;}
 .ing-price strong{font-size:1.1rem;font-variant-numeric:tabular-nums;}
 .ing-price span{font-size:.9rem;font-weight:400;}
