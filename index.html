@@ -3194,7 +3194,12 @@ const ARCHIVO_PREFIJO = "archivo";
 // Los meses recientes NO se quitan del documento aunque ya estén archivados: son los que
 // todavía se consultan, se corrigen y se cierran. Este número es la ventana de retención y
 // vive aquí una sola vez; si alguien lo cambia, cambia en los dos lados a la vez.
-const ARCHIVO_VENTANA_MESES = 4;
+// Protege el mes en curso y los N anteriores. Era 4, y con la historia empezando en julio eso
+// protegía TODO lo que había (julio a noviembre): el documento llegó al 82 % sin un solo mes que
+// se pudiera liberar. Con 2 se protegen los que todavía se concilian y se corrigen —el SAT del mes
+// anterior suele cerrarse ya entrado el siguiente— y lo de antes se puede liberar, siempre con su
+// archivo verificado y su respaldo, que es lo que de verdad protege.
+const ARCHIVO_VENTANA_MESES = 2;
 
 // La puerta de la fase 3: ¿se puede quitar este mes del documento? Responde con TODAS las
 // condiciones, en orden de qué tan grave es saltársela, y dice CUÁL falta — un "no" sin motivo
@@ -3207,7 +3212,7 @@ const ARCHIVO_VENTANA_MESES = 4;
 function estadoLiberacion(mes, archivables, enStorage, verificado){
   if(!/^\d{4}-\d{2}$/.test(String(mes||""))) return { puede:false, motivo:"Mes inválido." };
   if(!(archivables||[]).includes(mes))
-    return { puede:false, motivo:`Dentro de los últimos ${ARCHIVO_VENTANA_MESES} meses: no se quita.` };
+    return { puede:false, motivo:`Mes reciente (el actual y los ${ARCHIVO_VENTANA_MESES} anteriores): no se quita.` };
   // null/undefined NO es lista vacía: es "no se pudo preguntar". Confundirlos diría que un mes
   // archivado no lo está, que es la misma mentira que esta pantalla ya contó una vez.
   if(enStorage == null)
@@ -3705,7 +3710,7 @@ async function renderLiberar(){
   const meses = mesesArchivables(state, todayStr(), ARCHIVO_VENTANA_MESES);
   if(!meses.length){
     body.innerHTML = `<div style="font-size:12px;color:var(--txt2)">Ningún mes está fuera de la ventana de `+
-      `${ARCHIVO_VENTANA_MESES} meses todavía, así que no hay nada que liberar.<br>${_registrosLiberados()}</div>`;
+      `${ARCHIVO_VENTANA_MESES} meses (más el actual) todavía, así que no hay nada que liberar.<br>${_registrosLiberados()}</div>`;
     return;
   }
   const filas = [];
@@ -3780,11 +3785,11 @@ async function renderArchivoMeses(){
     </tr>`;}).join("")}
   </tbody></table></div>
   <div style="font-size:11.5px;color:var(--txt2);margin-top:8px;line-height:1.5">
-    La última columna es la de la <strong>fase 3</strong>, que todavía no existe: nada de lo que
-    hay aquí quita un solo movimiento. Un mes solo podrá liberarse cuando cumpla las tres:
-    estar fuera de los últimos ${ARCHIVO_VENTANA_MESES} meses, tener su archivo en la nube, y que
-    <strong>Revisar</strong> vuelva a cuadrarlo contra el documento. Esta pantalla no revisa sola
-    —costaría una lectura de red por mes—, por eso ningún mes sale en verde desde aquí.
+    Nada de lo que hay en esta tabla quita un solo movimiento. Un mes se libera más abajo, en
+    <strong>Liberar un mes del documento</strong>, y solo si cumple las tres: no ser el mes actual
+    ni uno de los ${ARCHIVO_VENTANA_MESES} anteriores, tener su archivo en la nube, y que el archivo
+    vuelva a cuadrar contra el documento. Esta tabla no revisa sola —costaría una lectura de red
+    por mes—, por eso ningún mes sale en verde desde aquí: el ✅ sale en «Ver qué pasaría».
   </div>`;
 }
 

@@ -1651,6 +1651,15 @@ t("un archivo ilegible no se da por bueno", () => {
   assert.equal(S.verificarArchivo({}, [{ id:"x", _tipo:"gasto", importe:1 }]).ok, false);
 });
 
+t("la ventana protege el mes actual y los 2 anteriores; lo de antes se puede liberar", () => {
+  // Con 4, en noviembre quedaba protegido todo desde julio —toda la historia— y el documento
+  // llegó al 82 % sin un mes liberable. Bajarla no salta ningún resguardo: liberar sigue pidiendo
+  // archivo en la nube, revisión que cuadre en ese momento, respaldo comprobado y teclear el mes.
+  const V = vm.runInContext("ARCHIVO_VENTANA_MESES", sandbox);
+  assert.equal(V, 2);
+  const st = { weeks:[{ id:"w", gastos:["2026-07","2026-08","2026-09","2026-10","2026-11"].map((m,i) => ({ id:"g"+i, fecha:m+"-10", importe:1 })) }] };
+  assert.deepEqual(S.mesesArchivables(st, "2026-11-27", V), ["2026-07", "2026-08"]);
+});
 t("los meses archivables son los de FUERA de la ventana", () => {
   const st = _stArch();
   // Ventana de 3 meses desde el 30 de septiembre: entran julio, agosto y septiembre.
@@ -1952,18 +1961,22 @@ tAsyncQ("si el archivo YA NO cuadra, no se quita nada", async () => {
 });
 
 tAsyncQ("un mes dentro de la ventana no se libera aunque todo lo demas este bien", async () => {
-  const st = { budget:{}, weeks:[{ id:"w1", gastos:[{ id:"g1", fecha:"2026-09-05", importe:100 }],
+  // El mes ANTERIOR al de hoy: siempre queda dentro de la ventana, sea cual sea la fecha en que
+  // corra la prueba. Con un mes fijo, la prueba caducaba sola cuando ese mes salía de la ventana.
+  const _d = new Date(); _d.setDate(1); _d.setMonth(_d.getMonth() - 1);
+  const MES = `${_d.getFullYear()}-${String(_d.getMonth() + 1).padStart(2, "0")}`;
+  const st = { budget:{}, weeks:[{ id:"w1", gastos:[{ id:"g1", fecha:`${MES}-05`, importe:100 }],
     cortes:[], retiros:[], aportaciones:[] }] };
   S.state = st;
   const realFetch = S.fetch;
   S.fetch = async (u) => (/\/o\?/.test(u) && !/alt=media/.test(u)
-    ? { ok:true, status:200, json: async () => ({ items:[{ name:"archivo/2026-09.json" }] }) }
-    : { ok:true, status:200, json: async () => S.construirArchivoMes(st, "2026-09", "Prueba") });
+    ? { ok:true, status:200, json: async () => ({ items:[{ name:`archivo/${MES}.json` }] }) }
+    : { ok:true, status:200, json: async () => S.construirArchivoMes(st, MES, "Prueba") });
   vm.runInContext("_archivosEnStorage = null; _archivosError = ''; _archivosParciales = '';", sandbox);
   try {
-    const r = await S.liberarMes("2026-09");
+    const r = await S.liberarMes(MES);
     assert.equal(r.ok, false);
-    assert.ok(/ltimos 4 meses/.test(r.motivo), `motivo: ${r.motivo}`);
+    assert.ok(/Mes reciente \(el actual y los \d+ anteriores\)/.test(r.motivo), `motivo: ${r.motivo}`);
     assert.equal(st.weeks[0].gastos.length, 1);
   } finally { S.fetch = realFetch; }
 });
@@ -2027,7 +2040,7 @@ t("un mes reciente no se libera ni archivado ni verificado", () => {
   // salido bien. Si cediera ante "ya esta archivado y verificado", no seria una ventana.
   const r = S.estadoLiberacion("2026-09", ["2026-04","2026-05"], ["2026-09"], true);
   assert.equal(r.puede, false);
-  assert.ok(/ltimos 4 meses/.test(r.motivo), "y hay que decir POR QUE: un no sin motivo se salta a mano");
+  assert.ok(/Mes reciente \(el actual y los \d+ anteriores\)/.test(r.motivo), "y hay que decir POR QUE: un no sin motivo se salta a mano");
 });
 t("un mes viejo pero sin archivo tampoco", () => {
   const r = S.estadoLiberacion("2026-04", ["2026-04","2026-05"], [], true);
