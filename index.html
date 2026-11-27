@@ -1570,6 +1570,11 @@ body.snav-min .side-theme span { display:none; }
   </div>
   <div class="summary-grid" id="satSummary" style="display:none;margin-bottom:16px"></div>
   <div id="satOmitidos" style="display:none;background:#F0F7F0;border:1.5px solid var(--vm);border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:12px;color:var(--txt2)"></div>
+  <div class="card" id="satNominaCard" style="display:none;margin-bottom:16px;border:2px solid var(--vm)">
+    <div class="card-title" style="color:var(--vd)">👷 Recibos de nómina timbrada capturados<span id="satNominaCount" class="dup-badge" style="background:#E8F5E9;color:var(--vd);margin-left:8px"></span></div>
+    <p style="font-size:12.5px;color:var(--txt2);margin:0 0 12px">Estos gastos son <strong>recibos de nómina</strong> que timbró tu empresa: no son ventas ni gastos sin comprobante. El XML manda: <strong>nombre del trabajador, fecha y neto pagado</strong>, en la categoría <strong>Nómina Fiscal</strong>.</p>
+    <div id="satNominaBody"></div>
+  </div>
   <div class="card" id="satPropiasCard" style="display:none;margin-bottom:16px;border:2px solid var(--red)">
     <div class="card-title" style="color:var(--red)">🚨 Gastos con el importe de una factura TUYA<span id="satPropiasCount" class="dup-badge" style="background:#FFEBEE;color:var(--red);margin-left:8px"></span></div>
     <p style="font-size:12.5px;color:var(--txt2);margin:0 0 12px">El importe de estos gastos es idéntico al total de un comprobante que <strong>emitió tu empresa</strong>, o sea un <strong>ingreso</strong>. Un número así no llegó solo: salió de esa factura. Revisa cada uno contra su documento — si el gasto es real, su importe tendría que ser otro. <em>Coincidir de importe no es prueba por sí sola; por eso se muestra de cuál factura salió.</em></p>
@@ -2179,7 +2184,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-11-27-egresos-v51";
+const APP_BUILD = "2026-11-27-egresos-v52";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -4636,12 +4641,26 @@ let _esComplementoIA=false;
 // adivinar, y un bloqueo en falso impide trabajar.
 function motivoNoEsGasto(cfdi, rfcEmpresa){
   if(!cfdi) return "";
+  // La nómina timbrada la emite la propia empresa y sí es un gasto: el pago a un trabajador.
+  // Sin esta excepción, guardar un recibo de nómina se bloqueaba como si fuera una venta.
+  if(String(cfdi.tipo||"").toUpperCase().slice(0,1)==="N") return "";
   const propio = String(rfcEmpresa||"").trim().toUpperCase();
   const emisor = String(cfdi.rfc||"").trim().toUpperCase();
   if(propio && emisor && emisor === propio) return "propio";
   return "";
 }
 
+// Un recibo de nómina timbrada va en «Nómina Fiscal» si esa categoría existe en el selector.
+function aplicarCategoriaNomina(c){
+  if(!c || String(c.tipo||"").toUpperCase().slice(0,1)!=="N") return false;
+  const sel = document.getElementById("fCategoria");
+  if(!sel) return false;
+  const cat = categoriaNominaFiscal([...sel.options].map(o=>o.value));
+  if(!cat) return false;
+  sel.value = cat;
+  try{ checkOtro(); }catch(_){}
+  return true;
+}
 function bloqueoComplementoPago(cfdi, sospechaIA){
   if(cfdi && String(cfdi.tipo||"").toUpperCase().slice(0,1)==="P") return "bloqueo";
   if(sospechaIA) return "confirmar";
@@ -4770,8 +4789,9 @@ function setStatusHTML(id,html,type){
 function datosDeCaptura(cfdi, ia){
   const c = cfdi || {}, d = ia || {};
   const delCfdi = !!c.fecha;
+  const esNomina = String(c.tipo||"").toUpperCase().slice(0,1)==="N";
   return {
-    proveedor: c.proveedor || d.proveedor || "",
+    proveedor: (esNomina && c.nombreReceptor) || c.proveedor || d.proveedor || "",
     fecha:     c.fecha     || d.fecha     || null,
     factura:   c.folio     || d.factura   || "",
     importe:   (c.total > 0) ? c.total : (d.importe || ""),
@@ -8377,6 +8397,75 @@ function corridasDeNomina(cfdis, ini, fin){
     .sort((a,b)=> a.fecha < b.fecha ? -1 : 1);
 }
 
+// ── Nómina por trabajador ─────────────────────────────────────────────────
+// Un recibo de nómina timbrado es UN gasto: el pago a un trabajador. Del XML salen el nombre del
+// trabajador (Receptor), la fecha y el NETO pagado (Total), que es lo que se decidió registrar:
+// las retenciones (ISR, IMSS) se capturan cuando se pagan al SAT, y con el bruto se contarían dos
+// veces. La categoría es «Nómina Fiscal», que ya existe en la lista de cada empresa.
+function categoriaNominaFiscal(cats){
+  const norm = x => String(x||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  return (cats||[]).find(c=>/nomina\s*fiscal/.test(norm(c))) || "";
+}
+// Los CFDI de nómina de una lista (para buscar el recibo de un gasto aunque sea de otro mes).
+function _cfdisDeNomina(...listas){
+  const vistos = new Set(), out = [];
+  listas.forEach(l=>(l||[]).forEach(c=>{
+    if(!c || String(c.tipo||"").toUpperCase().slice(0,1)!=="N") return;
+    const k = String(c.uuid||c.folio||"").toUpperCase();
+    if(k && vistos.has(k)) return; if(k) vistos.add(k); out.push(c);
+  }));
+  return out;
+}
+// Los gastos que SON un recibo de nómina timbrado (ligados por su UUID), con lo que dice su XML y
+// lo que habría que cambiarles para que lo digan igual. Sin `cambios` ya están bien. Pura.
+function recibosDeNominaCapturados(gastos, cfdis, catNomina){
+  const indice = _indiceCfdis(_cfdisDeNomina(cfdis));
+  if(!indice.length) return [];
+  const out = [];
+  (gastos||[]).forEach(g=>{
+    const c = cfdiDelGasto(g, indice);
+    if(!c) return;
+    const trabajador = String(c.nombreReceptor||"").trim() || String(c.rfcReceptor||"").trim();
+    const fecha = String(c.fecha||"").slice(0,10);
+    const neto = Math.round((parseFloat(c.total)||0)*100)/100;
+    const cambios = {};
+    if(trabajador && String(g.proveedor||"").trim() !== trabajador) cambios.proveedor = [g.proveedor||"", trabajador];
+    if(/^\d{4}-\d{2}-\d{2}$/.test(fecha) && g.fecha !== fecha) cambios.fecha = [g.fecha||"", fecha];
+    if(neto > 0 && Math.abs((parseFloat(g.importe)||0) - neto) > 0.005) cambios.importe = [parseFloat(g.importe)||0, neto];
+    if(catNomina && g.categoria !== catNomina) cambios.categoria = [g.categoria||"", catNomina];
+    out.push({ gasto:g, cfdi:c, trabajador, fecha, neto, rfcTrabajador:String(c.rfcReceptor||""), cambios });
+  });
+  return out.sort((a,b)=> String(a.fecha).localeCompare(String(b.fecha)) || String(a.trabajador).localeCompare(String(b.trabajador)));
+}
+// Los recibos de nómina del periodo que nadie ha capturado todavía. No cuentan los de una fecha
+// cuya corrida ya se registró completa: serían la misma nómina dos veces. Pura.
+function recibosNominaSinCapturar(cfdis, gastos, ini, fin){
+  const ligados = new Set(recibosDeNominaCapturados(gastos, cfdis).map(x=>String(x.cfdi.uuid||x.cfdi.folio||"").toUpperCase()));
+  return _cfdisDeNomina(cfdis).filter(c=>{
+    if(c.ignorado) return false;
+    const f = String(c.fecha||"").slice(0,10);
+    if(!f || (ini && f < ini) || (fin && f > fin)) return false;
+    if(!(parseFloat(c.total) > 0)) return false;
+    if(ligados.has(String(c.uuid||c.folio||"").toUpperCase())) return false;
+    return !corridaNominaRegistrada(f, gastos);
+  }).sort((a,b)=> String(a.fecha).localeCompare(String(b.fecha)));
+}
+// El gasto de UN recibo, tal como lo dice su XML. Pura.
+function gastoDeReciboNomina(c, cat, id){
+  const uuid = String(c.uuid||c.folio||"");
+  return {
+    id: id || (Date.now().toString() + Math.random().toString(36).slice(2,6)),
+    proveedor: String(c.nombreReceptor||"").trim() || String(c.rfcReceptor||"").trim() || "TRABAJADOR",
+    fecha: String(c.fecha||"").slice(0,10), factura: uuid, cfdiUuid: uuid,
+    importe: Math.round((parseFloat(c.total)||0)*100)/100,
+    categoria: cat, esOtro:false, respaldo:null,
+    notas: `Recibo de nómina timbrado · RFC ${c.rfcReceptor||"—"} · neto pagado`,
+    formaPago:"transferencia", vencimiento:"", estadoPago:"pagado",
+    comprobantePago:null, fechaPago:null, referenciaPago:null, _gmailMsgId:null, _gmailFile:null,
+    _nominaRecibo: uuid,
+  };
+}
+
 // ¿Esta corrida ya está registrada? Se marca el gasto con _nominaCorrida para que no se pueda
 // meter dos veces: duplicar una nómina completa descuadraría el mes entero.
 function corridaNominaRegistrada(fecha, gastos){
@@ -8402,7 +8491,21 @@ async function renderNominaTimbrada(){
   const aviso = sinDesglose
     ? `<div style="background:#FFF8E1;border:1.5px solid var(--do);border-radius:8px;padding:9px 12px;font-size:12px;margin-bottom:10px">⚠️ ${sinDesglose} recibo(s) se guardaron antes de que se leyera el complemento de nómina, así que no traen el desglose. <strong>Vuelve a subir esos XML</strong> para que el bruto salga completo.</div>`
     : "";
-  body.innerHTML = aviso + `
+  // Por trabajador: un gasto por recibo, con su nombre, su fecha y su neto, en «Nómina Fiscal».
+  const _ini = document.getElementById("satFechaIni")?.value || "", _fin = document.getElementById("satFechaFin")?.value || "";
+  const _faltan = recibosNominaSinCapturar(_cfdisStore||[], gastos, _ini, _fin);
+  const _catNom = categoriaNominaFiscal(cats);
+  const porTrabajador = `<div style="background:#F0F7F0;border:1px solid var(--vm);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12.5px">
+      <strong>Por trabajador</strong> — un gasto por recibo: nombre, fecha y neto pagado del XML, en «${esc(_catNom||"Nómina Fiscal")}».<br>
+      ${_faltan.length
+        ? `${_faltan.length} recibo(s) del periodo ${esc(fmtDate(_ini)||"—")} – ${esc(fmtDate(_fin)||"—")} todavía sin capturar, por ${fmt(_faltan.reduce((s,c)=>s+(parseFloat(c.total)||0),0))}.
+           <div style="margin-top:8px">${_catNom
+             ? `<button class="btn btn-gold" style="padding:6px 12px;font-size:12px" onclick="registrarRecibosNomina()">➕ Registrar los ${_faltan.length} recibo(s), uno por trabajador</button>`
+             : `<span style="color:var(--do)">⚠ Falta la categoría «Nómina Fiscal» en tu lista.</span>`}</div>`
+        : `<span style="color:var(--vd)">✓ No hay recibos del periodo sin capturar.</span>`}
+    </div>
+    <div style="font-size:12px;font-weight:600;color:var(--txt2);margin-bottom:6px">Alternativa: un solo gasto por corrida, con el bruto</div>`;
+  body.innerHTML = aviso + porTrabajador + `
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <label style="font-size:12px;color:var(--txt2)">Categoría:</label>
       <select id="nomCategoria" style="padding:6px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:12.5px;font-family:inherit">
@@ -8430,12 +8533,39 @@ async function renderNominaTimbrada(){
     <div style="font-size:11.5px;color:var(--txt2);margin-top:8px">⚠ Si tu categoría de nómina ya incluye la parte fiscal, registrarla aquí la contaría dos veces. Revisa antes qué trae capturado.</div>`;
 }
 
+// Registra cada recibo de nómina del periodo que falte, como un gasto por trabajador. La semana la
+// decide la fecha del recibo; si no existe una que la cubra, ese recibo se salta y se dice.
+function registrarRecibosNomina(){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede registrar la nómina."); return; }
+  const cat = categoriaNominaFiscal(catsActuales());
+  if(!cat){ alert("No encontré la categoría «Nómina Fiscal». Agrégala en Presupuesto y vuelve a intentar."); return; }
+  const ini = document.getElementById("satFechaIni")?.value || "", fin = document.getElementById("satFechaFin")?.value || "";
+  const faltan = recibosNominaSinCapturar(_cfdisStore||[], allGastosAllWeeks(), ini, fin);
+  if(!faltan.length){ alert("No hay recibos del periodo sin capturar."); return; }
+  const semana = f => (state.weeks||[]).find(w=>w.ini && w.fin && f>=w.ini && f<=w.fin);
+  const conSemana = faltan.filter(c=>semana(String(c.fecha).slice(0,10)));
+  const sinSemana = faltan.length - conSemana.length;
+  if(!conSemana.length){ alert("Ninguno de esos recibos cae en una semana creada. Crea las semanas primero."); return; }
+  const total = conSemana.reduce((s,c)=>s+(parseFloat(c.total)||0),0);
+  if(!confirm(`Registrar ${conSemana.length} recibo(s) de nómina timbrada en «${cat}»:\n\n`+
+    `Un gasto por trabajador, con su nombre, la fecha y el neto pagado del XML.\nTotal: ${fmt(total)}`+
+    (sinSemana ? `\n\n${sinSemana} recibo(s) se saltan: su fecha no cae en ninguna semana creada.` : "")+`\n\n¿Continuar?`)) return;
+  conSemana.forEach((c,i)=>{ const w = semana(String(c.fecha).slice(0,10)); w.gastos = w.gastos || []; w.gastos.push(gastoDeReciboNomina(c, cat, Date.now().toString()+"n"+i)); });
+  save();
+  renderNominaTimbrada();
+  try{ conciliarDesdeStore(); }catch(_){}
+  try{ renderAll(); }catch(_){}
+  alert(`✅ ${conSemana.length} recibo(s) registrados en «${cat}» por ${fmt(total)}.`+(sinSemana?`\n\n${sinSemana} se saltaron: crea sus semanas y vuelve a registrar.`:""));
+}
+
 // Registra UNA corrida como un solo gasto, por su bruto. La semana la decide la FECHA de la
 // corrida, no la semana activa: si no existe una que la cubra, se dice en vez de dejarla invisible.
 function registrarCorridaNomina(fecha){
   const corrida = corridasDeNomina(_cfdisStore||[]).find(c=>c.fecha===fecha);
   if(!corrida){ alert("No encontré esa corrida. Vuelve a revisar la nómina."); return; }
   if(corridaNominaRegistrada(fecha, allGastosAllWeeks())){ alert("Esa corrida ya está registrada."); return; }
+  const _sueltos = recibosDeNominaCapturados(allGastosAllWeeks(), _cfdisStore||[]).filter(x=>x.fecha===fecha);
+  if(_sueltos.length){ alert(`Ya hay ${_sueltos.length} recibo(s) de esa fecha capturados uno por uno.\n\nRegistrar la corrida completa contaría esa nómina dos veces.`); return; }
   if(corrida.bruto<=0){ alert("Esa corrida no trae percepciones. Vuelve a subir sus XML para leer el complemento de nómina."); return; }
   const cat = document.getElementById("nomCategoria")?.value || "Nómina / Personal";
   const wk = (state.weeks||[]).find(w=>w.ini && w.fin && fecha>=w.ini && fecha<=w.fin);
@@ -9575,12 +9705,20 @@ function conciliarSAT(cfdis,fechaIni,fechaFin,rfcEmpresa){
     else { x.cfdi._via = x.via; x.cfdi._gastoId = x.match.id; conciliadas.push(x.cfdi); }
   });
   const _totalCICSA = gastosCICSA.reduce((s,g)=>s+(parseFloat(g.importe)||0),0);
+  // Los recibos de nómina capturados tienen comprobante (el suyo) y no son ventas: se apartan de
+  // «factura TUYA» y de «sin comprobante», y se enseñan en su propia tarjeta. Se buscan también
+  // en lo guardado de otros meses: un recibo del 30 de octubre puede caer en un periodo de noviembre.
+  const _recNom = recibosDeNominaCapturados(gastosCICSA, _cfdisDeNomina(cfdis, (typeof _cfdisStore!=="undefined" && _cfdisStore) || []),
+    (typeof catsActuales==="function") ? categoriaNominaFiscal(catsActuales()) : "");
+  const _idsNom = new Set(_recNom.map(x=>x.gasto.id));
+  _idsNom.forEach(id=>_usados.add(id));
   return{faltantes,diferencias,duplicados,conciliadas,cfdisUtiles:utiles,omitidos:filtro.omitidos,
     totalSAT:utiles.reduce((s,c)=>s+c.total,0), totalCICSA:_totalCICSA,
     rfcUsado:_rfcEf.rfc, rfcOrigen:_rfcEf.origen,
     // La pregunta inversa, la que faltaba.
     sinRespaldo: gastosSinRespaldo(gastosCICSA, _usados),
-    propias: gastosConImporteDeFacturaPropia(gastosCICSA, cfdis, rfcEmp)};
+    propias: gastosConImporteDeFacturaPropia(gastosCICSA.filter(g=>!_idsNom.has(g.id)), cfdis, rfcEmp),
+    nomina: _recNom};
 }
 
 // Deja ver POR QUÉ el número bajó: si la cuenta se reduce en silencio, nadie confía en ella.
@@ -9624,6 +9762,7 @@ function renderConciliacion(r){
     <div class="scard"><div class="scard-label">Conciliadas ✅</div><div class="scard-val">${r.conciliadas.length}</div><div class="scard-sub">${pct}% del total</div></div>
     ${_rs.nGraves>0?`<div class="scard alert"><div class="scard-label">Gastos sin comprobante</div><div class="scard-val" style="color:var(--red)">${_rs.nGraves}</div><div class="scard-sub">${fmt(_rs.totalGraves)}</div></div>`:""}`;
   try{ renderSinRespaldo(r); }catch(e){ console.warn("renderSinRespaldo:",e); }
+  try{ renderNominaCapturada(r); }catch(e){ console.warn("renderNominaCapturada:",e); }
   document.getElementById("satFaltantesCard").style.display=r.faltantes.length>0?"block":"none";
   document.getElementById("satFaltantesCount").textContent=r.faltantes.length;
   document.getElementById("satFaltantesBody").innerHTML=r.faltantes.map(c=>`<tr style="background:#FFF8F6">
@@ -9717,6 +9856,79 @@ function preLlenarCaptura(proveedor,fecha,folio,importe,uuid){
   document.getElementById("fProv").value=proveedor; document.getElementById("fFecha").value=fecha;
   document.getElementById("fFactura").value=folio; document.getElementById("fImporte").value=importe;
   document.getElementById("extractedCard").style.display="block"; checkDuplicateForm(); window.scrollTo(0,0);
+}
+
+// ── Tarjeta: recibos de nómina capturados como gasto ──
+// Dice, recibo por recibo, qué trae el XML (trabajador, fecha, neto) y qué le cambiaría al gasto.
+// Un botón los pasa todos a «Nómina Fiscal»; cada uno se puede deshacer y lo de antes queda anotado.
+function renderNominaCapturada(r){
+  const card = document.getElementById("satNominaCard"), body = document.getElementById("satNominaBody");
+  if(!card || !body) return;
+  const lista = (r && r.nomina) || [];
+  if(!lista.length){ card.style.display = "none"; body.innerHTML = ""; return; }
+  card.style.display = "block";
+  const cat = categoriaNominaFiscal(catsActuales());
+  const porCambiar = lista.filter(x=>Object.keys(x.cambios).length);
+  const deshechables = lista.filter(x=>x.gasto && x.gasto.nominaAntes);
+  const cnt = document.getElementById("satNominaCount");
+  if(cnt) cnt.textContent = `${lista.length} · ${fmt(lista.reduce((s,x)=>s+x.neto,0))}`;
+  const cambio = (x,k,f) => x.cambios[k] ? `<span style="text-decoration:line-through;color:var(--txt2)">${esc(f(x.cambios[k][0]))}</span> → <strong>${esc(f(x.cambios[k][1]))}</strong>` : `<span style="color:var(--vd)">✓ ${esc(f(k==="proveedor"?x.trabajador:k==="fecha"?x.fecha:k==="importe"?x.neto:(x.gasto.categoria||"")))}</span>`;
+  const sinCat = cat ? "" : `<div style="background:#FFF8E1;border:1px solid var(--do);border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:12px">⚠ No encontré la categoría <strong>Nómina Fiscal</strong> en tu lista. Agrégala en Presupuesto y vuelve a conciliar.</div>`;
+  body.innerHTML = sinCat + `<div class="tbl-wrap"><table><thead><tr>
+      <th>Trabajador (XML)</th><th>Fecha</th><th style="text-align:right">Neto</th><th>Categoría</th><th>UUID</th><th></th>
+    </tr></thead><tbody>${lista.map(x=>`<tr>
+      <td>${cambio(x,"proveedor",v=>v||"—")}<div style="font-size:10.5px;color:var(--txt2);font-family:'JetBrains Mono',monospace">${esc(x.rfcTrabajador||"")}</div></td>
+      <td style="white-space:nowrap">${cambio(x,"fecha",v=>fmtDate(v)||"—")}</td>
+      <td class="amount-cell" style="white-space:nowrap">${cambio(x,"importe",v=>fmt(v))}</td>
+      <td>${cambio(x,"categoria",v=>v||"—")}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:10.5px">${esc(String(x.cfdi.uuid||"").slice(0,8))}…</td>
+      <td style="white-space:nowrap">${x.gasto.nominaAntes?`<button class="btn btn-light" style="padding:3px 8px;font-size:11px" onclick="deshacerNominaFiscal('${escAttrJs(x.gasto.id)}')">↩︎ Deshacer</button>`:""}</td>
+    </tr>`).join("")}</tbody></table></div>
+    <div class="btn-row" style="margin-top:10px">
+      ${porCambiar.length && cat ? `<button class="btn btn-gold" onclick="pasarANominaFiscal()">✅ Pasar ${porCambiar.length === 1 ? "el recibo" : "los "+porCambiar.length+" recibos"} a ${esc(cat)}</button>` : `<span style="font-size:12.5px;color:var(--vd)">✓ Todos ya dicen lo mismo que su XML${deshechables.length?" (los corregidos se pueden deshacer)":""}.</span>`}
+    </div>`;
+}
+async function pasarANominaFiscal(){
+  if(currentRole!=="admin"){ alert("🔒 Solo un administrador puede corregir gastos desde aquí."); return; }
+  const cat = categoriaNominaFiscal(catsActuales());
+  if(!cat){ alert("No encontré la categoría «Nómina Fiscal». Agrégala en Presupuesto y vuelve a intentar."); return; }
+  // Solo los que enseña la tarjeta: los del periodo conciliado. Corregir lo que no se está viendo
+  // es cambiar datos a espaldas de quien aprieta el botón.
+  const visibles = new Set(((satResultado && satResultado.nomina) || []).map(x=>x.gasto.id));
+  const lista = recibosDeNominaCapturados(allGastosAllWeeks(), _cfdisDeNomina(satCFDIs||[], _cfdisStore||[]), cat)
+    .filter(x=>visibles.has(x.gasto.id) && Object.keys(x.cambios).length);
+  if(!lista.length){ alert("No hay recibos por corregir."); return; }
+  if(!confirm(`Pasar ${lista.length} recibo(s) de nómina timbrada a «${cat}».\n\n`+
+    `A cada gasto se le pone lo que dice su XML: el nombre del trabajador, la fecha y el neto pagado (Total).\n`+
+    `Lo que tenía antes queda anotado y cada uno se puede deshacer.\n\n¿Continuar?`)) return;
+  const ts = new Date().toISOString();
+  let n = 0;
+  lista.forEach(x=>{
+    const g = encontrarGastoPorId(x.gasto.id);   // el real, no la copia
+    if(!g) return;
+    if(!g.nominaAntes) g.nominaAntes = { proveedor:g.proveedor, fecha:g.fecha, importe:g.importe, categoria:g.categoria };
+    if(x.cambios.proveedor) g.proveedor = x.trabajador;
+    if(x.cambios.fecha)     g.fecha = x.fecha;
+    if(x.cambios.importe)   g.importe = x.neto;
+    g.categoria = cat;
+    g.cfdiUuid = g.cfdiUuid || String(x.cfdi.uuid||"");
+    g.nominaDelXml = String(x.cfdi.uuid||""); g.nominaTs = ts; g.nominaPor = currentNombre || currentUser?.email || "";
+    n++;
+  });
+  save();
+  try{ await conciliarDesdeStore(); }catch(_){}
+  try{ renderAll(); }catch(_){}
+  setStatus("satStatus", `✅ ${n} recibo(s) de nómina pasados a «${cat}» con los datos de su XML. Cada uno se puede deshacer en la tarjeta.`, "ok");
+}
+function deshacerNominaFiscal(id){
+  const g = encontrarGastoPorId(id);
+  if(!g || !g.nominaAntes) return;
+  if(!confirm(`¿Regresar este gasto a como estaba?\n\n${g.nominaAntes.proveedor||"—"} · ${fmtDate(g.nominaAntes.fecha)} · ${fmt(g.nominaAntes.importe)} · ${g.nominaAntes.categoria||"—"}`)) return;
+  Object.assign(g, g.nominaAntes);
+  delete g.nominaAntes; delete g.nominaDelXml; delete g.nominaTs; delete g.nominaPor;
+  save();
+  try{ conciliarDesdeStore(); }catch(_){}
+  try{ renderAll(); }catch(_){}
 }
 
 // Pinta las dos preguntas que antes no se hacían. Se llama al final de renderConciliacion.
@@ -12426,7 +12638,8 @@ async function gmailProcessItem(idx){
   _cfdiGmail = item.cfdi || null;
   if(_cfdiGmail){
     if(_cfdiGmail.fecha)     document.getElementById("fFecha").value   = _cfdiGmail.fecha;
-    if(_cfdiGmail.proveedor) document.getElementById("fProv").value    = _cfdiGmail.proveedor;
+    const _prov = datosDeCaptura(_cfdiGmail, {}).proveedor;   // en nómina, el trabajador
+    if(_prov) document.getElementById("fProv").value = _prov;
     if(_cfdiGmail.folio)     document.getElementById("fFactura").value = _cfdiGmail.folio;
     // Un complemento de pago va con Total 0: el monto que enseña el PDF es lo PAGADO de facturas
     // que ya se registraron. No se prellena el importe para no invitar a duplicar el gasto.
@@ -12434,6 +12647,7 @@ async function gmailProcessItem(idx){
     _fechaAsumida = false;
   }
   aplicarFormaPagoDeCfdi(_cfdiGmail);
+  aplicarCategoriaNomina(_cfdiGmail);
   setTimeout(async()=>{
     if(revision!==_capturaRevision) return;
     if(_cfdiGmail && _cfdiGmail.tipo==="P"){
@@ -12449,11 +12663,15 @@ async function gmailProcessItem(idx){
       document.getElementById("extractedCard").style.display="block";
       document.getElementById("btnLeer").disabled=true;
       setStatusHTML("statusLectura", _cfdiGmail
-        ? `✅ <strong>Datos tomados del CFDI (XML)</strong> — fecha, folio e importe exactos. Elige la categoría y guarda.`
+        ? (String(_cfdiGmail.tipo||"").toUpperCase()==="N"
+          ? `👷 <strong>Recibo de nómina timbrada</strong> — trabajador, fecha y neto pagado tomados del XML. Revisa y guarda.`
+          : `✅ <strong>Datos tomados del CFDI (XML)</strong> — fecha, folio e importe exactos. Elige la categoría y guarda.`)
         : `⚠ Este correo solo trae un XML que no se pudo leer como CFDI. Captura manualmente.`,
         _cfdiGmail ? "ok" : "err");
     } else {
       await leerDocumento();
+      // La lectura con IA puede proponer otra categoría: un recibo de nómina va en Nómina Fiscal.
+      if(revision===_capturaRevision) aplicarCategoriaNomina(_cfdiGmail);
     }
     if(el)el.innerHTML=`<div style="padding:8px;color:var(--vm);font-size:13px">Abierto en Capturar · pendiente de guardar</div>`;
   },300);

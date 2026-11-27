@@ -142,6 +142,7 @@ const FUNCS = [
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
   "_zipEntradas", "_satXmlsDeZip", "reporteLecturaSat", "mesDominante",
+  "categoriaNominaFiscal", "_cfdisDeNomina", "recibosDeNominaCapturados", "recibosNominaSinCapturar", "gastoDeReciboNomina",
   "_cfdiTipoDesdeTexto", "filtrarCfdisConciliables", "autodetectarRfcPropio",
   "rfcPropio", "guardarRfcPropio",
   "_gmailHuella", "filterGmailDuplicates",
@@ -606,6 +607,75 @@ t("conciliarSAT: clasifica conciliada / faltante / diferencia", () => {
   assert.equal(r.conciliadas.length, 2);
   assert.equal(r.faltantes.length, 1);
   assert.equal(r.faltantes[0].folio, "QQQQ");
+});
+// ── Nómina timbrada por trabajador ─────────────────────────────────────────────
+// Caso real: tres recibos de nómina capturados como gasto, con CICSA de proveedor y el UUID en el
+// folio. La tarjeta «factura TUYA» los marcaba porque su neto coincidía con el de otro recibo.
+const _nomCfdi = (uuid, fecha, total, nombre, rfc) => ({ uuid, folio:uuid, tipo:"N", fecha, total, proveedor:"COMEDORES INDUSTRIALES DE CUAUHTEMOC",
+  rfc:"CIC190426SD4", rfcReceptor:rfc, nombreReceptor:nombre, nomina:{ percepciones: total + 300, deducciones:300, otrosPagos:0 } });
+t("nómina: la categoría se encuentra con o sin acentos, y «Nómina / Personal» no es la fiscal", () => {
+  assert.equal(S.categoriaNominaFiscal(["Cárnicos", "Nómina / Personal", "NOMINA FISCAL"]), "NOMINA FISCAL");
+  assert.equal(S.categoriaNominaFiscal(["Nómina Fiscal"]), "Nómina Fiscal");
+  assert.equal(S.categoriaNominaFiscal(["Nómina / Personal"]), "");
+});
+t("nómina: un gasto con el UUID de un recibo se reconoce, y el XML dice trabajador, fecha y NETO", () => {
+  const cfdis = [_nomCfdi("0691E73E-3C1B-47AD-BCD6-24CFA19CF395", "2026-11-06", 2205.40, "LUIS DELGADO MARTINEZ", "DELM850102PP1"),
+                 { uuid:"AAAA1111-2222-3333-4444-555566667777", tipo:"I", fecha:"2026-11-06", total:2205.40, proveedor:"OTRO", rfc:"OTR010101AAA" }];
+  const g = { id:"g1", proveedor:"COMEDORES INDUSTRIALES DE CUAUHTEMOC", factura:"0691E73E-3C1B-47AD-BCD6-24CFA19CF395", fecha:"2026-10-30", importe:2205.4, categoria:"Gastos Generales" };
+  const otro = { id:"g2", proveedor:"OTRO", factura:"AAAA1111-2222-3333-4444-555566667777", fecha:"2026-11-06", importe:2205.4, categoria:"Gas" };
+  const r = S.recibosDeNominaCapturados([g, otro], cfdis, "Nómina Fiscal");
+  assert.equal(r.length, 1, "una factura de gasto (tipo I) no es un recibo de nómina");
+  assert.equal(r[0].trabajador, "LUIS DELGADO MARTINEZ");
+  assert.deepEqual(r[0].cambios.proveedor, ["COMEDORES INDUSTRIALES DE CUAUHTEMOC", "LUIS DELGADO MARTINEZ"]);
+  assert.deepEqual(r[0].cambios.fecha, ["2026-10-30", "2026-11-06"], "la fecha del XML manda");
+  assert.equal(r[0].cambios.importe, undefined, "el neto ya era el del XML: no se toca");
+  assert.deepEqual(r[0].cambios.categoria, ["Gastos Generales", "Nómina Fiscal"]);
+  const bien = S.recibosDeNominaCapturados([{ ...g, proveedor:"LUIS DELGADO MARTINEZ", fecha:"2026-11-06", categoria:"Nómina Fiscal" }], cfdis, "Nómina Fiscal");
+  assert.deepEqual(bien[0].cambios, {}, "ya corregido se sigue reconociendo (por el UUID) y no pide nada");
+  const bruto = S.recibosDeNominaCapturados([{ ...g, importe:2505.4 }], cfdis, "");
+  assert.deepEqual(bruto[0].cambios.importe, [2505.4, 2205.4], "se registra el NETO pagado (Total), no el bruto");
+});
+t("nómina: en la conciliación no es «factura TUYA» ni «sin comprobante»; sale en su tarjeta", () => {
+  S.state.weeks = [{ id:"1", gastos:[
+    { id:"n1", proveedor:"COMEDORES INDUSTRIALES DE CUAUHTEMOC", factura:"0691E73E-3C1B-47AD-BCD6-24CFA19CF395", importe:2205.40, fecha:"2026-11-06", categoria:"Gastos Generales" },
+  ]}];
+  const cfdis = [_nomCfdi("0691E73E-3C1B-47AD-BCD6-24CFA19CF395", "2026-11-06", 2205.40, "LUIS DELGADO MARTINEZ", "DELM850102PP1"),
+                 _nomCfdi("C660FEBB-8BCA-4736-B4D6-B9BF0CEBCD5D", "2026-11-21", 2205.40, "OTRA PERSONA", "BAAD660818CU4")];
+  const r = S.conciliarSAT(cfdis, "2026-11-01", "2026-11-30", "CIC190426SD4");
+  assert.equal(r.propias.length, 0, "el neto coincide con el de otro recibo, pero es nómina, no una venta");
+  assert.ok(!r.sinRespaldo.some(x => x.gasto.id === "n1"), "tiene comprobante: el suyo");
+  assert.equal(r.nomina.length, 1);
+  assert.equal(r.nomina[0].trabajador, "LUIS DELGADO MARTINEZ");
+});
+t("nómina: los recibos sin capturar excluyen los ya ligados y las fechas con corrida completa", () => {
+  const cfdis = [_nomCfdi("U-1", "2026-11-06", 2205.40, "A", "AAA"), _nomCfdi("U-2", "2026-11-06", 1705.20, "B", "BBB"),
+                 _nomCfdi("U-3", "2026-11-14", 2205.20, "C", "CCC"), _nomCfdi("U-4", "2026-10-31", 99, "D", "DDD"),
+                 { ...(_nomCfdi("U-5", "2026-11-21", 50, "E", "EEE")), ignorado:true }];
+  const gastos = [{ id:"x", proveedor:"A", factura:"U-1", importe:2205.40, fecha:"2026-11-06" },
+                  { id:"c", proveedor:"NÓMINA TIMBRADA", _nominaCorrida:"2026-11-14", importe:3000, fecha:"2026-11-14" }];
+  const r = S.recibosNominaSinCapturar(cfdis, gastos, "2026-11-01", "2026-11-30");
+  assert.deepEqual(r.map(c => c.uuid), ["U-2"], "U-1 ya está, U-3 va en la corrida, U-4 fuera del periodo, U-5 descartado");
+  const g = S.gastoDeReciboNomina(r[0], "Nómina Fiscal", "id1");
+  assert.equal(g.proveedor, "B"); assert.equal(g.importe, 1705.2); assert.equal(g.fecha, "2026-11-06");
+  assert.equal(g.categoria, "Nómina Fiscal"); assert.equal(g.factura, "U-2"); assert.equal(g.cfdiUuid, "U-2");
+});
+t("nómina: guardar un recibo ya no se bloquea como venta, y en la captura el proveedor es el trabajador", () => {
+  const c = _nomCfdi("U-9", "2026-11-06", 2205.40, "LUIS DELGADO MARTINEZ", "DELM850102PP1");
+  assert.equal(S.motivoNoEsGasto(c, "CIC190426SD4"), "", "la nómina la emite la empresa y SÍ es gasto");
+  assert.equal(S.motivoNoEsGasto({ ...c, tipo:"I" }, "CIC190426SD4"), "propio", "una venta propia sigue bloqueada");
+  assert.equal(S.datosDeCaptura(c, { proveedor:"CICSA" }).proveedor, "LUIS DELGADO MARTINEZ");
+  assert.equal(S.datosDeCaptura({ ...c, tipo:"I" }, {}).proveedor, "COMEDORES INDUSTRIALES DE CUAUHTEMOC");
+});
+t("nómina: corregir toca el gasto REAL, guarda lo de antes y se puede deshacer; corrida y recibos no conviven", () => {
+  const p = _cuerpoDe("pasarANominaFiscal");
+  assert.ok(/encontrarGastoPorId\(x\.gasto\.id\)/.test(p), "allGastosAllWeeks da copias");
+  assert.ok(/visibles\.has\(x\.gasto\.id\)/.test(p), "solo los del periodo que enseña la tarjeta");
+  assert.ok(/if\(!g\.nominaAntes\) g\.nominaAntes = \{ proveedor:g\.proveedor, fecha:g\.fecha, importe:g\.importe, categoria:g\.categoria \}/.test(p));
+  assert.ok(/currentRole!=="admin"/.test(p) && /confirm\(/.test(p));
+  assert.ok(/Object\.assign\(g, g\.nominaAntes\)/.test(_cuerpoDe("deshacerNominaFiscal")));
+  assert.ok(/recibosDeNominaCapturados\([\s\S]{0,80}\.filter\(x=>x\.fecha===fecha\)[\s\S]{0,80}if\(_sueltos\.length\)/.test(_cuerpoDe("registrarCorridaNomina")),
+    "registrar la corrida con recibos sueltos de esa fecha contaría la nómina dos veces");
+  assert.ok(/currentRole!=="admin"/.test(_cuerpoDe("registrarRecibosNomina")));
 });
 t("posibleMismoIngrediente: contención y traslape; idénticos NO cuentan", () => {
   assert.ok(S.posibleMismoIngrediente("Grano de elote", "Elote"));
