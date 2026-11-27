@@ -141,6 +141,7 @@ const FUNCS = [
   "clasificarDiferenciaSAT", "folioCapturableCfdi",
   "_unionPorId", "mergeEstados", "_cfdiAttr", "parseCFDIXML",
   "cfdiMes", "filtrarCfdisPorRango", "agruparCfdisPorMes",
+  "_zipEntradas", "_satXmlsDeZip", "reporteLecturaSat", "mesDominante",
   "_cfdiTipoDesdeTexto", "filtrarCfdisConciliables", "autodetectarRfcPropio",
   "rfcPropio", "guardarRfcPropio",
   "_gmailHuella", "filterGmailDuplicates",
@@ -170,6 +171,8 @@ const sandbox = {
   _gmailRevisados: null,
   // _b64ABytes decodifica base64: en el navegador atob es global, en un contexto de vm no.
   atob, Uint8Array,
+  // El lector del ZIP del SAT decodifica los nombres y los XML: en el navegador es global.
+  TextDecoder,
   // La cola de miniaturas vive en una variable de modulo; el sandbox se la presta.
   _colaMiniaturas: Promise.resolve(),
   // Los reintentos de fbAuthHeader esperan entre intento e intento.
@@ -6928,6 +6931,103 @@ t("CFDI 3.2 (atributos en minúscula) también se lee", () => {
   assert.equal(c.rfc, "AAA010101AAA");
   assert.equal(c.proveedor, "PROV UNO");
   assert.equal(c.uuid, "U-2");
+});
+// ── El ZIP del SAT se abre en el navegador ─────────────────────────────────────────
+// Se arma un ZIP de verdad (cabeceras locales, directorio central y fin) con zlib de Node: lo que
+// se prueba es el lector, no un ZIP de juguete. El CRC no se valida, así que va en cero.
+function _zipDePrueba(entradas){
+  const zlib = require("zlib"), locales = [], central = []; let off = 0;
+  for(const e of entradas){
+    const nombre = Buffer.from(e.nombre, "utf8"), crudo = Buffer.from(e.texto||"", "utf8");
+    const metodo = e.carpeta ? 0 : (e.metodo == null ? 8 : e.metodo);
+    const datos = metodo === 8 ? zlib.deflateRawSync(crudo) : crudo;
+    const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50,0); lh.writeUInt16LE(20,4); lh.writeUInt16LE(0x800,6); lh.writeUInt16LE(metodo,8);
+    lh.writeUInt32LE(datos.length,18); lh.writeUInt32LE(crudo.length,22); lh.writeUInt16LE(nombre.length,26); lh.writeUInt16LE(0,28);
+    const ch = Buffer.alloc(46); ch.writeUInt32LE(0x02014b50,0); ch.writeUInt16LE(20,4); ch.writeUInt16LE(20,6); ch.writeUInt16LE(0x800,8); ch.writeUInt16LE(metodo,10);
+    ch.writeUInt32LE(datos.length,20); ch.writeUInt32LE(crudo.length,24); ch.writeUInt16LE(nombre.length,28); ch.writeUInt32LE(off,42);
+    locales.push(lh, nombre, datos); central.push(ch, nombre); off += 30 + nombre.length + datos.length;
+  }
+  const cd = Buffer.concat(central), fin = Buffer.alloc(22);
+  fin.writeUInt32LE(0x06054b50,0); fin.writeUInt16LE(entradas.length,8); fin.writeUInt16LE(entradas.length,10);
+  fin.writeUInt32LE(cd.length,12); fin.writeUInt32LE(off,16);
+  const b = Buffer.concat([...locales, cd, fin]);
+  return new Uint8Array(b.buffer, b.byteOffset, b.length);
+}
+const _inflarNode = async (d) => new Uint8Array(require("zlib").inflateRawSync(Buffer.from(d)));
+const _xmlZ = (uuid, extra) => `<cfdi:Comprobante Version="4.0" Fecha="2026-11-08T10:00:00" Total="100" SubTotal="86.21" TipoDeComprobante="I" ${extra||""}><cfdi:Emisor Rfc="AAA010101AAA" Nombre="PROV ÑANDÚ"/><cfdi:Receptor Rfc="CIC190426SD4"/><tfd:TimbreFiscalDigital UUID="${uuid}"/></cfdi:Comprobante>`;
+tAsyncQ("ZIP del SAT: saca los XML (comprimidos o no, en subcarpetas) y nada más", async () => {
+  const zip = _zipDePrueba([
+    { nombre:"11 NOVIEMBRE 2026/", carpeta:true },
+    { nombre:"11 NOVIEMBRE 2026/RECIBIDAS/U-1.xml", texto:_xmlZ("U-1") },
+    { nombre:"11 NOVIEMBRE 2026/RECIBIDAS/U-2.XML", texto:_xmlZ("U-2"), metodo:0 },
+    { nombre:"11 NOVIEMBRE 2026/RECIBIDAS/factura.pdf", texto:"%PDF-1.4" },
+    { nombre:"__MACOSX/11 NOVIEMBRE 2026/._U-1.xml", texto:"basura" },
+  ]);
+  assert.ok(!S._zipEntradas(zip).some(e => e.nombre.endsWith("/")), "las carpetas no son archivos");
+  const xs = await S._satXmlsDeZip(zip, _inflarNode);
+  assert.deepEqual(xs.map(x => x.nombre), ["11 NOVIEMBRE 2026/RECIBIDAS/U-1.xml", "11 NOVIEMBRE 2026/RECIBIDAS/U-2.XML"]);
+  const c = S.parseCFDIXML(xs[0].texto);
+  assert.equal(c.uuid, "U-1");
+  assert.equal(c.proveedor, "PROV ÑANDÚ", "los acentos sobreviven a la descompresión");
+  assert.equal(S.parseCFDIXML(xs[1].texto).uuid, "U-2", "y el guardado sin comprimir también se lee");
+});
+t("un archivo que no es ZIP lo dice, en vez de fallar callado", () => {
+  assert.throws(() => S._zipEntradas(new Uint8Array(100)), /no es un ZIP válido/);
+});
+t("el ZIP del SAT entra por la misma puerta que los XML: botón, arrastre y lectura", () => {
+  assert.ok(/id="satXmlFiles" accept="[^"]*\.zip/.test(html), "el botón deja elegir el ZIP");
+  const soltar = _cuerpoDe("_satSoltarArchivos");
+  assert.ok(!/descomprímelo/.test(soltar), "soltar el ZIP ya no se rechaza");
+  assert.ok(/\[\.\.\.c\.xml, \.\.\.c\.zip\]/.test(soltar), "va a la caja de los XML");
+  assert.ok(/if\(\(f\.name\|\|""\)\.toLowerCase\(\)\.endsWith\("\.zip"\)\)\{[\s\S]{0,120}_satXmlsDeZip\(await f\.arrayBuffer\(\)\)/.test(_cuerpoDe("procesarSATXml")),
+    "y procesarSATXml abre lo que termina en .zip");
+});
+t("detalle de la lectura: cada archivo dice si se leyó, si estaba, si se repite y qué es", () => {
+  const c = (uuid, tipo, extra) => Object.assign({ uuid, folio:uuid, tipo, fecha:"2026-11-08", rfc:"AAA010101AAA", proveedor:"P", total:10 }, extra||{});
+  const filas = [
+    { archivo:"sat.zip › 11 NOV/RECIBIDAS/a.xml", cfdi:c("U-1","I") },
+    { archivo:"a (1).xml", cfdi:c("u-1","I") },                                   // mismo UUID
+    { archivo:"roto.xml", cfdi:null },
+    { archivo:"n.xml", cfdi:c("U-N","N",{ rfc:"CIC190426SD4" }) },
+    { archivo:"p.xml", cfdi:c("U-P","P") },
+    { archivo:"e.xml", cfdi:c("U-E","E") },
+    { archivo:"venta.xml", cfdi:c("U-V","I",{ rfc:"CIC190426SD4" }) },
+    { archivo:"viejo.xml", cfdi:c("U-D","I") },
+    { archivo:"oct.xml", cfdi:c("U-O","I",{ fecha:"2026-10-31" }) },
+  ];
+  const guardados = new Map([["U-D", { uuid:"U-D", ignorado:true }], ["U-P", { uuid:"U-P" }]]);
+  const r = S.reporteLecturaSat(filas, "cic190426sd4", "2026-11-01", "2026-11-30", guardados);
+  const de = n => r.filas.find(f => f.archivo === n || f.archivo.endsWith("/" + n));
+  assert.equal(de("a.xml").lectura, "nuevo");
+  assert.equal(de("a.xml").destino, "Gasto por conciliar");
+  assert.equal(de("a (1).xml").lectura, "repetido");
+  assert.equal(de("a (1).xml").destino, "Repetido: mismo UUID que a.xml", "dice con cuál se repite, sin la ruta del ZIP");
+  assert.equal(de("roto.xml").lectura, "error");
+  assert.match(de("n.xml").destino, /^Nómina/, "la nómina la emite la empresa, pero se dice que es nómina");
+  assert.equal(de("p.xml").lectura, "ya_estaba");
+  assert.match(de("p.xml").destino, /^Complemento de pago/);
+  assert.equal(de("e.xml").destino, "Nota de crédito");
+  assert.match(de("venta.xml").destino, /emitió tu empresa/);
+  assert.match(de("viejo.xml").destino, /^Descartado antes/, "lo descartado a mano se respeta");
+  assert.equal(de("oct.xml").enPeriodo, false);
+  assert.equal(r.cuenta["Gasto por conciliar"], 2);
+  assert.equal(r.cuenta.gastoFuera, 1);
+  assert.equal(r.cuenta.repetido, 1);
+  assert.equal(r.cuenta.error, 1);
+  assert.equal(r.filas.length, filas.length, "ningún archivo se queda sin fila");
+});
+t("si ningún XML cae en el periodo, se concilia el mes que traen (y se dice)", () => {
+  assert.equal(S.mesDominante([{ fecha:"2026-11-02" }, { fecha:"2026-11-30" }, { fecha:"2026-10-31" }]), "2026-11");
+  assert.equal(S.mesDominante([]), "");
+  const p = _cuerpoDe("procesarSATXml");
+  assert.ok(/if\(!enRango\.length\)\{[\s\S]{0,400}mesDominante\(unicos\)[\s\S]{0,120}if\(mes && sel && \[\.\.\.sel\.options\]\.some\(o=>o\.value===mes\)\)\{[\s\S]{0,300}onMesGuardadoChange\(\)/.test(p),
+    "sin esto: subir noviembre con septiembre puesto concilia una pantalla vacía");
+  assert.ok(/periodoCambiado/.test(p.slice(p.indexOf('setStatus("satStatus",`✅'))), "y el aviso lo cuenta");
+  assert.ok(/renderReporteLecturaSat\(reporteLecturaSat\(filas/.test(p), "el detalle se muestra");
+});
+t("el detalle de la lectura escapa lo que viene del XML", () => {
+  const r = _cuerpoDe("renderReporteLecturaSat");
+  ["esc(x.proveedor", "esc(f.destino)", "esc(String(f.archivo)"].forEach(s => assert.ok(r.includes(s), s));
 });
 t("un XML que no es CFDI regresa null", () => {
   assert.equal(S.parseCFDIXML(`<root><foo bar="1"/></root>`), null);

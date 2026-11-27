@@ -1421,8 +1421,8 @@ body.snav-min .side-theme span { display:none; }
         <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:6px">⭐ Mejor opción — XML de CFDI · Sin IA</div>
         <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Sube los archivos XML de los CFDIs (puedes seleccionar varios a la vez). Se leen directo del comprobante, sin gastar tokens.</div>
         <label style="font-size:12px;font-weight:600;color:var(--vd)">XML de CFDI (.xml — varios)</label>
-        <input type="file" id="satXmlFiles" accept=".xml,text/xml,application/xml" multiple style="font-size:12px;padding:6px 0;display:block;margin-top:4px">
-        <div class="sat-drop-hint">o <strong>arrastra aquí</strong> los XML (o la carpeta completa)</div>
+        <input type="file" id="satXmlFiles" accept=".xml,text/xml,application/xml,.zip,application/zip" multiple style="font-size:12px;padding:6px 0;display:block;margin-top:4px">
+        <div class="sat-drop-hint">o <strong>arrastra aquí</strong> los XML, la carpeta o el <strong>ZIP del SAT</strong></div>
         <div class="sat-drop-nom" id="satXmlNombres"></div>
         <button class="btn btn-green" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSATXml()">🧾 Leer XML y Conciliar</button>
       </div>
@@ -1499,6 +1499,7 @@ body.snav-min .side-theme span { display:none; }
       <button class="btn btn-red" id="btnSatLimpiar" onclick="limpiarConciliacionSat()">🗑 Limpiar conciliación</button>
     </div>
     <div class="status" id="satStatus"></div>
+    <details id="satXmlReporte" style="display:none;margin-top:10px;font-size:12px"></details>
   </div>
   <div class="summary-grid" id="satSummary" style="display:none;margin-bottom:16px"></div>
   <div id="satOmitidos" style="display:none;background:#F0F7F0;border:1.5px solid var(--vm);border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:12px;color:var(--txt2)"></div>
@@ -2101,7 +2102,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-11-25-egresos-v49";
+const APP_BUILD = "2026-11-27-egresos-v50";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -7837,14 +7838,14 @@ async function _satSoltarArchivos(dt){
   if(!arch.length){ setStatus("satStatus","No se recibió ningún archivo. Inténtalo de nuevo.","err"); return; }
   const c=_satClasificarArchivos(arch);
   const noSirve=(msg)=>setStatus("satStatus",msg,"err");
-  if(!c.xml.length && !c.excel.length && !c.pdf.length){
-    if(c.zip.length) return noSirve("📦 El SAT entrega un ZIP: descomprímelo y arrastra los XML (o la carpeta completa).");
-    return noSirve("Formato no reconocido. Arrastra XML de CFDI, el Excel del SAT (.xlsx/.xls) o el PDF de la consulta.");
-  }
-  if(c.xml.length){
-    if(!_satPonerEnInput("satXmlFiles", c.xml)) return noSirve("Tu navegador no permite soltar archivos aquí; usa el botón de seleccionar.");
-    _satMostrarNombres("satXmlNombres", c.xml);
-    setStatus("satStatus","Recibidos "+c.xml.length+" XML — leyendo…","loading");
+  // El ZIP del SAT se abre aquí mismo (procesarSATXml lo descomprime): ya no hay que hacerlo a mano.
+  const xmlOZip=[...c.xml, ...c.zip];
+  if(!xmlOZip.length && !c.excel.length && !c.pdf.length)
+    return noSirve("Formato no reconocido. Arrastra XML de CFDI, el ZIP del SAT, el Excel (.xlsx/.xls) o el PDF de la consulta.");
+  if(xmlOZip.length){
+    if(!_satPonerEnInput("satXmlFiles", xmlOZip)) return noSirve("Tu navegador no permite soltar archivos aquí; usa el botón de seleccionar.");
+    _satMostrarNombres("satXmlNombres", xmlOZip);
+    setStatus("satStatus","Recibidos "+(c.xml.length?c.xml.length+" XML":"")+(c.xml.length&&c.zip.length?" y ":"")+(c.zip.length?c.zip.length+" ZIP":"")+" — leyendo…","loading");
     await procesarSATXml();
     return;
   }
@@ -8788,32 +8789,179 @@ async function aplicarPreciosCfdiAlCatalogo(){
   try{ renderCatalogoProductos(true); }catch(_){}
 }
 
+// ── SAT: el ZIP de la descarga masiva ─────────────────────────────────────────────────────
+// El SAT entrega los XML en un ZIP. Antes había que descomprimirlo a mano, y soltar el ZIP daba
+// un error; con varios meses, eso era lo que hacía «a veces no deja subir». Se lee aquí, sin
+// librerías: el directorio central del ZIP dice dónde empieza cada archivo, y el navegador ya
+// trae el descompresor (DecompressionStream "deflate-raw"). Solo se sacan los .xml.
+// Devuelve [{ nombre, metodo, datos }] con los datos aún comprimidos. Pura, para poder probarla.
+function _zipEntradas(buf){
+  const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  let fin = -1;
+  for(let i = u8.length - 22; i >= Math.max(0, u8.length - 22 - 65535); i--)
+    if(dv.getUint32(i, true) === 0x06054b50){ fin = i; break; }
+  if(fin < 0) throw new Error("no es un ZIP válido");
+  const total = dv.getUint16(fin + 10, true);
+  let p = dv.getUint32(fin + 16, true);
+  if(total === 0xFFFF || p === 0xFFFFFFFF) throw new Error("ZIP demasiado grande (ZIP64): descomprímelo y arrastra la carpeta");
+  const salida = [];
+  for(let k = 0; k < total; k++){
+    if(p + 46 > u8.length || dv.getUint32(p, true) !== 0x02014b50) throw new Error("ZIP dañado");
+    const metodo = dv.getUint16(p + 10, true), comp = dv.getUint32(p + 20, true);
+    const nLen = dv.getUint16(p + 28, true), xLen = dv.getUint16(p + 30, true), cLen = dv.getUint16(p + 32, true);
+    const local = dv.getUint32(p + 42, true);
+    const nombre = new TextDecoder("utf-8").decode(u8.subarray(p + 46, p + 46 + nLen));
+    p += 46 + nLen + xLen + cLen;
+    if(nombre.endsWith("/")) continue;                                   // carpeta
+    if(dv.getUint32(local, true) !== 0x04034b50) throw new Error("ZIP dañado");
+    const ini = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+    salida.push({ nombre, metodo, datos: u8.subarray(ini, ini + comp) });
+  }
+  return salida;
+}
+async function _inflarRaw(datos){
+  if(typeof DecompressionStream === "undefined") throw new Error("este navegador no puede abrir ZIP: descomprímelo y arrastra la carpeta");
+  const ds = new DecompressionStream("deflate-raw");
+  const resp = new Response(new Blob([datos]).stream().pipeThrough(ds));
+  return new Uint8Array(await resp.arrayBuffer());
+}
+// Del ZIP, los XML como si se hubieran soltado sueltos. Lo demás (PDF, la basura de macOS) se ignora.
+async function _satXmlsDeZip(buf, inflar){
+  inflar = inflar || _inflarRaw;
+  const out = [];
+  for(const e of _zipEntradas(buf)){
+    const base = e.nombre.split("/").pop();
+    if(!base.toLowerCase().endsWith(".xml") || base.startsWith("._") || e.nombre.includes("__MACOSX/")) continue;
+    if(e.metodo !== 0 && e.metodo !== 8) throw new Error("ZIP con compresión no soportada: descomprímelo y arrastra la carpeta");
+    const bytes = e.metodo === 0 ? e.datos : await inflar(e.datos);
+    out.push({ nombre: e.nombre, texto: new TextDecoder("utf-8").decode(bytes) });
+  }
+  return out;
+}
+
+// Qué pasó con CADA archivo. Antes solo salía «N leídos»: con 122 archivos, 3 repetidos y 38
+// que no son gastos (nómina, complementos, lo que emite la empresa), no había forma de saber
+// cuál se usó y cuál no, y parecía que la app «no los registraba». Pura, para poder probarla.
+// filas: [{ archivo, cfdi|null }] · guardados: Map(UUID → registro que ya estaba en la nube).
+function reporteLecturaSat(filas, rfcEmpresa, ini, fin, guardados){
+  const propio = String(rfcEmpresa||"").trim().toUpperCase(), vistos = new Map(), cuenta = {};
+  const sumar = k => { cuenta[k] = (cuenta[k]||0) + 1; };
+  const filasOut = (filas||[]).map(f => {
+    const c = f.cfdi;
+    if(!c){ sumar("error"); return { archivo:f.archivo, lectura:"error", destino:"No se pudo leer: no parece un CFDI", enPeriodo:false }; }
+    const k = String(c.uuid||c.folio||"").toUpperCase();
+    if(k && vistos.has(k)){ sumar("repetido"); return { archivo:f.archivo, cfdi:c, lectura:"repetido", destino:"Repetido: mismo UUID que " + String(vistos.get(k)).split("/").pop(), enPeriodo:false }; }
+    if(k) vistos.set(k, f.archivo);
+    const previo = guardados && k ? guardados.get(k) : null;
+    const lectura = previo ? "ya_estaba" : "nuevo";
+    sumar(lectura);
+    const t = String(c.tipo||"").toUpperCase().slice(0,1);
+    let destino;
+    if(previo && previo.ignorado) destino = "Descartado antes: no se concilia";
+    else if(t === "N") destino = "Nómina: no es factura de gasto";
+    else if(t === "P") destino = "Complemento de pago: no es factura de gasto";
+    else if(t === "E") destino = "Nota de crédito";
+    else if(t === "T") destino = "Traslado";
+    else if(propio && String(c.rfc||"").trim().toUpperCase() === propio) destino = "La emitió tu empresa: es venta, no gasto";
+    else destino = "Gasto por conciliar";
+    const enPeriodo = !!c.fecha && (!ini || c.fecha >= ini) && (!fin || c.fecha <= fin);
+    sumar(destino.split(":")[0]);
+    if(destino === "Gasto por conciliar" && !enPeriodo) sumar("gastoFuera");
+    return { archivo:f.archivo, cfdi:c, lectura, destino, enPeriodo };
+  });
+  return { filas: filasOut, cuenta };
+}
+// El mes que más se repite entre los CFDI leídos: si ninguno cae en el periodo, es el que se quería.
+function mesDominante(cfdis){
+  const n = {}; (cfdis||[]).forEach(c => { const m = cfdiMes(c && c.fecha); if(m) n[m] = (n[m]||0) + 1; });
+  return Object.keys(n).sort((a,b) => n[b] - n[a] || b.localeCompare(a))[0] || "";
+}
+function renderReporteLecturaSat(rep){
+  const d = document.getElementById("satXmlReporte"); if(!d) return;
+  if(!rep || !rep.filas.length){ d.style.display = "none"; d.innerHTML = ""; return; }
+  const c = rep.cuenta, n = k => c[k]||0;
+  const orden = f => f.lectura==="error" ? 0 : f.lectura==="repetido" ? 1 : f.destino==="Gasto por conciliar" ? 2 : 3;
+  const filas = rep.filas.slice().sort((a,b) => orden(a) - orden(b) || String((a.cfdi||{}).fecha||"").localeCompare(String((b.cfdi||{}).fecha||"")));
+  const etiqueta = { nuevo:"Nuevo", ya_estaba:"Ya estaba", repetido:"Repetido", error:"Error" };
+  const color = f => f.lectura==="error" ? "var(--red)" : f.lectura==="repetido" ? "var(--naranja)" : f.destino==="Gasto por conciliar" ? "var(--vd)" : "var(--txt2)";
+  const partes = [`${rep.filas.length} archivo(s)`, `${n("nuevo")} nuevos`, `${n("ya_estaba")} ya estaban`];
+  if(n("repetido")) partes.push(`${n("repetido")} repetidos`);
+  if(n("error")) partes.push(`${n("error")} con error`);
+  partes.push(`${n("Gasto por conciliar")} gastos por conciliar` + (n("gastoFuera") ? ` (${n("gastoFuera")} fuera del periodo)` : ""));
+  [["Nómina","nómina"],["Complemento de pago","complementos de pago"],["Nota de crédito","notas de crédito"],["La emitió tu empresa","emitidos por tu empresa"],["Descartado antes","descartados antes"],["Traslado","traslados"]]
+    .forEach(([k,txt]) => { if(n(k)) partes.push(`${n(k)} ${txt}`); });
+  d.style.display = "block";
+  d.innerHTML = `<summary style="cursor:pointer;font-weight:600;color:var(--vd)">📋 Qué se leyó de cada archivo — ${esc(partes.join(" · "))}</summary>
+    <div style="max-height:320px;overflow:auto;margin-top:8px;border:1px solid var(--border);border-radius:8px">
+    <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+      <thead><tr style="text-align:left;color:var(--txt2);position:sticky;top:0;background:var(--white)"><th style="padding:4px 6px">Archivo</th><th style="padding:4px 6px">Lectura</th><th style="padding:4px 6px">Fecha</th><th style="padding:4px 6px">Emisor</th><th style="padding:4px 6px">Qué es</th><th style="padding:4px 6px;text-align:right">Total</th></tr></thead>
+      <tbody>${filas.map(f => { const x = f.cfdi || {}; return `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:3px 6px;font-family:'JetBrains Mono',monospace;font-size:10.5px;word-break:break-all">${esc(String(f.archivo).split("/").pop())}</td>
+        <td style="padding:3px 6px">${esc(etiqueta[f.lectura]||f.lectura)}</td>
+        <td style="padding:3px 6px;white-space:nowrap">${x.fecha ? esc(fmtDate(x.fecha)) : "—"}</td>
+        <td style="padding:3px 6px">${esc(x.proveedor||"—")}</td>
+        <td style="padding:3px 6px;color:${color(f)}">${esc(f.destino)}${f.lectura!=="error" && f.lectura!=="repetido" && !f.enPeriodo ? " · fuera del periodo" : ""}</td>
+        <td style="padding:3px 6px;text-align:right;font-family:'JetBrains Mono',monospace">${f.cfdi ? fmt(x.total) : "—"}</td></tr>`; }).join("")}</tbody>
+    </table></div>`;
+}
+
 async function procesarSATXml(){
   const files=[...(document.getElementById("satXmlFiles").files||[])];
-  if(!files.length){ alert("Selecciona uno o más archivos XML de CFDI."); return; }
-  const fechaIni=document.getElementById("satFechaIni").value, fechaFin=document.getElementById("satFechaFin").value;
-  setStatus("satStatus",`Leyendo ${files.length} XML…`,"loading");
+  if(!files.length){ alert("Selecciona uno o más archivos XML de CFDI (o el ZIP del SAT)."); return; }
+  let fechaIni=document.getElementById("satFechaIni").value, fechaFin=document.getElementById("satFechaFin").value;
+  setStatus("satStatus",`Leyendo ${files.length} archivo(s)…`,"loading");
+  renderReporteLecturaSat(null);
   // Se guarda TODO lo que traiga el archivo (mes completo), no solo el rango — así queda en la
   // nube para consultar/re-conciliar cualquier periodo después sin volver a subir.
-  const cfdis=[]; let errores=0;
+  // Cada archivo deja su fila (archivo → CFDI o null) para el detalle de la lectura.
+  const filas=[]; let errores=0, zips=0;
   for(const f of files){
-    try{ const c=parseCFDIXML(await f.text()); if(c) cfdis.push(c); else errores++; }
-    catch(e){ errores++; }
+    if((f.name||"").toLowerCase().endsWith(".zip")){
+      zips++;
+      try{
+        const dentro=await _satXmlsDeZip(await f.arrayBuffer());
+        if(!dentro.length){ filas.push({ archivo:f.name, cfdi:null }); errores++; continue; }
+        dentro.forEach(x=>{ let c=null; try{ c=parseCFDIXML(x.texto); }catch(_){}
+          filas.push({ archivo:f.name+" › "+x.nombre, cfdi:c }); if(!c) errores++; });
+      }catch(e){ setStatus("satStatus",`⚠ No se pudo abrir ${f.name}: ${e.message}.`,"err"); return; }
+      continue;
+    }
+    let c=null; try{ c=parseCFDIXML(await f.text()); }catch(_){}
+    filas.push({ archivo:f.name, cfdi:c }); if(!c) errores++;
   }
+  const cfdis=filas.map(f=>f.cfdi).filter(Boolean);
   const vistos=new Set(), unicos=cfdis.filter(c=>{ const k=(c.uuid||c.folio||"").toUpperCase(); if(!k) return true; if(vistos.has(k)) return false; vistos.add(k); return true; });
-  if(!unicos.length){ setStatus("satStatus",`⚠ No se pudo leer ningún CFDI${errores?` (${errores} archivo(s) con error)`:""}.`,"err"); return; }
+  if(!unicos.length){ renderReporteLecturaSat(reporteLecturaSat(filas, rfcPropio(), fechaIni, fechaFin, new Map())); setStatus("satStatus",`⚠ No se pudo leer ningún CFDI${errores?` (${errores} archivo(s) con error)`:""}.`,"err"); return; }
   autodetectarRfcPropio(unicos);
+  // Lo que ya estaba en la nube ANTES de guardar: es lo que distingue «nuevo» de «ya estaba».
+  let antes=new Map();
+  try{ (await cargarCfdisStore()).forEach(x=>antes.set(String(x.uuid||x.id).toUpperCase(), x)); }catch(_){}
   setStatus("satStatus",`Guardando ${unicos.length} CFDI en la nube…`,"loading");
   let guardado={nuevos:unicos.length, existentes:0};
   try{ guardado=await guardarCfdisEnStore(unicos); }catch(e){ setStatus("satStatus","No se completó el procesamiento: "+e.message+". Vuelve a subir los XML para reanudar sin duplicarlos.","err"); return; }
   await renderCfdisStore();
   // Conciliación inmediata del periodo seleccionado (subconjunto en rango).
-  const enRango=filtrarCfdisPorRango(unicos, fechaIni, fechaFin);
+  let enRango=filtrarCfdisPorRango(unicos, fechaIni, fechaFin), periodoCambiado="";
+  // Si NINGUNO cae en el periodo (subir noviembre con septiembre puesto), conciliar ese periodo
+  // daba una pantalla vacía y parecía que los XML no se habían registrado. Se pasa al mes que
+  // traen —el mismo que ya enseña el selector de «CFDIs guardados»— y se dice.
+  if(!enRango.length){
+    const mes=mesDominante(unicos), sel=document.getElementById("satMesGuardado");
+    if(mes && sel && [...sel.options].some(o=>o.value===mes)){
+      periodoCambiado=`el periodo ${fmtDate(fechaIni)||"—"} – ${fmtDate(fechaFin)||"—"} no tenía ninguno: se cambió a ${nombreMes(mes)}`;
+      sel.value=mes; onMesGuardadoChange();
+      fechaIni=document.getElementById("satFechaIni").value; fechaFin=document.getElementById("satFechaFin").value;
+      enRango=filtrarCfdisPorRango(unicos, fechaIni, fechaFin);
+    }
+  }
+  renderReporteLecturaSat(reporteLecturaSat(filas, rfcPropio(), fechaIni, fechaFin, antes));
   satCFDIs=enRango;
   const resultado=conciliarSAT(enRango,fechaIni,fechaFin); satResultado=resultado; renderConciliacion(resultado);
   document.getElementById("btnSatExport").style.display="flex";
   guardarSatEstado();
-  setStatus("satStatus",`✅ ${unicos.length} CFDI leídos (${guardado.nuevos} nuevos · ${guardado.existentes} ya estaban) · ${enRango.length} dentro del periodo${errores?` · ${errores} archivo(s) con error`:""}.`,"ok");
+  const repetidos=cfdis.length-unicos.length;
+  setStatus("satStatus",`✅ ${unicos.length} CFDI leídos${zips?` de ${zips} ZIP`:""} (${guardado.nuevos} nuevos · ${guardado.existentes} ya estaban${repetidos?` · ${repetidos} archivo(s) repetidos`:""}) · ${enRango.length} dentro del periodo${errores?` · ${errores} archivo(s) con error`:""}${periodoCambiado?` — ${periodoCambiado}`:""}. Abajo está el detalle de cada archivo.`,"ok");
 }
 
 async function procesarSAT(){
