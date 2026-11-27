@@ -37,7 +37,7 @@ function fixture(){
   });
   for(const name of ['limpiarCaptura','preLlenarCaptura','guardarGasto','bloqueoComplementoPago',
     '_cfdiUuidDeEsteFormulario','leerDocumento','datosDeCaptura','analizarDivision','gmailProcessItem',
-    'handleFile','_optimizarCaptura','checkFormaPago','aplicarFormaPagoDeCfdi','categoriasCaptura','prepararRevisionProductos',
+    'handleFile','_optimizarCaptura','checkFormaPago','aplicarFormaPagoDeCfdi','aplicarCategoriaNomina','categoriaNominaFiscal','categoriasCaptura','prepararRevisionProductos',
     'incorporarCongelados','splitGuardar','openSplitModal','closeSplitModal','renderSplitRows','updateSplitDiff',
     'splitGuardarUno','cambiarClasificacionSplit']) vm.runInContext(extractFunction(name),S);
   function installUI(){

@@ -207,6 +207,21 @@ class TestFormaPagoDelCfdi(unittest.TestCase):
         self.assertEqual(c["metodoPago"], "")
 
 
+class TestNominaReceptor(unittest.TestCase):
+    """En un recibo de nómina el Receptor es el trabajador: su nombre llega a la captura."""
+    XML = (b'<?xml version="1.0" encoding="UTF-8"?>'
+           b'<cfdi:Comprobante Version="4.0" Fecha="2026-11-06T10:00:00" Total="2205.40" TipoDeComprobante="N">'
+           b'<cfdi:Emisor Rfc="CIC190426SD4" Nombre="COMEDORES INDUSTRIALES DE CUAUHTEMOC"/>'
+           b'<cfdi:Receptor Rfc="DELM850102PP1" Nombre="LUIS DELGADO MARTINEZ"/>'
+           b'<tfd:TimbreFiscalDigital UUID="0691E73E-3C1B-47AD-BCD6-24CFA19CF395"/></cfdi:Comprobante>')
+
+    def test_trae_el_nombre_del_trabajador(self):
+        d = gc.leer_cfdi_xml(self.XML)
+        self.assertEqual(d["tipo"], "N")
+        self.assertEqual(d["nombreReceptor"], "LUIS DELGADO MARTINEZ")
+        self.assertEqual(d["rfcReceptor"], "DELM850102PP1")
+
+
 class TestTokenNoSeVersiona(unittest.TestCase):
     def test_gmail_token_no_esta_en_el_arbol_de_git(self):
         import subprocess
