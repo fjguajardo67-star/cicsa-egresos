@@ -152,14 +152,18 @@ body.snav-min .week-badge { padding:7px 4px; font-size:10px; }
 .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
 .form-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; }
 .field { display:flex; flex-direction:column; gap:5px; min-width:0; }
-.field label { font-size:11px; font-weight:600; color:var(--txt2); text-transform:uppercase; letter-spacing:.5px; }
-.field input, .field select, .field textarea {
+.field label, .form-label { font-size:11px; font-weight:600; color:var(--txt2); text-transform:uppercase; letter-spacing:.5px; }
+/* Caja usaba .form-label y .form-input sin que existieran: la etiqueta salía pegada al campo y
+   cada campo de un tamaño. Ahora se ven como el resto de los formularios. */
+.form-label { display:block; margin-bottom:5px; }
+.form-input { width:100%; box-sizing:border-box; }
+.field input, .field select, .field textarea, .form-input {
   padding: 9px 12px; border: 1.5px solid var(--border);
   border-radius: 8px; font-size:14px; color:var(--txt);
   font-family:'DM Sans',sans-serif; background:white;
   transition: border-color .2s;
 }
-.field input:focus, .field select:focus, .field textarea:focus {
+.field input:focus, .field select:focus, .field textarea:focus, .form-input:focus {
   outline:none; border-color:var(--vm);
 }
 .btn-row { display:flex; gap:10px; flex-wrap:wrap; margin-top:16px; }
@@ -342,6 +346,16 @@ tr:hover td { background:var(--claro); }
   background:white; color:var(--txt2); font-size:12px; font-weight:600; cursor:pointer;
   transition:.15px; font-family:'DM Sans',sans-serif; }
 .filter-btn.active { background:var(--vd); color:white; border-color:var(--vd); }
+/* «Cómo se usa»: tres pasos al inicio de las pantallas que más cuesta entender la primera vez.
+   Abierta hasta que alguien la cierra; se recuerda por pantalla en este navegador. */
+.guia { background:var(--claro); border:1px solid var(--border); border-radius:10px; padding:10px 14px; margin:0 0 18px; font-size:13px; }
+.guia > summary { cursor:pointer; font-weight:600; color:var(--vd); }
+.guia ol { margin:8px 0 2px; padding-left:20px; line-height:1.6; color:var(--txt); }
+.guia li + li { margin-top:2px; }
+.page-intro h2 { margin:0 0 4px; }
+.page-intro > p { color:var(--txt2); font-size:14px; margin:0 0 12px; }
+.tabs-reg { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+.mas-herr > summary { cursor:pointer; font-weight:600; color:var(--vd); font-size:13px; padding:4px 0; }
 .filter-btn:hover:not(.active) { border-color:var(--vm); color:var(--vm); }
 .vence-hoy   { background:#FFEBEE !important; }
 .vence-semana { background:#FFF8E1 !important; }
@@ -620,10 +634,10 @@ body.snav-min .side-theme span { display:none; }
 <link rel="stylesheet" href="assets/budget-dark.css?v=20260926-palette1">
 <link rel="stylesheet" href="assets/expense-classification.css?v=20260926-congelados1">
 <script src="assets/expense-classification.js?v=20260926-congelados1" integrity="sha384-lP3OZXuIgH5Z2uRsfe/kX3IugW6Yn+avwp4fhFhV7qNNV3EfJc0Z4B0LDkBNj10e" crossorigin="anonymous"></script>
-<link rel="stylesheet" href="assets/ingredients.css?v=20261022-desborde1" integrity="sha384-X2wWpGHDLk/xAHERlpKIUUj8jPSWYOWgERH3PlB3fCk2lD9BQjtarbZStD9gyp2X" crossorigin="anonymous">
+<link rel="stylesheet" href="assets/ingredients.css?v=20261127-ux1" integrity="sha384-Y/odxn6zy36nyOww/JgS834A9JZEYkrF2qhvJC1FVFTz9VJf2zwEh+uFMkxk//K6" crossorigin="anonymous">
 <script src="assets/ingredients-core.js?v=20261022-importes1" integrity="sha384-t4l3JNT5C9SgYKJcqUWIaMWTLCAIGyY1dT6rW7O+GZOxH8dxft9FexsfWl0FVHYR" crossorigin="anonymous"></script>
 <script src="assets/ingredients-store.js?v=20261014-historial3" integrity="sha384-GOsOADZDUnrxXP8/Kx0Za73SvCsOzy5i7BWUJoWK6eGgAFZh5iPcVC+XstyFv+gM" crossorigin="anonymous"></script>
-<script src="assets/ingredients.js?v=20261022-rellenar1" integrity="sha384-7cwjAu4pKfcV1SK67rsn6IRdTwW1dVTYy11XoBQozRMJAfWw88RbT7ot594OvXm6" crossorigin="anonymous" defer></script>
+<script src="assets/ingredients.js?v=20261127-ux1" integrity="sha384-GdmSzxp6KjY7WUJFL4KjYUd3WnO5/dL/ktbhYttTXoqi2Pa3BHRP4iwt7+gUGoj2" crossorigin="anonymous" defer></script>
 <script src="assets/workspace.js?v=20260926-palette2" integrity="sha384-utxWq7sfWaHcdhDZ1l40ybYR/aaKZVKvELLmcM0g9VEMnazYIosqYmkVmUwVVVSB" defer></script>
 </head>
 <body>
@@ -1324,10 +1338,26 @@ body.snav-min .side-theme span { display:none; }
 
 <!-- ═══════════════ PAGE: REPORTES ═══════════════ -->
 <div class="container page" id="page-reportes">
-  <div class="card" id="cardLimpieza" style="display:none;margin-bottom:16px">
-    <div class="card-title">🧹 Limpieza de datos — qué le falta al balance para ser real</div>
-    <div id="limpiezaBody"></div>
+  <div class="section-header page-intro">
+    <h2>📈 Auditoría</h2>
+    <p>En qué se gastó: por periodo, categoría y proveedor. Y qué datos hay que corregir para que las cifras sean reales.</p>
+    <details class="guia" data-guia="auditoria" open>
+      <summary>¿Cómo se usa?</summary>
+      <ol>
+        <li><strong>Elige el periodo</strong> y, si quieres, una categoría o un proveedor.</li>
+        <li><strong>Revisa «Por corregir»</strong>: importes que no cuadran con su CFDI, fechas dudosas, complementos contados como gasto. Cada renglón trae su botón para arreglarlo.</li>
+        <li><strong>Exporta</strong> el reporte en PDF o Excel cuando ya no quede nada por corregir.</li>
+      </ol>
+    </details>
   </div>
+  <!-- Por corregir: el resumen siempre a la vista y el detalle plegado. Antes las cuatro tarjetas
+       iban abiertas encima del reporte y lo empujaban hasta abajo. -->
+  <div class="card" id="cardLimpieza" style="display:none;margin-bottom:16px">
+    <div class="card-title">🧹 Por corregir</div>
+    <div id="limpiezaBody"></div>
+    <details id="audPendientes" class="mas-herr" style="display:none;margin-top:12px">
+      <summary>Ver y corregir uno por uno</summary>
+      <div style="margin-top:12px">
   <div class="card" id="cardRepetidos" style="display:none;margin-bottom:16px;border:2px solid var(--red)">
     <div class="card-title" style="color:var(--red)">👯 El mismo registro guardado en dos semanas<span id="repCount" class="dup-badge" style="background:#FFEBEE;color:var(--red);margin-left:8px"></span></div>
     <div style="font-size:12.5px;color:var(--txt2);margin-bottom:12px">
@@ -1367,8 +1397,11 @@ body.snav-min .side-theme span { display:none; }
     </div>
     <div id="fdBody"></div>
   </div>
+      </div>
+    </details>
+  </div>
   <div class="card">
-    <div class="card-title">📈 Auditoría por período y proveedor</div>
+    <div class="card-title">📈 Reporte de gastos</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:20px">
       <div class="field"><label>Fecha inicio</label><input type="date" id="rFechaIni" onchange="renderReportes()"></div>
       <div class="field"><label>Fecha fin</label><input type="date" id="rFechaFin" onchange="renderReportes()"></div>
@@ -1420,24 +1453,33 @@ body.snav-min .side-theme span { display:none; }
 </div>
 
 <div class="container page" id="page-sat">
+  <div class="section-header page-intro">
+    <h2>🏛 SAT</h2>
+    <p>Compara lo que el SAT dice que te facturaron contra lo que está capturado, para encontrar facturas que faltan o que no cuadran.</p>
+    <details class="guia" data-guia="sat" open>
+      <summary>¿Cómo se usa?</summary>
+      <ol>
+        <li><strong>Sube el ZIP</strong> de la descarga masiva del SAT (o los XML). Se guardan en la nube por mes: no hay que volver a subirlos.</li>
+        <li><strong>Elige el mes</strong> y pulsa «Conciliar».</li>
+        <li><strong>Corrige lo que salga</strong>: captura lo que falta, o márcalo «No es gasto» si no lo es. Lo que cuadra ya no hay que tocarlo.</li>
+      </ol>
+    </details>
+  </div>
   <div class="card">
-    <div class="card-title">🏛 Conciliación SAT vs CICSA</div>
-    <p style="font-size:13px;color:var(--txt2);margin-bottom:18px">Sube los <strong>XML de CFDI</strong> del periodo (o el Excel de la Consulta SAT) y se comparan contra los gastos registrados en CICSA para detectar facturas omitidas. El XML y el Excel <strong>no gastan tokens</strong>. Puedes <strong>arrastrar y soltar</strong> los archivos en cualquier parte de esta pantalla: se acomodan solos según su tipo.</p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:16px">
-      <div class="field"><label>Período — Fecha inicio</label><input type="date" id="satFechaIni"></div>
-      <div class="field"><label>Período — Fecha fin</label><input type="date" id="satFechaFin"></div>
-      <div class="field"><label>RFC de tu empresa</label><input type="text" id="satRfcPropio" placeholder="Ej. CIC190426SD4" oninput="onRfcPropioChange()" style="text-transform:uppercase"><div style="font-size:11px;color:var(--txt2);margin-top:4px">Excluye las facturas que <strong>tú emites</strong> (son ingresos, no gastos).</div></div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px">
+    <div class="card-title">1 · Sube los CFDI del SAT</div>
+    <p style="font-size:12.5px;color:var(--txt2);margin:-4px 0 12px">Se leen en el navegador, sin IA ni costo. Puedes <strong>arrastrar</strong> los archivos a cualquier parte de esta pantalla.</p>
+    <div style="margin-bottom:10px">
       <div class="sat-drop" data-satzona="xml" style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
-        <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:6px">⭐ Mejor opción — XML de CFDI · Sin IA</div>
-        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Sube los archivos XML de los CFDIs (puedes seleccionar varios a la vez). Se leen directo del comprobante, sin gastar tokens.</div>
-        <label style="font-size:12px;font-weight:600;color:var(--vd)">XML de CFDI (.xml — varios)</label>
+        <label style="font-size:12px;font-weight:600;color:var(--vd)">ZIP de la descarga del SAT, o los XML (puedes elegir varios)</label>
         <input type="file" id="satXmlFiles" accept=".xml,text/xml,application/xml,.zip,application/zip" multiple style="font-size:12px;padding:6px 0;display:block;margin-top:4px">
         <div class="sat-drop-hint">o <strong>arrastra aquí</strong> los XML, la carpeta o el <strong>ZIP del SAT</strong></div>
         <div class="sat-drop-nom" id="satXmlNombres"></div>
-        <button class="btn btn-green" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSATXml()">🧾 Leer XML y Conciliar</button>
+        <button class="btn btn-green" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSATXml()">🧾 Leer y conciliar</button>
       </div>
+    </div>
+    <details class="mas-herr" style="margin-bottom:18px">
+      <summary>¿No tienes los XML? Usa el Excel o el PDF de la consulta del SAT</summary>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:10px">
       <div class="sat-drop" data-satzona="excel" style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
         <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:6px">Opción — Excel de la Consulta · Sin IA</div>
         <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Descarga la Consulta SAT como Excel/CSV (o convierte el PDF con Adobe Acrobat Online) y súbela aquí. No gasta tokens.</div>
@@ -1456,21 +1498,26 @@ body.snav-min .side-theme span { display:none; }
         <div class="sat-drop-nom" id="satPdfNombres"></div>
         <button class="btn btn-light" style="margin-top:10px;width:100%;padding:8px" onclick="procesarSAT()">🤖 Analizar PDF con IA</button>
       </div>
-    </div>
-    <div style="background:#F0F7F0;border:1.5px solid var(--vm);border-radius:10px;padding:14px;margin-bottom:16px">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-        <div style="font-size:13px;font-weight:700;color:var(--vd)">☁️ CFDIs guardados en la nube</div>
-        <div id="cfdisStoreResumen" style="font-size:12px;color:var(--txt2)">—</div>
       </div>
-      <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Los XML que subes se guardan aquí (mes completo). Elige un mes y concilia el periodo que quieras sin volver a subir.
-        <strong>Puedes subir todos los meses que quieras: se guardan todos a la vez.</strong> El selector solo elige cuál conciliar — no hace falta borrar un mes para subir otro,
-        y el balance usa <strong>todos</strong> los meses guardados, sin importar cuál esté seleccionado aquí.</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    </details>
+
+    <div class="card-title" style="margin-top:6px">2 · Concilia un mes</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;align-items:end;margin-bottom:8px">
+      <div class="field"><label for="satMesGuardado">Mes guardado</label>
         <select id="satMesGuardado" onchange="onMesGuardadoChange()" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;min-width:180px"></select>
-        <button class="btn btn-green" style="padding:8px 12px" onclick="conciliarDesdeStore()">🔎 Conciliar el periodo seleccionado</button>
-        <button class="btn btn-light" id="btnBorrarMesCfdi" style="padding:8px 12px;display:none;color:var(--red)" onclick="eliminarMesCfdiSeleccionado()">🗑️ Eliminar este mes</button>
       </div>
+      <div class="field"><label>Desde</label><input type="date" id="satFechaIni"></div>
+      <div class="field"><label>Hasta</label><input type="date" id="satFechaFin"></div>
+      <button class="btn btn-green" style="padding:9px 12px;justify-content:center" onclick="conciliarDesdeStore()">🔎 Conciliar</button>
+    </div>
+    <div id="cfdisStoreResumen" style="font-size:12px;color:var(--txt2);margin-bottom:8px">—</div>
+    <details class="mas-herr" style="margin-bottom:6px">
+      <summary>Ver los CFDI guardados de este mes</summary>
+      <div style="margin-top:8px">
+        <button class="btn btn-light" id="btnBorrarMesCfdi" style="padding:8px 12px;display:none;color:var(--red)" onclick="eliminarMesCfdiSeleccionado()">🗑️ Eliminar este mes</button>
       <div id="cfdisStoreBody" style="max-height:220px;overflow:auto;margin-top:10px"></div>
+      </div>
+    </details>
       <div id="cfdisDescartadosCard" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
         <div style="font-weight:700;color:var(--red);font-size:13px;margin-bottom:4px">🚫 CFDI descartados de la conciliación<span id="descCount" class="dup-badge" style="background:#FFEBEE;color:var(--red);margin-left:8px"></span></div>
         <div style="font-size:12px;color:var(--txt2);margin-bottom:10px;line-height:1.5">
@@ -1487,6 +1534,13 @@ body.snav-min .side-theme span { display:none; }
         </div>
         <div id="cfdisDescartadosBody" style="max-height:260px;overflow:auto"></div>
       </div>
+    <details class="mas-herr" style="margin-top:6px">
+      <summary>⚙ RFC de tu empresa</summary>
+      <div style="max-width:340px;margin-top:8px"><div class="field"><label>RFC de tu empresa</label><input type="text" id="satRfcPropio" placeholder="Ej. CIC190426SD4" oninput="onRfcPropioChange()" style="text-transform:uppercase"><div style="font-size:11px;color:var(--txt2);margin-top:4px">Excluye las facturas que <strong>tú emites</strong> (son ingresos, no gastos).</div></div></div>
+    </details>
+    <details class="mas-herr" style="margin-top:6px">
+      <summary>🧰 Más herramientas: precios desde los CFDI y nómina timbrada</summary>
+      <div style="margin-top:4px">
       <div style="border-top:1.5px solid var(--border);margin-top:12px;padding-top:12px">
         <div style="font-size:13px;font-weight:700;color:var(--vd);margin-bottom:4px">💲 Precios desde los CFDI · Sin IA</div>
         <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Cada renglón del CFDI trae su <strong>valor unitario exacto</strong> — es dato fiscal, no una lectura que se pueda equivocar. Aquí se compara contra el catálogo: lo que ya se sabe identificar se actualiza con un clic, y lo que no, queda como lista de trabajo.</div>
@@ -1505,7 +1559,8 @@ body.snav-min .side-theme span { display:none; }
         <button class="btn btn-green" style="padding:8px 12px" onclick="renderNominaTimbrada()">👷 Revisar nómina timbrada</button>
         <div id="nominaBody" style="margin-top:10px"></div>
       </div>
-    </div>
+      </div>
+    </details>
     <div class="btn-row">
       <button class="btn btn-light" id="btnSatExport" style="display:none" onclick="exportarConciliacion()">📊 Exportar Excel</button>
       <button class="btn btn-red" id="btnSatLimpiar" onclick="limpiarConciliacionSat()">🗑 Limpiar conciliación</button>
@@ -1542,7 +1597,10 @@ body.snav-min .side-theme span { display:none; }
   </div>
   <div class="card" id="satOkCard" style="display:none">
     <div class="card-title" style="color:var(--vm)">✅ Conciliadas correctamente<span id="satOkCount" class="dup-badge" style="background:#E8F5E9;color:var(--vm);margin-left:8px"></span></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Proveedor</th><th>RFC</th><th>Fecha</th><th style="text-align:right">Total SAT</th></tr></thead><tbody id="satOkBody"></tbody></table></div>
+    <!-- Lo que cuadra no pide nada: se cuenta arriba y la lista queda plegada para quien la quiera ver. -->
+    <details class="mas-herr"><summary>Ver la lista</summary>
+    <div class="tbl-wrap" style="margin-top:8px"><table><thead><tr><th>Proveedor</th><th>RFC</th><th>Fecha</th><th style="text-align:right">Total SAT</th></tr></thead><tbody id="satOkBody"></tbody></table></div>
+    </details>
   </div>
 </div>
 
@@ -2008,14 +2066,28 @@ body.snav-min .side-theme span { display:none; }
 </div>
 <!-- ═══════════════ PAGE: CAJA ═══════════════ -->
 <div class="container page" id="page-caja">
-  <div class="section-header">
-    <h2>💰 Caja de Cortes</h2>
-    <p style="color:var(--txt2);font-size:14px">Registro de efectivo recaudado y gastos pagados de caja. Cortes: miércoles y sábados.</p>
+  <div class="section-header page-intro">
+    <h2>💰 Caja</h2>
+    <p>El efectivo: lo que entra con los cortes, lo que sale en gastos y retiros, y cuánto debería haber.</p>
+    <details class="guia" data-guia="caja" open>
+      <summary>¿Cómo se usa?</summary>
+      <ol>
+        <li><strong>Registra el corte</strong>: importa el archivo de Manejo de Cortes (recomendado) o escríbelo a mano. Cortes: miércoles y sábados.</li>
+        <li><strong>Registra los retiros</strong>: el efectivo que sale de la caja sin ser gasto, como un depósito al banco.</li>
+        <li><strong>Elige el periodo</strong> en «Conciliación» y compara el saldo con el efectivo que cuentas.</li>
+      </ol>
+    </details>
   </div>
 
-  <!-- Registrar corte -->
+  <!-- Registrar: antes eran tres tarjetas apiladas (corte, retiro, importar); ahora una con pestañas. -->
   <div class="card" style="margin-bottom:20px">
-    <h3 style="color:var(--vd);margin:0 0 16px">➕ Registrar corte de efectivo</h3>
+    <h3 style="color:var(--vd);margin:0 0 12px">Registrar</h3>
+    <div class="tabs-reg" role="tablist">
+      <button type="button" class="filter-btn active" data-cajatab="importar" onclick="cajaTab('importar')">📥 Importar corte</button>
+      <button type="button" class="filter-btn" data-cajatab="corte" onclick="cajaTab('corte')">➕ Corte a mano</button>
+      <button type="button" class="filter-btn" data-cajatab="retiro" onclick="cajaTab('retiro')">➖ Retiro de efectivo</button>
+    </div>
+  <div data-cajapanel="corte" style="display:none">
     <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end;flex-wrap:wrap">
       <div>
         <label class="form-label">Fecha del corte</label>
@@ -2030,10 +2102,8 @@ body.snav-min .side-theme span { display:none; }
     <div class="status" id="cajaStatus"></div>
   </div>
 
-  <!-- Registrar retiro -->
-  <div class="card" style="margin-bottom:20px">
-    <h3 style="color:var(--vd);margin:0 0 16px">➖ Registrar retiro de efectivo</h3>
-    <p style="color:var(--txt2);font-size:12px;margin:-10px 0 14px">Un retiro NO es un gasto — es efectivo que sale de la caja (ej. depósito a banco). Nunca aparece en Reporte, Presupuesto ni Pagos, solo se resta aquí.</p>
+  <div data-cajapanel="retiro" style="display:none">
+    <p style="color:var(--txt2);font-size:12px;margin:0 0 14px">Un retiro NO es un gasto — es efectivo que sale de la caja (ej. depósito a banco). Nunca aparece en Reporte, Presupuesto ni Pagos, solo se resta aquí.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr 2fr auto;gap:12px;align-items:end;flex-wrap:wrap">
       <div>
         <label class="form-label">Fecha del retiro</label>
@@ -2052,9 +2122,7 @@ body.snav-min .side-theme span { display:none; }
     <div class="status" id="retiroStatus"></div>
   </div>
 
-  <!-- Importar corte de Manejo de Cortes -->
-  <div class="card" style="margin-bottom:20px">
-    <h3 style="color:var(--vd);margin:0 0 6px">📥 Importar corte de Manejo de Cortes</h3>
+  <div data-cajapanel="importar">
     <p style="color:var(--txt2);font-size:12px;margin:0 0 14px">Arrastra el archivo <strong>.json</strong> que exporta la app de cortes. Los ingresos de caja entran solos; cada egreso lo clasificas como gasto, retiro o «ya facturado». No se duplica lo que ya importaste antes.</p>
     <div class="sat-drop" data-cajazona="json" style="background:#E8F5E9;border:2px solid var(--vm);border-radius:10px;padding:14px">
       <label class="btn btn-light" style="cursor:pointer;margin:0">📄 Elegir archivo
@@ -2065,33 +2133,30 @@ body.snav-min .side-theme span { display:none; }
     </div>
     <div class="status" id="cortesImportStatus"></div>
   </div>
+  </div>
 
   <!-- Revisión antes de importar (oculto hasta que se cargue un archivo) -->
   <div class="card" id="cortesRevisionCard" style="margin-bottom:20px;display:none">
     <div id="cortesRevisionContenido"></div>
   </div>
 
-  <!-- Periodo de trabajo -->
+  <!-- Conciliación del periodo: saldo inicial → ingresos → egresos → saldo. El periodo vive aquí
+       mismo: antes era una tarjeta aparte, y elegir fechas y ver el resultado es un solo paso. -->
   <div class="card" style="margin-bottom:20px">
-    <h3 style="color:var(--vd);margin:0 0 16px">🔍 Periodo</h3>
-    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end;flex-wrap:wrap">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+      <h3 style="color:var(--vd);margin:0">📊 Conciliación <span id="cajaPeriodoLabel" style="font-weight:400;color:var(--txt2);font-size:14px"></span></h3>
+      <button class="btn btn-light" style="padding:7px 14px;font-size:12px" onclick="exportarCajaPDF()">🖨️ Reporte PDF</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;align-items:end;margin-bottom:16px">
       <div>
-        <label class="form-label">Fecha inicio</label>
+        <label class="form-label" for="cajaRangoIni">Periodo — desde</label>
         <input type="date" id="cajaRangoIni" class="form-input" onchange="onCajaRangoChange()">
       </div>
       <div>
-        <label class="form-label">Fecha fin</label>
+        <label class="form-label" for="cajaRangoFin">hasta</label>
         <input type="date" id="cajaRangoFin" class="form-input" onchange="onCajaRangoChange()">
       </div>
-      <button class="btn btn-light" id="cajaBtnConsultar" style="height:42px" onclick="renderCaja()">🔍 Consultar</button>
-    </div>
-  </div>
-
-  <!-- Conciliación del periodo: saldo inicial → ingresos → egresos → saldo -->
-  <div class="card" style="margin-bottom:20px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-      <h3 style="color:var(--vd);margin:0">📊 Conciliación <span id="cajaPeriodoLabel" style="font-weight:400;color:var(--txt2);font-size:14px"></span></h3>
-      <button class="btn btn-light" style="padding:7px 14px;font-size:12px" onclick="exportarCajaPDF()">🖨️ Reporte PDF</button>
+      <button class="btn btn-light" id="cajaBtnConsultar" style="height:42px;justify-content:center" onclick="renderCaja()">🔍 Consultar</button>
     </div>
     <div id="cajaConciliacion">
       <p style="color:var(--txt2);font-size:14px">Cargando...</p>
@@ -2114,7 +2179,7 @@ body.snav-min .side-theme span { display:none; }
 // todos los equipos traen la misma versión: GitHub Pages y los navegadores guardan copia en
 // caché, así que alguien puede seguir usando la app vieja sin notarlo. Se muestra en la
 // pantalla de acceso, en el menú del usuario y en la esquina inferior derecha.
-const APP_BUILD = "2026-11-27-egresos-v50";
+const APP_BUILD = "2026-11-27-egresos-v51";
 // Pinta la versión donde se pueda comparar entre equipos, sin esperar a que cargue nada más.
 (function(){
   // Sin prefijo: APP_BUILD ya trae su propia marca de versión al final ("…-egresos-v8"), así que
@@ -7403,6 +7468,9 @@ async function renderLimpieza(){
   const mImp  = imp.reduce((s,x)=>s+x.diferencia,0);
   const total = comp.length+imp.length+fech.length+dups.length;
   card.style.display = "block";
+  // El detalle plegado solo aparece si hay algo que corregir dentro de él.
+  const pend = document.getElementById("audPendientes");
+  if(pend) pend.style.display = (comp.length+imp.length+fech.length+reps.length) ? "" : "none";
   if(!total){
     body.innerHTML = `<div style="font-size:13px;color:var(--vd)">✅ No se detectó nada que corregir. El balance de este periodo se puede tomar como bueno.</div>
       <div style="font-size:11.5px;color:var(--txt2);margin-top:6px">Ojo: solo se puede revisar lo que tenga CFDI subido en la pestaña SAT.</div>`;
@@ -7411,7 +7479,7 @@ async function renderLimpieza(){
   const fila=(n,txt,monto,color)=>`<tr><td style="padding:6px 4px"><strong style="color:${color}">${n}</strong> ${txt}</td>`+
     `<td class="amount-cell" style="padding:6px 4px;color:${color}">${monto}</td></tr>`;
   body.innerHTML = `<div style="font-size:12.5px;color:var(--txt2);margin-bottom:10px">
-      Esto es lo que hoy distorsiona el balance. Corrígelo en las tarjetas de abajo y vuelve a exportarlo.
+      Esto es lo que hoy distorsiona el balance. Ábrelo en «Ver y corregir uno por uno» y vuelve a exportar.
     </div><div class="tbl-wrap"><table><tbody>` +
     (comp.length ? fila(comp.length,"complemento(s) de pago contados como gasto — <strong>hay que quitarlos</strong>", "−"+fmt(mComp), "var(--red)") : "") +
     (imp.length  ? fila(imp.length,"importe(s) que no cuadran con su CFDI", (mImp>=0?"−":"+")+fmt(Math.abs(mImp)), "var(--naranja)") : "") +
@@ -13617,6 +13685,23 @@ function diaSemanaLabel(fechaStr){
   return dias[d.getDay()] || "";
 }
 
+// Las tres formas de registrar efectivo comparten una tarjeta: solo se ve la pestaña elegida.
+// Los campos y sus ids son los de siempre; esto solo decide cuál se muestra.
+function cajaTab(nombre){
+  document.querySelectorAll("[data-cajapanel]").forEach(el=>{ el.style.display = el.dataset.cajapanel===nombre ? "" : "none"; });
+  document.querySelectorAll("[data-cajatab]").forEach(el=>el.classList.toggle("active", el.dataset.cajatab===nombre));
+}
+// «¿Cómo se usa?»: abierta la primera vez; si alguien la cierra, se queda cerrada en ese navegador.
+function initGuias(){
+  document.querySelectorAll("details.guia[data-guia]").forEach(d=>{
+    const k="guia_cerrada_"+d.dataset.guia;
+    try{ if(localStorage.getItem(k)==="1") d.removeAttribute("open"); }catch(_){}
+    d.addEventListener("toggle",()=>{ try{ localStorage.setItem(k, d.open ? "0" : "1"); }catch(_){} });
+  });
+}
+if(typeof document!=="undefined" && document.addEventListener){
+  if(document.readyState==="loading") document.addEventListener("DOMContentLoaded", initGuias); else initGuias();
+}
 function onCajaRangoChange(){
   const ini=document.getElementById("cajaRangoIni")?.value, fin=document.getElementById("cajaRangoFin")?.value;
   if(ini && fin){ try{ localStorage.setItem(CAJA_PERIODO_KEY, JSON.stringify({ini,fin})); }catch(e){} }
@@ -14709,6 +14794,8 @@ function initCajaDropzone(){
 function _cajaArchivoElegido(files){
   const f = files && files[0];
   if(!f) return;
+  // Se puede soltar el archivo con otra pestaña abierta: se muestra la de importar, que es donde sale el resultado.
+  try{ cajaTab("importar"); }catch(_){}
   const nom = document.getElementById("cortesJsonNombre"); if(nom) nom.textContent = f.name;
   const lector = new FileReader();
   lector.onload = ()=>{

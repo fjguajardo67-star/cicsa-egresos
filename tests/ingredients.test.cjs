@@ -298,7 +298,7 @@ test('el modal viejo de sincronizar a Menú no tiene por dónde abrirse',()=>{
 test('scripts compilan y el HTML carga el flujo nuevo sin modificar reglas de acceso',()=>{
   for(const file of ['ingredients-core.js','ingredients-store.js','ingredients.js'])new vm.Script(fs.readFileSync(require('node:path').join(__dirname,'../assets',file),'utf8'));
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
-  assert(html.includes('ingredients.js?v=20261022-rellenar1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
+  assert(html.includes('ingredients.js?v=20261127-ux1'));assert(html.includes('window.CicsaCatalog.saveEditor'));assert(html.includes('fecha:primerGasto?.fecha||""'));
   for(const file of ['ingredients.css','ingredients-core.js','ingredients-store.js','ingredients.js']){
     const content=fs.readFileSync(require('node:path').join(__dirname,'../assets',file));
     const hash='sha384-'+require('node:crypto').createHash('sha384').update(content).digest('base64');
@@ -409,7 +409,7 @@ test('integración: una coincidencia de alimento conserva la decisión explícit
   assert.match(ui.element('page-catalogo-productos').innerHTML,/data-view="revision"[^>]*>Por revisar <span>1<\/span>/);
   await ui.click('view','',{view:'revision'});
   const html=ui.element('page-catalogo-productos').innerHTML;
-  assert(html.includes('Sí, homologar'),html);assert(html.includes('No, son distintos'));
+  assert(html.includes('Sí, es el mismo'),html);assert(html.includes('No, son distintos'));
   assert.equal((html.match(/data-action="merge"/g)||[]).length,1);
 });
 test('integración: factura mixta, un solo commit, repetición idempotente y precio por fecha',async()=>{

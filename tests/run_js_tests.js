@@ -1651,6 +1651,46 @@ t("un archivo ilegible no se da por bueno", () => {
   assert.equal(S.verificarArchivo({}, [{ id:"x", _tipo:"gasto", importe:1 }]).ok, false);
 });
 
+// ── UX de Caja, Auditoría, SAT y Productos ──────────────────────────────────────
+// Solo cambió DÓNDE están las cosas. Estas pruebas cuidan que cada campo y cada botón siga
+// existiendo una sola vez (las funciones los buscan por id) y que lo plegado siga plegado.
+const _pagina = id => { const i = html.indexOf(`id="page-${id}"`); const j = html.indexOf('<div class="container page" id="page-', i + 10); return html.slice(i, j < 0 ? undefined : j); };
+t("UX Caja: una tarjeta con pestañas, el periodo en la conciliación y los estilos que faltaban", () => {
+  const c = _pagina("caja");
+  ["cajaFecha","cajaMonto","cajaStatus","retiroFecha","retiroMonto","retiroMotivo","retiroStatus","cortesJsonFile","cortesImportStatus","cajaRangoIni","cajaRangoFin","cajaBtnConsultar","cajaConciliacion"]
+    .forEach(id => assert.equal(html.split(`id="${id}"`).length - 1, 1, id));
+  ["importar","corte","retiro"].forEach(n => { assert.ok(c.includes(`data-cajapanel="${n}"`), n); assert.ok(c.includes(`data-cajatab="${n}"`), n); });
+  assert.ok(c.indexOf('id="cajaRangoIni"') > c.indexOf("📊 Conciliación"), "el periodo vive en la conciliación");
+  assert.ok(/\.form-label \{[^}]*display:block/.test(html) && /\.form-input \{[^}]*width:100%/.test(html), "Caja usaba clases sin estilo");
+  assert.ok(/cajaTab\("importar"\)/.test(_cuerpoDe("_cajaArchivoElegido")), "soltar el archivo enseña la pestaña donde sale el resultado");
+});
+t("UX Auditoría: título, guía, y las correcciones plegadas bajo «Por corregir»", () => {
+  const a = _pagina("reportes"), pend = a.slice(a.indexOf('id="audPendientes"'), a.indexOf("📈 Reporte de gastos"));
+  ["cardRepetidos","cardImportes","cardComplementos","cardFechasDudosas"].forEach(id => assert.ok(pend.includes(`id="${id}"`), id));
+  assert.ok(a.indexOf('id="cardLimpieza"') < a.indexOf('id="audPendientes"'));
+  assert.ok(/getElementById\("audPendientes"\)[\s\S]{0,120}comp\.length\+imp\.length\+fech\.length\+reps\.length/.test(_cuerpoDe("renderLimpieza")), "solo se ve si hay algo dentro");
+});
+t("UX SAT: dos pasos, Excel y PDF plegados, cada control una sola vez", () => {
+  const s = _pagina("sat");
+  ["satXmlFiles","satExcelFile","satPdfFile","satFechaIni","satFechaFin","satRfcPropio","satMesGuardado","btnBorrarMesCfdi","cfdisStoreBody","cfdisStoreResumen","cfdisDescartadosCard","cfdiPreciosBody","nominaBody","btnSatExport","btnSatLimpiar","satStatus","satXmlReporte","satOkBody"]
+    .forEach(id => assert.equal(html.split(`id="${id}"`).length - 1, 1, id));
+  assert.ok(s.indexOf("1 · Sube los CFDI del SAT") < s.indexOf("2 · Concilia un mes"));
+  const plegado = id => { const i = s.indexOf(`id="${id}"`), d = s.lastIndexOf("<details", i), c = s.lastIndexOf("</details>", i); return d > c; };
+  ["satExcelFile","satPdfFile","satRfcPropio","cfdiPreciosBody","nominaBody","cfdisStoreBody","satOkBody"].forEach(id => assert.ok(plegado(id), id + " va plegado"));
+  assert.ok(!plegado("satXmlFiles") && !plegado("satMesGuardado"), "lo principal queda a la vista");
+});
+t("UX Productos: botones por fila solo en «Por revisar», fechas legibles y ayuda por pestaña", () => {
+  const ing = require("fs").readFileSync(require("path").join(__dirname, "../assets/ingredients.js"), "utf8");
+  assert.ok(/const shortcuts=view==='revision'\?atajos:''/.test(ing));
+  assert.ok(/<summary>Ver presentaciones, proveedor e historial<\/summary>\$\{atajosDentro\}/.test(ing), "fuera de «Por revisar» los botones siguen dentro del detalle");
+  assert.ok(/Última factura: \$\{e\(fechaCorta\(w\.fecha\)\)\}/.test(ing));
+  ["revision","ingredientes","omitidos","consulta","fusion"].forEach(k => assert.ok(new RegExp(k + ":'[^']{20,}'").test(ing), k));
+});
+t("las guías «¿Cómo se usa?» recuerdan si se cerraron, sin depender de que haya localStorage", () => {
+  const g = _cuerpoDe("initGuias");
+  assert.ok(/try\{[^}]*localStorage\.getItem/.test(g) && /try\{[^}]*localStorage\.setItem/.test(g));
+  ["caja","auditoria","sat"].forEach(n => assert.ok(html.includes(`data-guia="${n}"`), n));
+});
 t("Espacio y archivo tiene su propia entrada y ya no vive dentro de Usuarios", () => {
   // Al fondo de «Usuarios» nadie lo encontraba, y el índice no lo mencionaba.
   const modal = id => { const i = html.indexOf(`id="${id}"`); const j = html.indexOf('<div class="modal-overlay"', i + 10); return html.slice(i, j < 0 ? undefined : j); };
